@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+[workspace]
+resolver = "2"
+members = [
+    "crates/protocol",
+    "crates/engine",
+    "crates/plugin-host",
+    "crates/ui",
+    "crates/script",
+]
+
+[workspace.package]
+version = "0.0.0"
+edition = "2024"
+license = "GPL-3.0-or-later"
+publish = false
