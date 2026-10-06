@@ -1,8 +1,8 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 # LibreDAW Specification
 
-Status: DRAFT 2 (post adversarial review). Phase 0. No code exists yet.
-Awaiting owner approval. See "Owner decisions" at the end.
+Status: APPROVED (draft 2, post adversarial review), 2026-10-07.
+Owner decisions are recorded at the end.
 
 LibreDAW is a native Linux desktop DAW with a pattern-based workflow (step
 sequencer, piano roll, mixer). Behavior is inspired by pattern-based DAWs.
@@ -810,12 +810,13 @@ passes validation. Alternative: drop the `script` teammate from Phase 2.
 
 ---
 
-## Owner decisions needed
+## Owner decisions (approved 2026-10-07)
 
-1. Approve the futex syscall exception for sandboxed plugins (risk 3, 9.4).
-2. Approve or reject the GPLv3 section 7 plugin permission and the DCO rule
-   (12.3).
-3. Resolve the Phase 2 scope conflict (13.3).
+1. Approved: the futex syscall exception for sandboxed plugins (risk 3, 9.4).
+2. Approved: the GPLv3 section 7 plugin permission and the DCO rule (12.3).
+3. Approved: the 13.3 proposal. Phase 2 builds the MVP first; `script`
+   builds only the bridge plus `project.get` and `edit`; sandboxing starts
+   only after in-process hosting passes validation.
 
 ---
 
