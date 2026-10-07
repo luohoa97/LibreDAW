@@ -143,7 +143,7 @@ fn hello_refused_or_wrong_protocol_is_an_error() {
     let server = thread::spawn(move || {
         for reply in [
             json!({"hello_ok": {"protocol": 2}}),
-            json!({"hello_err": "agents are not allowed"}),
+            json!({"hello_err": {"reason": "agents_disabled"}}),
         ] {
             let (s, _) = listener.accept().unwrap();
             let mut r = BufReader::new(s.try_clone().unwrap());
@@ -152,10 +152,10 @@ fn hello_refused_or_wrong_protocol_is_an_error() {
             send(&mut w, reply);
         }
     });
-    for _ in 0..2 {
-        let r = Client::connect(&path, Transport::Agent, "t", Duration::from_secs(2));
-        assert!(matches!(r, Err(ClientError::Protocol(_))));
-    }
+    let r = Client::connect(&path, Transport::Agent, "t", Duration::from_secs(2));
+    assert!(matches!(r, Err(ClientError::Protocol(_))));
+    let r = Client::connect(&path, Transport::Agent, "t", Duration::from_secs(2));
+    assert!(matches!(r, Err(ClientError::Refused(ref x)) if x == "agents_disabled"));
     server.join().unwrap();
 }
 
