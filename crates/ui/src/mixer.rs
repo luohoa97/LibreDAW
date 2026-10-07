@@ -23,8 +23,10 @@ use protocol::model::Project;
 
 use crate::app::{App, MeterUser};
 use crate::dialogs::{self, PluginKind};
+use crate::menus::{self, STRIP_ACTIONS};
 use crate::widgets::color_bar::ColorBar;
 use crate::widgets::meter::{Meter, db_text, peak_to_db};
+use crate::widgets::rename_label::RenameLabel;
 
 /// Fader range shown. The bottom of the range means silence.
 const SLIDER_MIN_DB: f64 = -60.0;
@@ -79,6 +81,7 @@ struct Strip {
     silent: gtk::Label,
     meter: Meter,
     peak: gtk::Label,
+    name: Option<Rc<RenameLabel>>,
 }
 
 pub struct Mixer {
@@ -158,6 +161,20 @@ impl Mixer {
 
     pub fn widget(&self) -> gtk::Widget {
         self.root.clone().upcast()
+    }
+
+    /// F2 on the Mixer page: renames the selected track (not Master).
+    pub fn rename_selected(&self) {
+        let track = self.app.ui.borrow().track;
+        let label = self
+            .strips
+            .borrow()
+            .iter()
+            .find(|s| s.track == track)
+            .and_then(|s| s.name.clone());
+        if let Some(l) = label {
+            l.start_editing();
+        }
     }
 
     fn signature(p: &Project) -> String {
@@ -260,36 +277,41 @@ impl Mixer {
         strip.append(&inner);
 
         // Name.
+        let mut name_label: Option<Rc<RenameLabel>> = None;
         if is_master {
             let l = gtk::Label::new(Some("Master"));
             l.add_css_class("heading");
             inner.append(&l);
         } else {
-            let l = gtk::EditableLabel::new(&name);
-            l.set_alignment(0.5);
-            l.set_width_chars(6);
-            l.set_max_width_chars(10);
-            l.add_css_class("heading");
-            l.set_tooltip_text(Some("Double-click to rename"));
-            l.update_property(&[gtk::accessible::Property::Label(&format!(
-                "Name of track {name}"
-            ))]);
-            let (m, orig) = (self.clone(), name.clone());
-            l.connect_editing_notify(move |w| {
-                if w.is_editing() {
-                    m.editing.set(m.editing.get() + 1);
-                } else {
-                    m.editing.set(m.editing.get().saturating_sub(1));
-                    let new = w.text().trim().to_string();
-                    if !new.is_empty() && new != orig {
-                        m.app.edit(vec![Edit::RenameTrack {
-                            track: id,
-                            name: new,
-                        }]);
+            // Renamed with F2 or the strip menu, never by a click.
+            let l = RenameLabel::new(&name);
+            l.label().set_xalign(0.5);
+            l.label().set_width_chars(6);
+            l.label().set_max_width_chars(10);
+            l.label().add_css_class("heading");
+            l.widget
+                .set_tooltip_text(Some("Track name (F2 or the menu renames)"));
+            {
+                let m = self.clone();
+                l.connect_editing(move |on| {
+                    if on {
+                        m.editing.set(m.editing.get() + 1);
+                    } else {
+                        m.editing.set(m.editing.get().saturating_sub(1));
+                        let m2 = m.clone();
+                        glib::idle_add_local_once(move || m2.sync());
                     }
-                }
-            });
-            inner.append(&l);
+                });
+                let m = self.clone();
+                l.connect_commit(move |new| {
+                    m.app.edit(vec![Edit::RenameTrack {
+                        track: id,
+                        name: new.to_string(),
+                    }]);
+                });
+            }
+            inner.append(&l.widget);
+            name_label = Some(l);
             // Which channels play through this track.
             let names: Vec<&str> = proj
                 .channels
@@ -332,14 +354,11 @@ impl Mixer {
         add.connect_clicked(move |b| m.add_effect(b.upcast_ref(), id));
         inner.append(&add);
 
-        // Sends arrive with effect returns (Milestone B).
-        let sends = gtk::Button::with_label("Sends");
-        sends.add_css_class("flat");
-        sends.set_sensitive(false);
-        sends.set_tooltip_text(Some("Sends arrive with effect returns"));
-        inner.append(&sends);
-
-        // Pan.
+        // Pan, with its name.
+        let pan_label = gtk::Label::new(Some("Pan"));
+        pan_label.add_css_class("caption-heading");
+        pan_label.set_xalign(0.0);
+        inner.append(&pan_label);
         let pan = gtk::Scale::with_range(gtk::Orientation::Horizontal, -1.0, 1.0, 0.01);
         pan.set_draw_value(false);
         pan.add_mark(0.0, gtk::PositionType::Bottom, None);
@@ -411,7 +430,8 @@ impl Mixer {
             // focused fader so scrolling the mixer never moves one.
             let keys = gtk::EventControllerKey::new();
             let f = fader.clone();
-            keys.connect_key_pressed(move |_, key, _, _| match key {
+            keys.connect_key_pressed(move |_, key, _, st| match key {
+                _ if !crate::keys::plain(st) => glib::Propagation::Proceed,
                 gdk::Key::Home => {
                     f.set_value(0.0);
                     glib::Propagation::Stop
@@ -519,48 +539,41 @@ impl Mixer {
         }
 
         // Right click: Rename, Remove Track, Reset Fader.
-        if !is_master {
-            let menu = gio::Menu::new();
-            menu.append(Some("_Rename"), Some("strip.rename"));
-            menu.append(Some("Reset _Fader"), Some("strip.reset"));
-            menu.append(Some("Remove _Track"), Some("strip.remove"));
+        if let Some(label) = name_label.clone() {
             let group = gio::SimpleActionGroup::new();
-            let f = fader.clone();
-            let reset = gio::SimpleAction::new("reset", None);
-            reset.connect_activate(move |_, _| f.set_value(0.0));
-            group.add_action(&reset);
-            let m = self.clone();
-            let remove = gio::SimpleAction::new("remove", None);
-            remove.connect_activate(move |_, _| {
-                m.app.edit(vec![Edit::RemoveTrack { track: id }]);
-                let a = m.app.clone();
-                m.app
-                    .toast_action("Track removed", "Undo", move || a.undo());
+            for n in STRIP_ACTIONS {
+                let a = gio::SimpleAction::new(n, None);
+                let (m, f, l, n) = (self.clone(), fader.clone(), label.clone(), *n);
+                a.connect_activate(move |_, _| match n {
+                    "rename" => l.start_editing(),
+                    "reset" => f.set_value(0.0),
+                    "remove" => {
+                        m.app.edit(vec![Edit::RemoveTrack { track: id }]);
+                        let a = m.app.clone();
+                        m.app
+                            .toast_action("Track removed", "Undo", move || a.undo());
+                    }
+                    _ => {}
+                });
+                group.add_action(&a);
+            }
+            strip.insert_action_group("strip", Some(&group));
+            let a = self.app.clone();
+            crate::context_menu::attach(&strip, &menus::strip_menu(), move |_| {
+                a.select_track(id);
+                true
             });
-            group.add_action(&remove);
-            let rename = gio::SimpleAction::new("rename", None);
-            let first = inner.first_child();
-            rename.connect_activate(move |_, _| {
-                if let Some(l) = first
-                    .as_ref()
-                    .and_then(|w| w.downcast_ref::<gtk::EditableLabel>())
-                {
-                    l.start_editing();
+            // F2 on a focused strip renames it.
+            let keys = gtk::EventControllerKey::new();
+            keys.connect_key_pressed(move |_, key, _, st| {
+                if key == gdk::Key::F2 && crate::keys::plain(st) {
+                    label.start_editing();
+                    glib::Propagation::Stop
+                } else {
+                    glib::Propagation::Proceed
                 }
             });
-            group.add_action(&rename);
-            strip.insert_action_group("strip", Some(&group));
-            let pop = gtk::PopoverMenu::from_model(Some(&menu));
-            pop.set_parent(&strip);
-            pop.set_has_arrow(false);
-            let click = gtk::GestureClick::new();
-            click.set_button(gdk::BUTTON_SECONDARY);
-            let p = pop.clone();
-            click.connect_pressed(move |_, _, x, y| {
-                p.set_pointing_to(Some(&gdk::Rectangle::new(x as i32, y as i32, 1, 1)));
-                p.popup();
-            });
-            strip.add_controller(click);
+            strip.add_controller(keys);
         }
 
         if crate::perf::enabled() && std::env::var_os("LIBREDAW_MIN_DEBUG").is_some() {
@@ -585,6 +598,7 @@ impl Mixer {
             silent,
             meter,
             peak,
+            name: name_label,
         });
         strip.upcast()
     }

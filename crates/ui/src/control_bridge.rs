@@ -681,7 +681,7 @@ fn kit_add(
             None => crate::channels::KitTrack::New(format!("{} Kit", kit.title)),
         };
         let o = match crate::channels::add_kit_as(&a, author.clone(), target, setups) {
-            Ok(ids) => {
+            Some(ids) => {
                 push_activity(
                     &a,
                     &author,
@@ -692,7 +692,7 @@ fn kit_add(
                     created: ids.iter().map(|c| c.0).collect(),
                 }))
             }
-            Err(()) => err(ControlError::Busy),
+            None => err(ControlError::Busy),
         };
         server.reply(ticket, o);
         changed(&a);

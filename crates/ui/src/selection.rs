@@ -28,6 +28,26 @@ impl Selection {
 /// Points the selection at things that exist: the first pattern and the
 /// first channel when the old ones are gone or were never chosen.
 pub fn fix(sel: Selection, p: &Project) -> Selection {
+    fix_with(sel, p, false)
+}
+
+/// As `fix`, but when the user cleared the channel selection (Escape, a
+/// click on empty space) no channel is picked for them: a valid choice
+/// stays, a missing one becomes none.
+pub fn fix_with(sel: Selection, p: &Project, user_cleared: bool) -> Selection {
+    let channel = sel.channel.filter(|id| p.channel(*id).is_some());
+    let channel = if user_cleared {
+        channel
+    } else {
+        channel.or_else(|| p.channels.first().map(|x| x.id))
+    };
+    Selection {
+        channel,
+        ..fix_inner(sel, p)
+    }
+}
+
+fn fix_inner(sel: Selection, p: &Project) -> Selection {
     Selection {
         pattern: sel
             .pattern
@@ -191,6 +211,31 @@ mod tests {
         // An empty project selects nothing (and does not invent anything).
         let (empty, _, _) = project(0, 0);
         assert_eq!(fix(chosen, &empty), Selection::NONE);
+    }
+
+    #[test]
+    fn a_cleared_selection_stays_cleared() {
+        let (p, ch, pa) = project(2, 1);
+        let none = Selection {
+            channel: None,
+            pattern: Some(pa[0]),
+            track: TrackId::MASTER,
+        };
+        // Cleared by the user: nothing is picked for them.
+        assert_eq!(fix_with(none, &p, true).channel, None);
+        // Not cleared (a new project): the first channel.
+        assert_eq!(fix_with(none, &p, false).channel, Some(ch[0]));
+        // A valid choice stays either way; a removed one becomes none.
+        let chosen = Selection {
+            channel: Some(ch[1]),
+            ..none
+        };
+        assert_eq!(fix_with(chosen, &p, true).channel, Some(ch[1]));
+        let gone = Selection {
+            channel: Some(ChannelId(999)),
+            ..none
+        };
+        assert_eq!(fix_with(gone, &p, true).channel, None);
     }
 
     #[test]

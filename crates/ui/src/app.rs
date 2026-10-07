@@ -31,6 +31,9 @@ pub struct UiState {
     pub path: Option<PathBuf>,
     pub pattern: Option<PatternId>,
     pub channel: Option<ChannelId>,
+    /// The user cleared the channel selection (Escape, a click on empty
+    /// space): `fix_selection` leaves it empty until they pick one.
+    pub channel_cleared: bool,
     pub track: TrackId,
     /// Transport as the user asked for it.
     pub playing: bool,
@@ -138,6 +141,7 @@ impl App {
                 path: None,
                 pattern: None,
                 channel: None,
+                channel_cleared: false,
                 track: TrackId::MASTER,
                 playing: false,
                 audio_error: None,
@@ -268,8 +272,37 @@ impl App {
 
     /// Keeps the selection pointing at things that exist.
     pub fn fix_selection(&self) {
-        let sel = selection::fix(self.selection(), &self.session.borrow().document().project);
+        let cleared = self.ui.borrow().channel_cleared;
+        let sel = selection::fix_with(
+            self.selection(),
+            &self.session.borrow().document().project,
+            cleared,
+        );
         self.set_selection(sel);
+    }
+
+    /// Clears the channel selection (Escape, a click on empty space). It
+    /// stays clear until the user picks a channel or opens a project.
+    /// Returns whether anything was selected.
+    pub fn deselect_channel(&self) -> bool {
+        let had = {
+            let mut ui = self.ui.borrow_mut();
+            ui.channel_cleared = true;
+            ui.channel.take().is_some()
+        };
+        if had {
+            self.notify();
+        }
+        had
+    }
+
+    /// A new document: forget the selection, and let the first channel be
+    /// picked again.
+    pub fn reset_selection(&self) {
+        let mut ui = self.ui.borrow_mut();
+        ui.pattern = None;
+        ui.channel = None;
+        ui.channel_cleared = false;
     }
 
     /// The selection: the one source of truth for what every view shows.
@@ -361,6 +394,9 @@ impl App {
             &self.session.borrow().document().project,
             id,
         );
+        if sel.channel == Some(id) {
+            self.ui.borrow_mut().channel_cleared = false;
+        }
         self.set_selection(sel);
         self.notify();
     }

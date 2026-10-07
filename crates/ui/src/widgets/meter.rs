@@ -44,6 +44,17 @@ pub enum Band {
 }
 
 /// Up to -18 dBFS good, to -6 loud, to -1 hot, above that clipping.
+/// How strongly unlit segments and the trough show (mix of the
+/// foreground into the background): about 0.22 and 0.08, stronger in
+/// high contrast.
+pub fn unlit_mix(high_contrast: bool) -> (f32, f32) {
+    if high_contrast {
+        (0.5, 0.2)
+    } else {
+        (0.22, 0.08)
+    }
+}
+
 pub fn band(db: f32) -> Band {
     if db <= -18.0 {
         Band::Good
@@ -141,7 +152,9 @@ mod imp {
             let colors = palette::colors();
             let fg = colors.get(Role::ViewFg);
             let bg = colors.get(Role::ViewBg);
-            let off = mix(&fg, &bg, 0.12);
+            let (off_t, trough_t) = unlit_mix(colors.high_contrast);
+            let off = mix(&fg, &bg, off_t);
+            let trough = mix(&fg, &bg, trough_t);
             let (w, h) = (obj.width() as f64, obj.height() as f64);
             let horizontal = self.horizontal.get();
             // Work in (along, across); `rect` maps back to widget space.
@@ -166,6 +179,9 @@ mod imp {
             };
             for ch in 0..2 {
                 let t = ch as f64 * (bar_w + 3.0);
+                // A trough behind the segments shows the full scale.
+                let (x, y, rw, rh) = rect(0.0, t, bar_len, bar_w);
+                draw::rounded(s, &trough, x - 1.0, y - 1.0, rw + 2.0, rh + 2.0, 2.0);
                 let n = (bar_len / (SEG + GAP)).floor() as usize;
                 for i in 0..n {
                     let a = i as f64 * (SEG + GAP);

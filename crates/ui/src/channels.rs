@@ -319,16 +319,16 @@ pub fn add_kit(app: &Rc<App>, track_name: &str, pieces: Vec<SamplerSetup>) -> Ve
 }
 
 /// As `add_kit`, by `author` and onto `track`. A script's or agent's kit is
-/// always one undo group: `Err(())` when another gesture is open (the
+/// always one undo group: `None` when another gesture is open (the
 /// caller answers Busy). The user's falls back to separate steps.
 pub fn add_kit_as(
     app: &Rc<App>,
     author: Author,
     track: KitTrack,
     pieces: Vec<SamplerSetup>,
-) -> Result<Vec<ChannelId>, ()> {
+) -> Option<Vec<ChannelId>> {
     if pieces.is_empty() {
-        return Ok(Vec::new());
+        return Some(Vec::new());
     }
     let (taken, room): (Vec<String>, bool) = {
         let s = app.session.borrow();
@@ -342,7 +342,7 @@ pub fn add_kit_as(
     let user = author == Author::User;
     let grouped = app.gesture_begin_as(author, "Add kit");
     if !grouped && !user {
-        return Err(());
+        return None;
     }
     app.ensure_pattern();
     let run = |e: Vec<Edit>| {
@@ -404,7 +404,7 @@ pub fn add_kit_as(
     if user && let Some(first) = ids.first() {
         app.select_channel(*first);
     }
-    Ok(ids)
+    Some(ids)
 }
 
 /// Removes a channel (and its track when nothing else uses it) and offers

@@ -76,6 +76,7 @@ struct Ui {
     narrow_title: adw::WindowTitle,
     transport: Rc<Transport>,
     pattern: PatternPage,
+    mixer: Rc<Mixer>,
 }
 
 fn flat_toggle(icon: &str, label: &str) -> gtk::ToggleButton {
@@ -92,28 +93,6 @@ fn flat_button(icon: &str, label: &str, action: &str) -> gtk::Button {
     b.set_action_name(Some(action));
     b.update_property(&[gtk::accessible::Property::Label(label)]);
     b
-}
-
-fn main_menu() -> gio::Menu {
-    let menu = gio::Menu::new();
-    let project = gio::Menu::new();
-    project.append(Some("_New Project"), Some("win.new"));
-    project.append(Some("_Open Project…"), Some("win.open"));
-    project.append(Some("_Save"), Some("win.save"));
-    project.append(Some("Save _As…"), Some("win.save-as"));
-    menu.append_section(None, &project);
-    let output = gio::Menu::new();
-    output.append(Some("_Export Audio…"), Some("win.export"));
-    menu.append_section(None, &output);
-    let plugins = gio::Menu::new();
-    plugins.append(Some("Add _Plugin…"), Some("win.add-plugin"));
-    menu.append_section(None, &plugins);
-    let end = gio::Menu::new();
-    end.append(Some("_Preferences"), Some("app.preferences"));
-    end.append(Some("_Keyboard Shortcuts"), Some("win.show-help-overlay"));
-    end.append(Some("_About LibreDAW"), Some("app.about"));
-    menu.append_section(None, &end);
-    menu
 }
 
 pub fn build(gapp: &adw::Application, app: Rc<App>) -> adw::ApplicationWindow {
@@ -138,7 +117,7 @@ pub fn build(gapp: &adw::Application, app: Rc<App>) -> adw::ApplicationWindow {
     let inspector_toggle = flat_toggle("sidebar-show-right-symbolic", "Inspector");
     let menu_button = gtk::MenuButton::new();
     menu_button.set_icon_name("open-menu-symbolic");
-    menu_button.set_menu_model(Some(&main_menu()));
+    menu_button.set_menu_model(Some(&crate::menus::main_menu()));
     menu_button.set_primary(true);
     menu_button.add_css_class("flat");
     menu_button.set_tooltip_text(Some("Main Menu"));
@@ -260,6 +239,7 @@ pub fn build(gapp: &adw::Application, app: Rc<App>) -> adw::ApplicationWindow {
         narrow_title: narrow_title.clone(),
         transport: transport.clone(),
         pattern,
+        mixer: mixer.clone(),
         banner: banner.clone(),
         agent_btn: agent_btn.clone(),
     });
@@ -314,6 +294,7 @@ pub fn build(gapp: &adw::Application, app: Rc<App>) -> adw::ApplicationWindow {
     }
     sync_header(&ui, &app);
     install_debug_shot(gapp, &ui, &app);
+    crate::debug_shot::install(ui.window.upcast_ref());
     window
 }
 
@@ -725,7 +706,14 @@ fn install_actions(gapp: &adw::Application, ui: &Rc<Ui>, app: &Rc<App>) {
     let u = ui.clone();
     add(
         "rename",
-        Box::new(move || u.pattern.channels.rename_selected()),
+        Box::new(move || {
+            // F2 renames what the page in front has selected.
+            if page_name(&u) == "mixer" {
+                u.mixer.rename_selected();
+            } else {
+                u.pattern.channels.rename_selected();
+            }
+        }),
     );
     let a = app.clone();
     let preset = gio::SimpleAction::new("add-preset", Some(glib::VariantTy::STRING));

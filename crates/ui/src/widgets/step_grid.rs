@@ -59,6 +59,7 @@ mod imp {
         /// painted.
         pub stroke: RefCell<Option<Stroke>>,
         pub drag_start: Cell<(f64, f64)>,
+        pub repeat: Cell<crate::keys::RepeatFilter<(usize, u32)>>,
         pub last_playhead: Cell<u64>,
         pub cache: RefCell<LayerCache<StaticKey>>,
         pub text: RefCell<LayoutCache>,
@@ -74,6 +75,7 @@ mod imp {
                 hover: Cell::new(None),
                 stroke: RefCell::new(None),
                 drag_start: Cell::new((0.0, 0.0)),
+                repeat: Cell::new(crate::keys::RepeatFilter::new()),
                 last_playhead: Cell::new(0),
                 cache: RefCell::new(LayerCache::new("step-grid static")),
                 text: RefCell::new(LayoutCache::default()),
@@ -149,8 +151,10 @@ mod imp {
 
             let keys = gtk::EventControllerKey::new();
             let w = obj.downgrade();
-            keys.connect_key_pressed(move |_, key, _, _| match w.upgrade() {
-                Some(o) if o.key(key) => glib::Propagation::Stop,
+            keys.connect_key_pressed(move |_, key, _, state| match w.upgrade() {
+                // Only plain keys are ours; Ctrl+Return and the rest are
+                // window shortcuts.
+                Some(o) if crate::keys::plain(state) && o.key(key) => glib::Propagation::Stop,
                 _ => glib::Propagation::Proceed,
             });
             obj.add_controller(keys);
@@ -350,10 +354,29 @@ impl StepGrid {
         self.imp().drag_start.set((x, y));
         let (rows, steps) = self.dims();
         let layout = self.layout();
-        if let Hit::Cell { row, step } = layout.hit(x, y, rows, steps) {
+        let hit = layout.hit(x, y, rows, steps);
+        let below = y >= layout.header_h + rows as f64 * layout.row_h;
+        let after = x >= layout.cell_x(steps);
+        if !matches!(hit, Hit::Cell { .. }) && (below || after) {
+            // A press beside the cells clears the channel selection.
+            self.app().deselect_channel();
+        }
+        if let Hit::Cell { row, step } = hit {
             self.imp().cursor.set((row, step));
             if let Some(c) = self.channel_at(row) {
                 self.app().select_channel(c);
+            }
+            // The second press of a double-click does not toggle back.
+            let mut filter = self.imp().repeat.get();
+            let double_ms = gtk::Settings::default()
+                .map(|s| s.gtk_double_click_time() as i64)
+                .unwrap_or(400);
+            let repeat = filter.is_repeat((row, step), glib::monotonic_time() / 1000, double_ms);
+            self.imp().repeat.set(filter);
+            if repeat {
+                self.update_label();
+                self.queue_draw();
+                return;
             }
             if self.is_read_only(row) {
                 self.app()

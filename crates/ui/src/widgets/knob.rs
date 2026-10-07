@@ -134,8 +134,12 @@ mod imp {
                 let Some(k) = w.upgrade() else {
                     return glib::Propagation::Proceed;
                 };
+                // Plain keys, and Shift for fine steps.
+                let fine = crate::keys::only(st, gdk::ModifierType::SHIFT_MASK);
+                if !(crate::keys::plain(st) || fine) {
+                    return glib::Propagation::Proceed;
+                }
                 let u = k.imp().unit.get();
-                let fine = st.contains(gdk::ModifierType::SHIFT_MASK);
                 let new = match key {
                     gdk::Key::Up | gdk::Key::Right => {
                         (u + if fine { 0.002 } else { 0.01 }).min(1.0)

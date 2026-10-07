@@ -102,7 +102,6 @@ mod imp {
         pub view_cache: RefCell<Option<Rc<View>>>,
         pub cache: RefCell<LayerCache<StaticKey>>,
         pub text: RefCell<LayoutCache>,
-        pub menu: RefCell<Option<gtk::PopoverMenu>>,
     }
 
     impl Default for PianoRoll {
@@ -130,7 +129,6 @@ mod imp {
                 view_cache: RefCell::new(None),
                 cache: RefCell::new(LayerCache::new("piano-roll static")),
                 text: RefCell::new(LayoutCache::default()),
-                menu: RefCell::new(None),
             }
         }
     }
@@ -182,16 +180,6 @@ mod imp {
             });
             obj.add_controller(drag);
 
-            let click = gtk::GestureClick::new();
-            click.set_button(gdk::BUTTON_SECONDARY);
-            let w = obj.downgrade();
-            click.connect_pressed(move |_, _, x, y| {
-                if let Some(o) = w.upgrade() {
-                    o.right_click(x, y);
-                }
-            });
-            obj.add_controller(click);
-
             let motion = gtk::EventControllerMotion::new();
             let w = obj.downgrade();
             motion.connect_motion(move |_, x, y| {
@@ -222,6 +210,7 @@ mod imp {
                 _ => glib::Propagation::Proceed,
             });
             obj.add_controller(keys);
+            obj.install_menu();
 
             let w = obj.downgrade();
             self.hadj.connect_value_changed(move |a| {
@@ -258,9 +247,7 @@ mod imp {
         }
 
         fn dispose(&self) {
-            if let Some(m) = self.menu.borrow_mut().take() {
-                m.unparent();
-            }
+            crate::context_menu::unparent_popovers(self.obj().upcast_ref());
         }
     }
 
@@ -280,9 +267,7 @@ mod imp {
             vp.height = h as f64;
             self.vp.set(vp);
             self.obj().sync_adjustments();
-            if let Some(m) = self.menu.borrow().as_ref() {
-                m.present();
-            }
+            crate::context_menu::present_popovers(self.obj().upcast_ref());
         }
 
         fn snapshot(&self, snapshot: &gtk::Snapshot) {
@@ -825,64 +810,67 @@ impl PianoRoll {
         self.after_input();
     }
 
-    fn right_click(&self, x: f64, y: f64) {
+    /// Before the note menu opens: from the pointer, select the note under
+    /// it; from the keyboard, use the selection (or the note at the
+    /// cursor). No note, no menu.
+    fn prepare_menu(&self, at: Option<(f64, f64)>) -> Option<crate::context_menu::Anchor> {
+        use crate::context_menu::Anchor;
         self.grab_focus();
-        let Some(v) = self.view() else { return };
+        let v = self.view()?;
         let vp = self.imp().vp.get();
-        if let Some((id, _)) = hit_note(&v.notes, &vp, x, y) {
-            let sel = self.imp().selection.borrow().clone();
-            if !sel.contains(&id) {
-                *self.imp().selection.borrow_mut() = vec![id];
+        let imp = self.imp();
+        let anchor = match at {
+            Some((x, y)) => {
+                let (id, _) = hit_note(&v.notes, &vp, x, y)?;
+                if !imp.selection.borrow().contains(&id) {
+                    *imp.selection.borrow_mut() = vec![id];
+                }
+                Anchor::Pointer(x, y)
             }
-            self.after_input();
-            self.show_menu(x, y);
-        }
+            None => {
+                let (t, k) = imp.cursor.get();
+                if imp.selection.borrow().is_empty() {
+                    let id = note_at_cursor(&v.notes, t, k)?;
+                    *imp.selection.borrow_mut() = vec![id];
+                }
+                let first = imp.selection.borrow()[0];
+                let n = v.notes.iter().find(|n| n.id == first)?;
+                let x = vp.tick_to_x(n.start as f64);
+                let y = vp.key_to_y(n.key as i32);
+                let w = (vp.tick_to_x((n.start + n.len) as f64) - x).max(4.0);
+                Anchor::Rect(gdk::Rectangle::new(
+                    x as i32,
+                    y as i32,
+                    w as i32,
+                    vp.row_h as i32,
+                ))
+            }
+        };
+        self.after_input();
+        Some(anchor)
     }
 
-    /// The note menu: Delete and Duplicate.
-    fn show_menu(&self, x: f64, y: f64) {
-        let menu = gio::Menu::new();
-        menu.append(Some("_Delete"), Some("roll.delete"));
-        menu.append(Some("D_uplicate"), Some("roll.duplicate"));
+    /// The note menu (`menus::roll_menu`) and its actions.
+    fn install_menu(&self) {
         let group = gio::SimpleActionGroup::new();
-        let w = self.downgrade();
-        let del = gio::SimpleAction::new("delete", None);
-        del.connect_activate(move |_, _| {
-            if let Some(o) = w.upgrade() {
-                o.delete_selection();
-            }
-        });
-        group.add_action(&del);
-        let w = self.downgrade();
-        let dup = gio::SimpleAction::new("duplicate", None);
-        dup.connect_activate(move |_, _| {
-            if let Some(o) = w.upgrade() {
-                o.duplicate_selection();
-            }
-        });
-        group.add_action(&dup);
-        self.insert_action_group("roll", Some(&group));
-        let pop = gtk::PopoverMenu::from_model(Some(&menu));
-        pop.set_parent(self);
-        pop.set_has_arrow(false);
-        pop.set_pointing_to(Some(&gdk::Rectangle::new(x as i32, y as i32, 1, 1)));
-        let w = self.downgrade();
-        pop.connect_closed(move |p| {
-            let p = p.clone();
-            let w = w.clone();
-            glib::idle_add_local_once(move || {
-                if let Some(o) = w.upgrade()
-                    && let Some(m) = o.imp().menu.borrow_mut().take()
-                    && m == p
-                {
-                    m.unparent();
+        for name in crate::menus::ROLL_ACTIONS {
+            let a = gio::SimpleAction::new(name, None);
+            let (w, n) = (self.downgrade(), *name);
+            a.connect_activate(move |_, _| {
+                let Some(o) = w.upgrade() else { return };
+                match n {
+                    "delete" => o.delete_selection(),
+                    "duplicate" => o.duplicate_selection(),
+                    _ => {}
                 }
             });
-        });
-        if let Some(old) = self.imp().menu.borrow_mut().replace(pop.clone()) {
-            old.unparent();
+            group.add_action(&a);
         }
-        pop.popup();
+        self.insert_action_group("roll", Some(&group));
+        let w = self.downgrade();
+        crate::context_menu::attach_at(self, &crate::menus::roll_menu(), move |at| {
+            w.upgrade().and_then(|o| o.prepare_menu(at))
+        });
     }
 
     fn delete_selection(&self) {
@@ -960,6 +948,11 @@ impl PianoRoll {
         let ctrl = st.contains(gdk::ModifierType::CONTROL_MASK);
         let shift = st.contains(gdk::ModifierType::SHIFT_MASK);
         let sel = imp.selection.borrow().clone();
+        let plain = crate::keys::plain(st);
+        // Alt and Super combinations are never ours (Alt+Left goes back).
+        if st.intersects(gdk::ModifierType::ALT_MASK | gdk::ModifierType::SUPER_MASK) {
+            return false;
+        }
         let (dir_t, dir_k) = match key {
             gdk::Key::Left => (-1i64, 0i32),
             gdk::Key::Right => (1, 0),
@@ -1008,7 +1001,7 @@ impl PianoRoll {
             return true;
         }
         match key {
-            gdk::Key::Return | gdk::Key::KP_Enter => {
+            gdk::Key::Return | gdk::Key::KP_Enter if plain => {
                 let (t, k) = imp.cursor.get();
                 match note_at_cursor(&v.notes, t, k) {
                     Some(id) => {
@@ -1040,7 +1033,7 @@ impl PianoRoll {
                 }
                 true
             }
-            gdk::Key::Delete | gdk::Key::BackSpace => {
+            gdk::Key::Delete | gdk::Key::BackSpace if plain => {
                 self.delete_selection();
                 true
             }
@@ -1075,7 +1068,7 @@ impl PianoRoll {
                 self.after_input();
                 true
             }
-            gdk::Key::Page_Up | gdk::Key::Page_Down => {
+            gdk::Key::Page_Up | gdk::Key::Page_Down if plain => {
                 let mut vp = imp.vp.get();
                 let d = if key == gdk::Key::Page_Up { -1.0 } else { 1.0 };
                 vp.scroll_y += d * 12.0 * vp.row_h;
@@ -1085,7 +1078,7 @@ impl PianoRoll {
                 self.queue_draw();
                 true
             }
-            gdk::Key::Home | gdk::Key::End => {
+            gdk::Key::Home | gdk::Key::End if plain => {
                 let mut vp = imp.vp.get();
                 vp.scroll_x = if key == gdk::Key::Home {
                     0.0
@@ -1098,7 +1091,7 @@ impl PianoRoll {
                 self.queue_draw();
                 true
             }
-            gdk::Key::Escape => {
+            gdk::Key::Escape if plain => {
                 // With nothing selected Escape is not ours: it goes back
                 // to the steps.
                 if imp.selection.borrow().is_empty() {

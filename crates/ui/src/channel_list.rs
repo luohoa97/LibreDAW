@@ -1,8 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! The channel header column beside the step grid (docs/ui-design.md 3.3):
-//! per channel a color bar, a mute button, the name (double-click or F2 to
-//! rename), and a menu. Stock widgets only. Rows have the grid's row height
-//! so both columns line up when they scroll together.
+//! per channel a color bar, a mute button, the name, and (on wide windows)
+//! an Edit Notes button. Stock widgets only. Rows have the grid's row
+//! height so both columns line up when they scroll together.
+//!
+//! Interaction contract (crates/ui/INTERACTIONS.md): a click selects the
+//! channel and plays its sound; a double-click or Return opens its notes;
+//! the context menu (right click, long press, Menu, Shift+F10) is
+//! `menus::channel_menu`; F2 or the menu's Rename edits the name in place.
+//! Nothing renames on a single click.
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -13,10 +19,11 @@ use gtk::gio;
 use protocol::edit::{Edit, MixValue};
 use protocol::ids::ChannelId;
 
-use crate::app::{App, UiCommand};
-use crate::channels;
+use crate::app::App;
+use crate::menus::{self, ROW_ACTIONS};
 use crate::step_logic::RULER_H;
 use crate::widgets::color_bar::ColorBar;
+use crate::widgets::rename_label::RenameLabel;
 
 pub struct ChannelList {
     pub widget: gtk::Box,
@@ -24,20 +31,21 @@ pub struct ChannelList {
     rows: gtk::ListBox,
     signature: RefCell<String>,
     editing: Cell<u32>,
-    labels: RefCell<Vec<(ChannelId, gtk::EditableLabel)>>,
+    labels: RefCell<Vec<(ChannelId, Rc<RenameLabel>)>>,
     row_widgets: RefCell<Vec<(ChannelId, gtk::ListBoxRow)>>,
     selecting: Cell<bool>,
 }
 
 /// What decides whether the rows must be rebuilt.
-pub fn signature(app: &App, row_h: u32) -> String {
+pub fn signature(app: &App, row_h: u32, wide: bool) -> String {
     let s = app.session.borrow();
     let p = &s.document().project;
-    let mut out = format!("{row_h}|");
-    for c in &p.channels {
+    let mut out = format!("{row_h}|{wide}|");
+    for (i, c) in p.channels.iter().enumerate() {
         out.push_str(&format!(
-            "{}:{}:{}:{}:{};",
+            "{}:{}:{}:{}:{}:{};",
             c.id,
+            i,
             c.name,
             c.mix.mute as u8,
             c.choke_group,
@@ -84,14 +92,7 @@ impl ChannelList {
                 if l2.selecting.get() {
                     return;
                 }
-                let id = row.and_then(|r| {
-                    l2.row_widgets
-                        .borrow()
-                        .iter()
-                        .find(|(_, w)| w == r)
-                        .map(|(id, _)| *id)
-                });
-                if let Some(id) = id
+                if let Some(id) = row.and_then(|r| l2.id_of(r))
                     && l2.app.current_channel() != Some(id)
                 {
                     l2.app.select_channel(id);
@@ -99,13 +100,7 @@ impl ChannelList {
             });
             let l2 = l.clone();
             l.rows.connect_row_activated(move |_, row| {
-                let id = l2
-                    .row_widgets
-                    .borrow()
-                    .iter()
-                    .find(|(_, w)| w == row)
-                    .map(|(id, _)| *id);
-                if let Some(id) = id {
+                if let Some(id) = l2.id_of(row) {
                     l2.app.edit_notes(Some(id));
                 }
             });
@@ -121,38 +116,55 @@ impl ChannelList {
         l
     }
 
+    fn id_of(&self, row: &gtk::ListBoxRow) -> Option<ChannelId> {
+        self.row_widgets
+            .borrow()
+            .iter()
+            .find(|(_, w)| w == row)
+            .map(|(id, _)| *id)
+    }
+
     fn apply_width(&self) {
         self.widget
             .set_width_request(self.app.size_class().step_name_col() as i32);
     }
 
-    /// Starts renaming a channel in place (the "Rename" menu item).
+    /// Starts renaming a channel in place (F2, or the menu's Rename).
     pub fn rename(&self, id: ChannelId) {
-        if let Some((_, l)) = self.labels.borrow().iter().find(|(c, _)| *c == id) {
+        let label = self
+            .labels
+            .borrow()
+            .iter()
+            .find(|(c, _)| *c == id)
+            .map(|(_, l)| l.clone());
+        if let Some(l) = label {
             l.start_editing();
         }
     }
 
     /// Starts renaming the selected channel.
     pub fn rename_selected(&self) {
-        let Some(id) = self.app.current_channel() else {
-            return;
-        };
-        if let Some((_, l)) = self.labels.borrow().iter().find(|(c, _)| *c == id) {
-            l.start_editing();
+        if let Some(id) = self.app.current_channel() {
+            self.rename(id);
         }
+    }
+
+    /// Whether a name is being edited.
+    pub fn is_editing(&self) -> bool {
+        self.editing.get() > 0
     }
 
     pub fn sync(self: &Rc<ChannelList>) {
         let row_h = self.app.size_class().step_row_h();
-        let sig = signature(&self.app, row_h);
+        let wide = self.app.size_class().step_name_col() >= 200;
+        let sig = signature(&self.app, row_h, wide);
         if *self.signature.borrow() != sig && self.editing.get() == 0 {
             *self.signature.borrow_mut() = sig;
             // Not inside the signal handler of a widget that is about to
             // be replaced (the mute button that caused this).
             let me = self.clone();
             gtk::glib::idle_add_local_once(move || {
-                me.rebuild(row_h);
+                me.rebuild(row_h, wide);
                 me.update_selection();
             });
         }
@@ -164,70 +176,93 @@ impl ChannelList {
     fn update_selection(&self) {
         let sel = self.app.current_channel();
         self.selecting.set(true);
-        for (id, row) in self.row_widgets.borrow().iter() {
-            if sel == Some(*id) {
-                if !row.is_selected() {
-                    self.rows.select_row(Some(row));
-                }
-                break;
-            }
-        }
-        if sel.is_none() {
-            self.rows.unselect_all();
+        let row = self
+            .row_widgets
+            .borrow()
+            .iter()
+            .find(|(id, _)| Some(*id) == sel)
+            .map(|(_, r)| r.clone());
+        match row {
+            Some(r) if !r.is_selected() => self.rows.select_row(Some(&r)),
+            Some(_) => {}
+            None => self.rows.unselect_all(),
         }
         self.selecting.set(false);
     }
 
-    fn rebuild(self: &Rc<ChannelList>, row_h: u32) {
+    fn rebuild(self: &Rc<ChannelList>, row_h: u32, wide: bool) {
+        // Keep the keyboard where it was: a rebuilt row takes the focus
+        // back when the old one had it.
+        let had_focus = self
+            .row_widgets
+            .borrow()
+            .iter()
+            .find(|(_, r)| r.has_focus())
+            .map(|(id, _)| *id);
         while let Some(c) = self.rows.first_child() {
             self.rows.remove(&c);
         }
         self.labels.borrow_mut().clear();
         self.row_widgets.borrow_mut().clear();
-        let chans = self
-            .app
-            .session
-            .borrow()
-            .document()
-            .project
-            .channels
-            .clone();
-        let missing: Vec<bool> = {
+        let (chans, missing) = {
             let s = self.app.session.borrow();
-            chans.iter().map(|c| s.sample_missing(c)).collect()
+            let chans = s.document().project.channels.clone();
+            let missing: Vec<bool> = chans.iter().map(|c| s.sample_missing(c)).collect();
+            (chans, missing)
         };
-        for (ch, miss) in chans.into_iter().zip(missing) {
-            let content = self.build_row(ch.id, &ch.name, ch.mix.mute, ch.choke_group, miss, row_h);
+        for (i, (ch, miss)) in chans.into_iter().zip(missing).enumerate() {
             let row = gtk::ListBoxRow::new();
-            row.set_child(Some(&content));
             row.set_activatable(true);
             row.set_height_request(row_h as i32);
+            row.update_property(&[gtk::accessible::Property::Label(&ch.name)]);
+            row.set_tooltip_text(Some(
+                "Double-click or press Return to edit notes; F2 renames",
+            ));
+            let content = self.build_row(
+                &row,
+                ch.id,
+                i,
+                &ch.name,
+                ch.mix.mute,
+                ch.choke_group,
+                miss,
+                row_h,
+                wide,
+            );
+            row.set_child(Some(&content));
             self.rows.append(&row);
+            if had_focus == Some(ch.id) {
+                row.grab_focus();
+            }
             self.row_widgets.borrow_mut().push((ch.id, row));
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn build_row(
         self: &Rc<ChannelList>,
+        row: &gtk::ListBoxRow,
         id: ChannelId,
+        index: usize,
         name: &str,
         muted: bool,
         choke: u8,
         sample_missing: bool,
         row_h: u32,
+        wide: bool,
     ) -> gtk::Box {
-        let row = gtk::Box::new(gtk::Orientation::Horizontal, 4);
-        row.add_css_class("ldaw-channel-row");
-        row.set_hexpand(false);
+        let content = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+        content.add_css_class("ldaw-channel-row");
+        content.set_hexpand(false);
         if muted {
-            row.add_css_class("muted");
+            content.add_css_class("muted");
         }
-        row.set_height_request(row_h as i32);
+        content.set_height_request(row_h as i32);
 
-        let bar = ColorBar::new(id.0);
+        let bar = ColorBar::new(index as u32);
         bar.set_margin_top(8);
         bar.set_margin_bottom(8);
-        row.append(&bar);
+        content.append(&bar);
 
         let mute = gtk::ToggleButton::new();
         mute.set_icon_name(if muted {
@@ -239,7 +274,11 @@ impl ChannelList {
         mute.add_css_class("circular");
         mute.set_valign(gtk::Align::Center);
         mute.set_active(muted);
-        mute.set_tooltip_text(Some("Mute Channel"));
+        mute.set_tooltip_text(Some(if muted {
+            "Unmute Channel"
+        } else {
+            "Mute Channel"
+        }));
         mute.update_property(&[gtk::accessible::Property::Label(&format!("Mute {name}"))]);
         {
             let a = self.app.clone();
@@ -250,50 +289,43 @@ impl ChannelList {
                 }]);
             });
         }
-        row.append(&mute);
+        content.append(&mute);
 
-        let label = gtk::EditableLabel::new(name);
-        label.set_hexpand(true);
-        label.set_width_chars(4);
-        label.set_max_width_chars(14);
-        label.set_valign(gtk::Align::Center);
-        label.add_css_class("ldaw-channel-name");
-        label.set_tooltip_text(Some("Double-click to edit notes. F2 renames."));
-        // A double-click on the name opens the notes; renaming is F2, the
-        // channel menu, or the Rename action.
+        // The name: a plain label until F2 or the menu's Rename. Clicks go
+        // to the row (select, double-click opens the notes).
+        let label = RenameLabel::new(name);
+        label.widget.set_hexpand(true);
+        label.widget.set_valign(gtk::Align::Center);
+        label.label().set_width_chars(4);
+        label.label().set_max_width_chars(14);
+        label.label().add_css_class("ldaw-channel-name");
         {
-            let (a, dbl) = (self.app.clone(), gtk::GestureClick::new());
-            dbl.set_propagation_phase(gtk::PropagationPhase::Capture);
-            dbl.connect_pressed(move |g, n, _, _| {
-                if n == 2 {
-                    g.set_state(gtk::EventSequenceState::Claimed);
-                    a.edit_notes(Some(id));
-                }
-            });
-            label.add_controller(dbl);
-        }
-        label.update_property(&[gtk::accessible::Property::Label(&format!("Name of {name}"))]);
-        {
-            let (l, a, orig) = (self.clone(), self.app.clone(), name.to_string());
-            label.connect_editing_notify(move |w| {
-                if w.is_editing() {
+            let l = self.clone();
+            label.connect_editing(move |on| {
+                if on {
                     l.editing.set(l.editing.get() + 1);
                 } else {
                     l.editing.set(l.editing.get().saturating_sub(1));
-                    let new = w.text().trim().to_string();
-                    if !new.is_empty() && new != orig {
-                        a.edit(vec![Edit::RenameChannel {
-                            channel: id,
-                            name: new,
-                        }]);
-                    }
                     let l2 = l.clone();
                     gtk::glib::idle_add_local_once(move || l2.sync());
                 }
             });
+            let a = self.app.clone();
+            label.connect_commit(move |new| {
+                a.edit(vec![Edit::RenameChannel {
+                    channel: id,
+                    name: new.to_string(),
+                }]);
+            });
+            // Leaving the entry with Return or Escape gives the keyboard
+            // back to the row.
+            let r = row.clone();
+            label.connect_finished(move || {
+                r.grab_focus();
+            });
         }
         self.labels.borrow_mut().push((id, label.clone()));
-        row.append(&label);
+        content.append(&label.widget);
         if sample_missing {
             // A placeholder: the channel stays, silent, until the file is found.
             let w = gtk::Image::from_icon_name("dialog-warning-symbolic");
@@ -301,10 +333,27 @@ impl ChannelList {
             w.update_property(&[gtk::accessible::Property::Label(
                 "The sound file cannot be found",
             )]);
-            row.append(&w);
+            content.append(&w);
         }
 
-        // A click anywhere on the row selects the channel and plays it.
+        // Wide windows also show the notes button itself (docs 3.3); the
+        // menu, a double-click, and Return do the same everywhere.
+        if wide {
+            let notes = gtk::Button::from_icon_name("document-edit-symbolic");
+            notes.add_css_class("flat");
+            notes.add_css_class("circular");
+            notes.set_valign(gtk::Align::Center);
+            notes.set_tooltip_text(Some("Edit Notes"));
+            notes.update_property(&[gtk::accessible::Property::Label(&format!(
+                "Edit notes of {name}"
+            ))]);
+            let a = self.app.clone();
+            notes.connect_clicked(move |_| a.edit_notes(Some(id)));
+            content.append(&notes);
+        }
+
+        // A click anywhere on the row plays the channel's sound (the list
+        // selects it).
         let click = gtk::GestureClick::new();
         click.set_propagation_phase(gtk::PropagationPhase::Capture);
         {
@@ -321,103 +370,38 @@ impl ChannelList {
                 }
             });
         }
-        row.add_controller(click);
+        content.add_controller(click);
 
-        // The channel menu.
-        let menu = gio::Menu::new();
-        let first = gio::Menu::new();
-        first.append(Some("Edit _Sound"), Some("row.sound"));
-        first.append(Some("Edit _Notes"), Some("row.notes"));
-        menu.append_section(None, &first);
-        // Channels in the same choke group cut each other off (15.1).
-        let choke_menu = gio::Menu::new();
-        let none = gio::MenuItem::new(Some("None"), None);
-        none.set_action_and_target_value(Some("row.choke"), Some(&0i32.to_variant()));
-        choke_menu.append_item(&none);
-        for g in 1..=protocol::consts::MAX_CHOKE_GROUP as i32 {
-            let item = gio::MenuItem::new(Some(&format!("Group {g}")), None);
-            item.set_action_and_target_value(Some("row.choke"), Some(&g.to_variant()));
-            choke_menu.append_item(&item);
-        }
-        menu.append_section(None, &{
-            let m = gio::Menu::new();
-            m.append_submenu(Some("C_hoke Group"), &choke_menu);
-            m
-        });
-        let second = gio::Menu::new();
-        second.append(Some("_Rename"), Some("row.rename"));
-        second.append(Some("Remove _Channel"), Some("row.remove"));
-        menu.append_section(None, &second);
-        let mb = gtk::MenuButton::new();
-        mb.set_icon_name("view-more-symbolic");
-        mb.set_menu_model(Some(&menu));
-        mb.add_css_class("flat");
-        mb.add_css_class("circular");
-        mb.set_valign(gtk::Align::Center);
-        mb.set_tooltip_text(Some("Channel Menu"));
-        mb.update_property(&[gtk::accessible::Property::Label(&format!(
-            "Channel menu for {name}"
-        ))]);
-        // Wide windows also get the notes button itself (docs 3.3).
-        if self.app.size_class().step_name_col() >= 200 {
-            let notes = gtk::Button::from_icon_name("document-edit-symbolic");
-            notes.add_css_class("flat");
-            notes.add_css_class("circular");
-            notes.set_valign(gtk::Align::Center);
-            notes.set_tooltip_text(Some("Edit Notes"));
-            notes.update_property(&[gtk::accessible::Property::Label(&format!(
-                "Edit notes of {name}"
-            ))]);
-            let a = self.app.clone();
-            notes.connect_clicked(move |_| a.edit_notes(Some(id)));
-            row.append(&notes);
-        }
-        row.append(&mb);
-
+        // The one menu of a channel.
         let group = gio::SimpleActionGroup::new();
-        let add = |n: &str, f: Box<dyn Fn()>| {
-            let a = gio::SimpleAction::new(n, None);
-            a.connect_activate(move |_, _| f());
-            group.add_action(&a);
-        };
-        let a = self.app.clone();
-        add(
-            "sound",
-            Box::new(move || {
-                a.select_channel(id);
-                a.command(UiCommand::ShowSound);
-            }),
-        );
-        let a = self.app.clone();
-        add(
-            "notes",
-            Box::new(move || {
-                a.edit_notes(Some(id));
-            }),
-        );
-        let lab = label.clone();
-        add("rename", Box::new(move || lab.start_editing()));
-        let a = self.app.clone();
-        add("remove", Box::new(move || channels::remove(&a, id)));
-        {
-            let a = self.app.clone();
-            let act = gio::SimpleAction::new_stateful(
-                "choke",
-                Some(gtk::glib::VariantTy::INT32),
-                &(choke as i32).to_variant(),
-            );
-            act.connect_activate(move |act, v| {
-                if let Some(g) = v.and_then(|v| v.get::<i32>()) {
-                    act.set_state(&g.to_variant());
-                    a.edit(vec![Edit::SetChokeGroup {
-                        channel: id,
-                        group: g as u8,
-                    }]);
+        for name in ROW_ACTIONS {
+            let action = if *name == "choke" {
+                gio::SimpleAction::new_stateful(
+                    name,
+                    Some(gtk::glib::VariantTy::INT32),
+                    &(choke as i32).to_variant(),
+                )
+            } else {
+                gio::SimpleAction::new(name, None)
+            };
+            let (a, n) = (self.app.clone(), name.to_string());
+            action.connect_activate(move |act, v| {
+                let target = v.and_then(|v| v.get::<i32>());
+                if let Some(t) = target {
+                    act.set_state(&t.to_variant());
                 }
+                menus::perform_row_action(&a, id, &n, target);
             });
-            group.add_action(&act);
+            group.add_action(&action);
         }
         row.insert_action_group("row", Some(&group));
-        row
+        let a = self.app.clone();
+        crate::context_menu::attach(row, &menus::channel_menu(), move |_| {
+            if a.current_channel() != Some(id) {
+                a.select_channel(id);
+            }
+            true
+        });
+        content
     }
 }

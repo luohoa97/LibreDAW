@@ -266,6 +266,7 @@ pub fn fresh_project(a: &Rc<App>) {
         ui.path = None;
         ui.pattern = None;
         ui.channel = None;
+        ui.channel_cleared = false;
     }
     // A starter beat: one pattern and four channels, ready to play.
     crate::channels::add_starter_beat(a);
@@ -296,6 +297,7 @@ pub fn open_path(app: &Rc<App>, path: PathBuf) {
                     ui.path = Some(path.clone());
                     ui.pattern = None;
                     ui.channel = None;
+                    ui.channel_cleared = false;
                 }
                 if let Some(v) = ViewState::read(&path) {
                     a.apply_view(&v);
@@ -350,7 +352,7 @@ pub fn open_recovery_bundle(app: &Rc<App>, bundle_dir: PathBuf, modified: System
                 a.session.borrow_mut().apply_recovered(&l.doc);
                 a.ui.borrow_mut().path = None;
                 a.ui.borrow_mut().pattern = None;
-                a.ui.borrow_mut().channel = None;
+                a.reset_selection();
                 a.notify();
                 a.ensure_pattern();
                 a.toast(&persist::recovered_message(&time_text(modified)));

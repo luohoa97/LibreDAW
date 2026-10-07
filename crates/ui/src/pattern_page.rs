@@ -11,7 +11,6 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use adw::prelude::*;
-use gtk::gio;
 use gtk::glib;
 
 use protocol::consts::MAX_STEPS;
@@ -27,7 +26,6 @@ use crate::view_math::SNAPS;
 use crate::widgets::lane_editor::LaneEditor;
 use crate::widgets::piano_roll::PianoRoll;
 use crate::widgets::step_grid::StepGrid;
-use doc::presets;
 
 pub struct PatternPage {
     pub widget: gtk::Widget,
@@ -79,41 +77,6 @@ fn flat_button(icon: &str, tip: &str) -> gtk::Button {
     b.update_property(&[gtk::accessible::Property::Label(tip)]);
     b
 }
-
-/// The "Add Channel" menu: built-in sounds grouped by role, then a plugin.
-pub fn add_channel_menu() -> gio::Menu {
-    let menu = gio::Menu::new();
-    let mut roles: Vec<&str> = Vec::new();
-    let all = presets::presets();
-    for p in &all {
-        if !roles.contains(&p.role) {
-            roles.push(p.role);
-        }
-    }
-    for role in roles {
-        let section = gio::Menu::new();
-        for p in all.iter().filter(|p| p.role == role) {
-            let item = gio::MenuItem::new(Some(p.name), None);
-            item.set_action_and_target_value(Some("win.add-preset"), Some(&p.name.to_variant()));
-            section.append_item(&item);
-        }
-        let title = match role {
-            "Drum" => "Drums",
-            "Blank" => "Empty",
-            other => other,
-        };
-        menu.append_section(Some(title), &section);
-    }
-    let native = gio::Menu::new();
-    native.append(Some("_808 Bass"), Some("win.add-808"));
-    native.append(Some("_Sampler…"), Some("win.add-sampler"));
-    menu.append_section(None, &native);
-    let plugin = gio::Menu::new();
-    plugin.append(Some("_Plugin…"), Some("win.add-instrument"));
-    menu.append_section(None, &plugin);
-    menu
-}
-
 pub fn build(window: &adw::ApplicationWindow, app: &Rc<App>) -> PatternPage {
     let _ = window;
     let channels = ChannelList::new(app);
@@ -468,7 +431,7 @@ fn build_steps(app: &Rc<App>, channels: &Rc<ChannelList>) -> gtk::Widget {
     empty.add_css_class("compact");
     let add = gtk::MenuButton::new();
     add.set_label("Add Channel");
-    add.set_menu_model(Some(&add_channel_menu()));
+    add.set_menu_model(Some(&crate::menus::add_channel_menu()));
     add.add_css_class("suggested-action");
     add.add_css_class("pill");
     add.set_halign(gtk::Align::Center);
@@ -505,7 +468,7 @@ fn build_steps(app: &Rc<App>, channels: &Rc<ChannelList>) -> gtk::Widget {
             .label("Add Channel")
             .build(),
     ));
-    add_row.set_menu_model(Some(&add_channel_menu()));
+    add_row.set_menu_model(Some(&crate::menus::add_channel_menu()));
     add_row.add_css_class("flat");
     add_row.set_halign(gtk::Align::Start);
     add_row.set_margin_start(6);
@@ -519,6 +482,7 @@ fn build_steps(app: &Rc<App>, channels: &Rc<ChannelList>) -> gtk::Widget {
     vscroll.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
     vscroll.set_vexpand(true);
     vscroll.set_child(Some(&column));
+    install_deselect(app, &vscroll);
     stack.add_named(&vscroll, Some("rows"));
     // WAV files dropped from the file manager become sampler channels.
     crate::samples_ui::install_drop_target(&stack, app);
@@ -540,6 +504,71 @@ fn build_steps(app: &Rc<App>, channels: &Rc<ChannelList>) -> gtk::Widget {
     sync();
     app.on_change(sync);
     stack.upcast()
+}
+
+/// Whether a press on `picked` (inside `area`) landed on empty space: no
+/// row, button, grid, or other control on the way up.
+fn is_empty_space(picked: &gtk::Widget, area: &gtk::Widget) -> bool {
+    let mut w = Some(picked.clone());
+    while let Some(x) = w {
+        if &x == area {
+            return true;
+        }
+        if x.is::<gtk::ListBoxRow>()
+            || x.is::<gtk::Button>()
+            || x.is::<gtk::Editable>()
+            || x.is::<StepGrid>()
+            || x.is::<LaneEditor>()
+            || x.is::<gtk::Scrollbar>()
+        {
+            return false;
+        }
+        w = x.parent();
+    }
+    false
+}
+
+/// Escape, or a click on empty space, clears the channel selection.
+fn install_deselect(app: &Rc<App>, area: &gtk::ScrolledWindow) {
+    let click = gtk::GestureClick::new();
+    click.set_button(gtk::gdk::BUTTON_PRIMARY);
+    let (a, ar) = (app.clone(), area.clone());
+    click.connect_released(move |_, n, x, y| {
+        if n != 1 {
+            return;
+        }
+        let picked = ar.pick(x, y, gtk::PickFlags::DEFAULT);
+        if picked.is_some_and(|p| is_empty_space(&p, ar.upcast_ref())) {
+            a.deselect_channel();
+        }
+    });
+    area.add_controller(click);
+    let keys = gtk::EventControllerKey::new();
+    // Before the focused row or grid: neither uses a plain Escape.
+    keys.set_propagation_phase(gtk::PropagationPhase::Capture);
+    let a = app.clone();
+    keys.connect_key_pressed(move |c, key, _, state| {
+        let plain = !state.intersects(
+            gtk::gdk::ModifierType::SHIFT_MASK
+                | gtk::gdk::ModifierType::CONTROL_MASK
+                | gtk::gdk::ModifierType::ALT_MASK,
+        );
+        if key != gtk::gdk::Key::Escape || !plain {
+            return glib::Propagation::Proceed;
+        }
+        // An entry being edited handles its own Escape first.
+        let editing = c
+            .widget()
+            .and_then(|w| w.root())
+            .and_then(|r| r.focus())
+            .is_some_and(|f| f.is::<gtk::Text>() || f.is::<gtk::Editable>());
+        if !editing && a.deselect_channel() {
+            glib::Propagation::Stop
+        } else {
+            glib::Propagation::Proceed
+        }
+    });
+    area.add_controller(keys);
 }
 
 /// The three linked lane buttons (docs/ui-design.md 3.3). Only one lane is

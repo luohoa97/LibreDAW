@@ -460,8 +460,13 @@ impl LaneEditor {
         if steps == 0 || self.lane().is_none() {
             return false;
         }
+        // Plain keys, and Ctrl+Up/Down for big steps; everything else is a
+        // window shortcut.
+        let big = crate::keys::only(state, gdk::ModifierType::CONTROL_MASK);
+        if !(crate::keys::plain(state) || (big && matches!(key, gdk::Key::Up | gdk::Key::Down))) {
+            return false;
+        }
         let cur = self.imp().cursor.get().min(steps - 1);
-        let big = state.contains(gdk::ModifierType::CONTROL_MASK);
         let go = |to: u32| {
             self.imp().cursor.set(to.min(steps - 1));
             self.update_label();
