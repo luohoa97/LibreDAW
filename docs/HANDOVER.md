@@ -116,9 +116,6 @@ used a DAW. AI agents drive it through MCP as a first-class frontend.
 - **MCP:** audio_clip_add and audio_clip_set; pattern_make, pattern_place
   and pattern_list; shape_add, shape_set and shape_remove; fx_bypass.
 - **Verify first next session:**
-  - After deleting a shape, does its last automated value stick? The
-    engine overwrites the control tables, and the UI must rewrite them
-    from the document after a shape edit.
   - Do audio clips play on screen and through speakers in the real app?
     So far only tests and screenshots cover this.
 - **Not done:**
@@ -127,7 +124,8 @@ used a DAW. AI agents drive it through MCP as a first-class frontend.
   - Dragging Surge sounds from the pane.
   - A declick on stop or seek inside audio clips.
   - Time-stretch on tempo change.
-  - Pitch shapes on CLAP plugins and on audio rows.
+  - Pitch shapes on CLAP plugins and on audio rows (not offered in the
+    menu).
 - **Stray remote branch:** `fx-wave` exists on GitHub because a teammate
   pushed it against the rules. It is merged, so delete it once the owner
   agrees.
