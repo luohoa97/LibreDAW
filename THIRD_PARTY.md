@@ -8,11 +8,26 @@ CI fails if this file is out of date.
 
 | Crate | Version | License | Why |
 |---|---|---|---|
+| cpal | 0.18.2 | Apache-2.0 | audio I/O (fixed stack); its `jack` feature pulls in the `jack` crate for the JACK/PipeWire-JACK backend |
 
 ## All crates in the dependency graph (x86_64-unknown-linux-gnu)
 
 | Crate | Version | License |
 |---|---|---|
+| alsa | 0.11.0 | Apache-2.0/MIT |
+| alsa-sys | 0.4.0 | MIT |
+| bitflags | 1.3.2 | MIT/Apache-2.0 |
+| bitflags | 2.13.2 | MIT OR Apache-2.0 |
+| cfg-if | 1.0.5 | MIT OR Apache-2.0 |
+| cpal | 0.18.2 | Apache-2.0 |
+| dasp_sample | 0.11.0 | MIT OR Apache-2.0 |
+| jack | 0.13.5 | MIT |
+| jack-sys | 0.5.1 | MIT OR Apache-2.0 |
+| lazy_static | 1.5.1 | MIT OR Apache-2.0 |
+| libc | 0.2.190 | MIT OR Apache-2.0 |
+| libloading | 0.7.4 | ISC |
+| log | 0.4.34 | MIT OR Apache-2.0 |
+| pkg-config | 0.3.34 | MIT OR Apache-2.0 |
 
 ## System libraries (hand-maintained)
 

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! Audio engine: transport, metronome, mixer and synth.
 
+pub mod live;
 pub mod metronome;
 pub mod recorder;
 pub mod report;
