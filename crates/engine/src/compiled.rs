@@ -359,6 +359,12 @@ pub struct Compiled {
     pub order: Vec<u16>,
     /// Sorted by id.
     pub patterns: Vec<PatternC>,
+    /// The playlist flattened to one timeline in song ticks (15.6): every
+    /// clip expanded into notes, a clip longer than its pattern repeating it
+    /// and a shorter one cutting it. `len_ticks` is at least 1.
+    pub song: PatternC,
+    /// End of the last clip; 0 when the playlist has no clip with a pattern.
+    pub song_len_ticks: u32,
 }
 
 impl Compiled {
@@ -397,6 +403,13 @@ pub fn compile_with(
         tracks: vec![TrackC::default(); TRACK_SLOTS],
         order: Vec::new(),
         patterns: Vec::with_capacity(project.patterns.len()),
+        song: PatternC {
+            id: PatternId(0),
+            len_ticks: 1,
+            notes: Vec::new(),
+            active_slots: Vec::new(),
+        },
+        song_len_ticks: 0,
     };
     for t in &project.tracks {
         if let Some(s) = slots.track_slot(t.id) {
@@ -521,8 +534,75 @@ pub fn compile_with(
         });
     }
     c.patterns.sort_by_key(|p| p.id);
+    let (song, song_len) = compile_song(project, &c);
+    c.song = song;
+    c.song_len_ticks = song_len;
     c.order = topo_order(&c);
     Box::new(c)
+}
+
+/// Notes the song timeline may hold; a clip that would add more stops
+/// expanding (a one-tick pattern under a very long clip, for example).
+pub const MAX_SONG_NOTES: usize = 4_000_000;
+
+/// Flattens the playlist into one note timeline (15.6). Returns it with the
+/// end of the last clip. Clips of patterns that do not exist are skipped.
+fn compile_song(project: &Project, c: &Compiled) -> (PatternC, u32) {
+    let mut notes: Vec<Vec<NoteC>> = vec![Vec::new(); MAX_CHANNELS];
+    let mut end = 0u64;
+    let mut total = 0usize;
+    'clips: for pt in &project.playlist {
+        for clip in &pt.clips {
+            let Some(p) = c.pattern(clip.pattern) else {
+                continue;
+            };
+            if clip.len == 0 {
+                continue;
+            }
+            let start = clip.start as u64;
+            let cend = start + clip.len as u64;
+            end = end.max(cend);
+            let plen = p.len_ticks.max(1) as u64;
+            let mut off = start;
+            while off < cend {
+                for &s in &p.active_slots {
+                    for n in &p.notes[s as usize] {
+                        let st = off + n.start as u64;
+                        if st >= cend {
+                            break; // sorted by start
+                        }
+                        if total >= MAX_SONG_NOTES {
+                            continue 'clips;
+                        }
+                        total += 1;
+                        notes[s as usize].push(NoteC {
+                            start: st as u32,
+                            end: (off + n.end as u64).min(cend) as u32,
+                            ..*n
+                        });
+                    }
+                }
+                off += plen;
+            }
+        }
+    }
+    let mut active = Vec::new();
+    for (s, v) in notes.iter_mut().enumerate() {
+        v.sort_by_key(|n| (n.start, n.key, n.id));
+        if !v.is_empty() {
+            active.push(s as u16);
+        }
+    }
+    let end = end.min(u32::MAX as u64) as u32;
+    (
+        PatternC {
+            id: PatternId(0),
+            len_ticks: end.max(1),
+            notes,
+            active_slots: active,
+        },
+        end,
+    )
 }
 
 /// Compiles one insert; records the pool entry's generation in `fx_gen`.

@@ -646,7 +646,10 @@ impl Runtime {
                     self.seq.set_pattern_id(pattern);
                 }
             }
-            EngineCommand::SetTransportMode { .. } => {}
+            EngineCommand::SetTransportMode { mode, loop_song } => {
+                self.seq
+                    .set_mode(self.compiled.as_deref(), mode, loop_song, &mut self.events);
+            }
             EngineCommand::Preview {
                 channel,
                 key,
@@ -751,6 +754,17 @@ impl Runtime {
         let metronome_on = self.metronome_allowed && ctl.get(CTL_METRONOME_ENABLED) >= 0.5;
         self.seq
             .schedule(&c, n, metronome_on, &mut self.events, &mut self.beats);
+        if self.seq.finished {
+            // A song that does not loop ran out: the same event as a stop.
+            self.seq.finished = false;
+            push_engine_event(
+                &mut self.ends.events,
+                &self.shared.status,
+                EngineEvent::Stopped {
+                    tick: c.song.len_ticks as u64,
+                },
+            );
+        }
         // Previews: auto-release, once the sequencer's events are final.
         self.preview_timers(n);
         let pos = self.seq.pos;
