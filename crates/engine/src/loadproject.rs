@@ -173,6 +173,7 @@ fn insert(ids: &mut Ids, f: BuiltinFx) -> Insert {
     Insert::Builtin {
         instance: InstanceId(ids.next()),
         fx: f,
+        bypass: false,
     }
 }
 
@@ -527,6 +528,8 @@ pub fn load_project_clips(clips: u32) -> Project {
                 len: bar,
                 offset: 0,
                 muted: false,
+                audio: None,
+                group: None,
             });
         }
     }

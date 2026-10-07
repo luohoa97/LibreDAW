@@ -635,6 +635,8 @@ mod tests {
             len: 96,
             offset: 0,
             muted: false,
+            audio: None,
+            group: None,
         };
         project.clips.push(c);
         let edits = [

@@ -248,8 +248,7 @@ pub(super) fn apply(w: &mut Work, e: &Edit) -> Result<(), EditError> {
         Edit::SplitClip { clip, at } => split(w, *clip, *at),
         Edit::MakeUnique { clip } => {
             let c = locate_clips(&w.p, &[*clip])?[0];
-            if c.audio.is_some()
-                || w.p.clips.iter().filter(|x| x.pattern == c.pattern).count() <= 1
+            if c.audio.is_some() || w.p.clips.iter().filter(|x| x.pattern == c.pattern).count() <= 1
             {
                 return Ok(());
             }
@@ -433,7 +432,9 @@ fn move_to_instrument(w: &mut Work, clip: ClipId, instrument: ChannelId) -> Resu
         return Ok(());
     }
     if matches!(w.p.channels[to].instrument, Instrument::Audio) != c.audio.is_some() {
-        return Err(bad("audio clips stay on audio rows, note clips on note rows"));
+        return Err(bad(
+            "audio clips stay on audio rows, note clips on note rows",
+        ));
     }
     check_placements(
         &w.p,

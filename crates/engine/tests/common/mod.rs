@@ -155,6 +155,8 @@ pub fn project<B: Into<Beat>>(
                 len: b.len_ticks,
                 offset: 0,
                 muted: false,
+                audio: None,
+                group: None,
             });
             p.patterns.push(Arc::new(c));
         }

@@ -42,7 +42,13 @@ fn audio_doc() -> (Document, ChannelId) {
     (d, ChannelId(c[0]))
 }
 
-fn add_audio(d: &Document, row: ChannelId, start: u32, len: u32, offset: u32) -> (Document, ClipId) {
+fn add_audio(
+    d: &Document,
+    row: ChannelId,
+    start: u32,
+    len: u32,
+    offset: u32,
+) -> (Document, ClipId) {
     let (d, c) = ok(
         d,
         Edit::AddAudioClip {
@@ -110,7 +116,13 @@ fn audio_clips_add_edit_move_resize_split_and_remove() {
             fade_out: 200,
         },
     );
-    let (d, _) = ok(&d, Edit::MoveClips { clips: vec![c], dt: 960 });
+    let (d, _) = ok(
+        &d,
+        Edit::MoveClips {
+            clips: vec![c],
+            dt: 960,
+        },
+    );
     assert_eq!(clip(&d, c).start, BAR + 960);
 
     // Growing at the start uncovers earlier audio: offset goes down.
@@ -145,7 +157,10 @@ fn audio_clips_add_edit_move_resize_split_and_remove() {
     assert_eq!(left.len, 1000);
     assert_eq!(right.offset, 40 + 1000);
     assert_eq!(right.audio.unwrap().sample, sample_hash());
-    assert_eq!((left.audio.unwrap().fade_out, right.audio.unwrap().fade_in), (0, 0));
+    assert_eq!(
+        (left.audio.unwrap().fade_out, right.audio.unwrap().fade_in),
+        (0, 0)
+    );
     assert_eq!(right.audio.unwrap().fade_out, 200);
     assert_eq!(left.audio.unwrap().gain_mdb, -6000);
     saves(&d);
@@ -161,7 +176,12 @@ fn audio_clips_add_edit_move_resize_split_and_remove() {
     );
     assert_eq!(clip(&d, ClipId(dup[0])).audio, right.audio);
     assert_eq!(d.project.patterns.len(), 0);
-    let (d, _) = ok(&d, Edit::RemoveClips { clips: vec![c, ClipId(created[0])] });
+    let (d, _) = ok(
+        &d,
+        Edit::RemoveClips {
+            clips: vec![c, ClipId(created[0])],
+        },
+    );
     assert_eq!(d.project.clips.len(), 1);
     saves(&d);
 }
@@ -195,7 +215,16 @@ fn audio_clips_need_an_audio_row_a_known_sample_and_room() {
         .is_err()
     );
     let c = d.project.clips[0].id;
-    assert!(apply(&d, &Edit::MoveClipToInstrument { clip: c, instrument: k }).is_err());
+    assert!(
+        apply(
+            &d,
+            &Edit::MoveClipToInstrument {
+                clip: c,
+                instrument: k
+            }
+        )
+        .is_err()
+    );
     assert!(
         apply(
             &d,
@@ -247,7 +276,13 @@ fn make_pattern_groups_clips_at_the_earliest_start() {
     );
 
     // Place another instance: linked copies, a new instance number.
-    let (d2, placed) = ok(&d, Edit::PlacePattern { group: gid, start: 4 * BAR });
+    let (d2, placed) = ok(
+        &d,
+        Edit::PlacePattern {
+            group: gid,
+            start: 4 * BAR,
+        },
+    );
     assert_eq!(placed.len(), 2);
     for id in &placed {
         let c = clip(&d2, ClipId(*id));
@@ -258,8 +293,26 @@ fn make_pattern_groups_clips_at_the_earliest_start() {
     assert_eq!(ka.pattern, kb.pattern, "linked content");
     saves(&d2);
     // Overlap is refused.
-    assert!(apply(&d, &Edit::PlacePattern { group: gid, start: BAR }).is_err());
-    assert!(apply(&d, &Edit::PlacePattern { group: GroupId(9999), start: 0 }).is_err());
+    assert!(
+        apply(
+            &d,
+            &Edit::PlacePattern {
+                group: gid,
+                start: BAR
+            }
+        )
+        .is_err()
+    );
+    assert!(
+        apply(
+            &d,
+            &Edit::PlacePattern {
+                group: GroupId(9999),
+                start: 0
+            }
+        )
+        .is_err()
+    );
 
     // Duplicating grouped clips makes a new instance.
     let (d3, dup) = ok(
@@ -295,7 +348,12 @@ fn make_pattern_groups_clips_at_the_earliest_start() {
 #[test]
 fn shapes_add_replace_remove_and_follow_their_targets() {
     let d = Document::new();
-    let (d, tr) = ok(&d, Edit::AddTrack { name: "Drums".into() });
+    let (d, tr) = ok(
+        &d,
+        Edit::AddTrack {
+            name: "Drums".into(),
+        },
+    );
     let tr = TrackId(tr[0]);
     let pt = |tick, value| ShapePoint {
         tick,
@@ -327,7 +385,9 @@ fn shapes_add_replace_remove_and_follow_their_targets() {
         apply(
             &d,
             &Edit::AddShape {
-                target: protocol::model::ShapeTarget::Pan { track: TrackId(777) },
+                target: protocol::model::ShapeTarget::Pan {
+                    track: TrackId(777)
+                },
                 points: vec![]
             }
         )
@@ -420,7 +480,10 @@ fn diff_describes_v4_changes_in_plain_words() {
     let (d, row) = audio_doc();
     let (d2, _) = add_audio(&d, row, 0, BAR, 0);
     let lines = crate::diff::diff_projects(&d.project, &d2.project);
-    assert!(lines.iter().any(|l| l.contains("audio clip added")), "{lines:?}");
+    assert!(
+        lines.iter().any(|l| l.contains("audio clip added")),
+        "{lines:?}"
+    );
 }
 
 /// Random edits of the v4 kinds, on top of the usual ones.
@@ -459,7 +522,9 @@ fn random_v4_edit(r: &mut Rng, d: &Document) -> Edit {
             clips: pick_clips(r),
         },
         8 => Edit::AddShape {
-            target: protocol::model::ShapeTarget::Pan { track: TrackId::MASTER },
+            target: protocol::model::ShapeTarget::Pan {
+                track: TrackId::MASTER,
+            },
             points: (0..r.below(4))
                 .map(|i| ShapePoint {
                     tick: (r.below(4) as u32) * 100 + i as u32 * 1000,

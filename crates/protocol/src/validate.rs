@@ -651,7 +651,9 @@ fn check_groups_and_shapes(
                     .find(|t| t.id == track)
                     .and_then(|t| {
                         t.inserts.iter().find_map(|i| match i {
-                            Insert::Builtin { instance: n, fx, .. } if *n == instance => Some(fx),
+                            Insert::Builtin {
+                                instance: n, fx, ..
+                            } if *n == instance => Some(fx),
                             _ => None,
                         })
                     })

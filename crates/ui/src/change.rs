@@ -57,6 +57,7 @@ fn norm_channel(c: &Channel) -> Channel {
             // Mono is structural; the knobs are not.
             b.params = Default::default();
         }
+        Instrument::Audio => {}
     }
     c
 }

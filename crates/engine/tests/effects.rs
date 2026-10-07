@@ -18,6 +18,7 @@ fn fx_insert(id: u32, fx: BuiltinFx) -> Insert {
     Insert::Builtin {
         instance: InstanceId(id),
         fx,
+        bypass: false,
     }
 }
 

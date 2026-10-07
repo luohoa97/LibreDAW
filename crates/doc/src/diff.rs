@@ -348,7 +348,11 @@ fn clip_lines(cx: &Ctx, out: &mut Vec<String>) {
         match a.get(&c.id) {
             None => added.push(format!(
                 "{inst}: {} added at bar {}",
-                if c.audio.is_some() { "audio clip" } else { "clip" },
+                if c.audio.is_some() {
+                    "audio clip"
+                } else {
+                    "clip"
+                },
                 cx.at(c.start)
             )),
             Some(o) if **o != *c => {

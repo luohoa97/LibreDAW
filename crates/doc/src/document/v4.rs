@@ -21,15 +21,15 @@ use std::collections::HashSet;
 
 use protocol::consts::*;
 use protocol::edit::{Edit, EditError};
+use protocol::ids::ShapeId;
 use protocol::ids::{ChannelId, ClipId, GroupId, InstanceId, TrackId};
 use protocol::model::{
     AudioSource, Clip, ClipGroup, Instrument, PatternGroup, Project, Shape, ShapeTarget,
 };
-use protocol::ids::ShapeId;
 use protocol::validate::check_name;
 
-use super::clips::{check_clip_room, check_placements, check_span, locate_clips, Placement};
 use super::beats::require_sample;
+use super::clips::{Placement, check_clip_room, check_placements, check_span, locate_clips};
 use super::{Work, bad, channel_idx, not_found, out_of_range, too_many};
 
 /// Colours handed to new patterns, in turn.
@@ -99,7 +99,11 @@ pub(super) fn apply(w: &mut Work, e: &Edit) -> Result<(), EditError> {
             if *fade_out > c.len {
                 return Err(out_of_range("clip.audio.fade_out", *fade_out as f64));
             }
-            let m = w.p.clips.iter_mut().find(|x| x.id == *clip).expect("located");
+            let m =
+                w.p.clips
+                    .iter_mut()
+                    .find(|x| x.id == *clip)
+                    .expect("located");
             if let Some(a) = &mut m.audio {
                 a.gain_mdb = *gain_mdb;
                 a.fade_in = *fade_in;
@@ -122,12 +126,11 @@ pub(super) fn apply(w: &mut Work, e: &Edit) -> Result<(), EditError> {
         }
         Edit::RenameGroup { group, name } => {
             check_name("group.name", name)?;
-            let g = w
-                .p
-                .groups
-                .iter_mut()
-                .find(|g| g.id == *group)
-                .ok_or_else(|| not_found("pattern", group.0))?;
+            let g =
+                w.p.groups
+                    .iter_mut()
+                    .find(|g| g.id == *group)
+                    .ok_or_else(|| not_found("pattern", group.0))?;
             g.name = name.clone();
             Ok(())
         }
@@ -146,24 +149,22 @@ pub(super) fn apply(w: &mut Work, e: &Edit) -> Result<(), EditError> {
             Ok(())
         }
         Edit::SetShapePoints { shape, points } => {
-            let s = w
-                .p
-                .shapes
-                .iter_mut()
-                .find(|s| s.id == *shape)
-                .ok_or_else(|| not_found("shape", shape.0))?;
+            let s =
+                w.p.shapes
+                    .iter_mut()
+                    .find(|s| s.id == *shape)
+                    .ok_or_else(|| not_found("shape", shape.0))?;
             let mut points = points.clone();
             points.sort_by_key(|p| p.tick);
             s.points = points;
             Ok(())
         }
         Edit::RemoveShape { shape } => {
-            let i = w
-                .p
-                .shapes
-                .iter()
-                .position(|s| s.id == *shape)
-                .ok_or_else(|| not_found("shape", shape.0))?;
+            let i =
+                w.p.shapes
+                    .iter()
+                    .position(|s| s.id == *shape)
+                    .ok_or_else(|| not_found("shape", shape.0))?;
             w.p.shapes.remove(i);
             Ok(())
         }
@@ -201,7 +202,11 @@ fn make_pattern(w: &mut Work, clips: &[ClipId], name: &str) -> Result<(), EditEr
         color: PALETTE[(w.p.groups.len()) % PALETTE.len()],
     });
     for c in &found {
-        let m = w.p.clips.iter_mut().find(|x| x.id == c.id).expect("located");
+        let m =
+            w.p.clips
+                .iter_mut()
+                .find(|x| x.id == c.id)
+                .expect("located");
         m.start = at;
         m.group = Some(ClipGroup {
             group: gid,
@@ -215,30 +220,33 @@ fn place_pattern(w: &mut Work, group: GroupId, start: u32) -> Result<(), EditErr
     if !w.p.groups.iter().any(|g| g.id == group) {
         return Err(not_found("pattern", group.0));
     }
-    let first = w
-        .p
-        .clips
-        .iter()
-        .filter_map(|c| c.group.filter(|g| g.group == group))
-        .map(|g| g.instance)
-        .min()
-        .ok_or_else(|| bad("pattern has no clips to place"))?;
-    let next = w
-        .p
-        .clips
-        .iter()
-        .filter_map(|c| c.group.filter(|g| g.group == group))
-        .map(|g| g.instance)
-        .max()
-        .expect("has a first")
-        + 1;
-    let members: Vec<Clip> = w
-        .p
-        .clips
-        .iter()
-        .filter(|c| c.group == Some(ClipGroup { group, instance: first }))
-        .copied()
-        .collect();
+    let first =
+        w.p.clips
+            .iter()
+            .filter_map(|c| c.group.filter(|g| g.group == group))
+            .map(|g| g.instance)
+            .min()
+            .ok_or_else(|| bad("pattern has no clips to place"))?;
+    let next =
+        w.p.clips
+            .iter()
+            .filter_map(|c| c.group.filter(|g| g.group == group))
+            .map(|g| g.instance)
+            .max()
+            .expect("has a first")
+            + 1;
+    let members: Vec<Clip> =
+        w.p.clips
+            .iter()
+            .filter(|c| {
+                c.group
+                    == Some(ClipGroup {
+                        group,
+                        instance: first,
+                    })
+            })
+            .copied()
+            .collect();
     let base = members.iter().map(|c| c.start).min().expect("has members");
     check_clip_room(&w.p, members.len())?;
     let mut planned: Vec<Placement> = Vec::with_capacity(members.len());
@@ -268,7 +276,11 @@ pub(super) fn collect_groups(p: &mut Project) {
     if p.groups.is_empty() {
         return;
     }
-    let used: HashSet<GroupId> = p.clips.iter().filter_map(|c| c.group.map(|g| g.group)).collect();
+    let used: HashSet<GroupId> = p
+        .clips
+        .iter()
+        .filter_map(|c| c.group.map(|g| g.group))
+        .collect();
     p.groups.retain(|g| used.contains(&g.id));
 }
 
@@ -278,9 +290,10 @@ fn forget(p: &mut Project, gone: impl Fn(&ShapeTarget) -> bool) {
 }
 
 pub(super) fn forget_channel(p: &mut Project, ch: ChannelId) {
-    forget(p, |t| {
-        matches!(t, ShapeTarget::Pitch { instrument } | ShapeTarget::Filter { instrument } if *instrument == ch)
-    });
+    forget(
+        p,
+        |t| matches!(t, ShapeTarget::Pitch { instrument } | ShapeTarget::Filter { instrument } if *instrument == ch),
+    );
 }
 
 pub(super) fn forget_track(p: &mut Project, tr: TrackId) {
@@ -295,7 +308,8 @@ pub(super) fn forget_track(p: &mut Project, tr: TrackId) {
 }
 
 pub(super) fn forget_insert(p: &mut Project, tr: TrackId, inst: InstanceId) {
-    forget(p, |t| {
-        matches!(t, ShapeTarget::FxParam { track, instance, .. } if *track == tr && *instance == inst)
-    });
+    forget(
+        p,
+        |t| matches!(t, ShapeTarget::FxParam { track, instance, .. } if *track == tr && *instance == inst),
+    );
 }

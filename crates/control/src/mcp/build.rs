@@ -303,6 +303,8 @@ mod tests {
             len: 3840,
             offset: 0,
             muted: false,
+            audio: None,
+            group: None,
         });
         p
     }

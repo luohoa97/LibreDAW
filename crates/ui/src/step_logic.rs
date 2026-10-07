@@ -388,6 +388,8 @@ mod tests {
             len,
             offset,
             muted,
+            audio: None,
+            group: None,
         }
     }
 

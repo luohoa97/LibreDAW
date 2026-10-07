@@ -306,7 +306,10 @@ impl SoundPage {
         let c = s.document().project.channel(self.channel()?)?;
         match &c.instrument {
             Instrument::Synth(p) => Some(*p),
-            Instrument::Clap(_) | Instrument::Sampler(_) | Instrument::Bass808(_) => None,
+            Instrument::Clap(_)
+            | Instrument::Sampler(_)
+            | Instrument::Bass808(_)
+            | Instrument::Audio => None,
         }
     }
 
@@ -517,6 +520,8 @@ impl SoundPage {
                 self.expert.set_sensitive(has_gui);
                 self.no_window.set_visible(!has_gui);
             }
+            // TODO(ui teammate): an inspector page for audio rows (21.1).
+            Instrument::Audio => {}
         }
         self.updating.set(false);
     }

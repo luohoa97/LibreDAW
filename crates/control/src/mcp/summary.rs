@@ -50,6 +50,7 @@ pub fn instrument_kind(i: &Instrument) -> &'static str {
         Instrument::Clap(_) => "plugin",
         Instrument::Sampler(_) => "sampler",
         Instrument::Bass808(_) => "808",
+        Instrument::Audio => "audio",
     }
 }
 
@@ -226,7 +227,7 @@ fn mixer_lines(project: &Project, out: &mut String) {
         for i in &t.inserts {
             fx.push(match i {
                 Insert::Clap(r) => format!("{}:{}", r.instance, agent_string(&r.plugin_id)),
-                Insert::Builtin { instance, fx } => format!(
+                Insert::Builtin { instance, fx, .. } => format!(
                     "{instance}:{}",
                     serde_json::to_value(fx.kind())
                         .ok()
@@ -379,6 +380,8 @@ mod tests {
                 len: 3840,
                 offset: 0,
                 muted: id == 4,
+                audio: None,
+                group: None,
             });
         }
         p.loop_region = LoopRegion {

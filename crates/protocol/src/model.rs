@@ -624,7 +624,8 @@ impl Serialize for SampleHash {
 impl<'de> Deserialize<'de> for SampleHash {
     fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<SampleHash, D::Error> {
         let s = String::deserialize(d)?;
-        SampleHash::parse(&s).ok_or_else(|| serde::de::Error::custom("sample hash must be 64 hex digits"))
+        SampleHash::parse(&s)
+            .ok_or_else(|| serde::de::Error::custom("sample hash must be 64 hex digits"))
     }
 }
 
@@ -660,7 +661,11 @@ pub enum ShapeTarget {
     /// Instrument low-pass cutoff, 0..1 (closed..open).
     Filter { instrument: ChannelId },
     /// A built-in effect parameter, in its own range.
-    FxParam { track: TrackId, instance: InstanceId, param: u16 },
+    FxParam {
+        track: TrackId,
+        instance: InstanceId,
+        param: u16,
+    },
 }
 
 /// How a shape moves from one point to the next (24.2-1).

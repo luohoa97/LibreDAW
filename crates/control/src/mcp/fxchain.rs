@@ -29,7 +29,7 @@ fn set(track: TrackId, instance: InstanceId, param: usize, value: f64) -> Edit {
 /// An effect of `kind` that `fx` is, with its instance.
 fn builtins(t: &Track) -> impl Iterator<Item = (usize, InstanceId, &BuiltinFx)> {
     t.inserts.iter().enumerate().filter_map(|(i, x)| match x {
-        Insert::Builtin { instance, fx } => Some((i, *instance, fx)),
+        Insert::Builtin { instance, fx, .. } => Some((i, *instance, fx)),
         _ => None,
     })
 }
@@ -268,7 +268,7 @@ pub fn duck_to_kick(project: &Project, ids: &mut IdGen, a: &DuckArgs) -> BuildRe
     };
     let have = existing.and_then(|i| {
         t.inserts.iter().find_map(|x| match x {
-            Insert::Builtin { instance, fx } if *instance == i => Some(fx),
+            Insert::Builtin { instance, fx, .. } if *instance == i => Some(fx),
             _ => None,
         })
     });

@@ -41,7 +41,7 @@ fn current(app: &App, track: TrackId, inst: InstanceId) -> Option<BuiltinFx> {
     let s = app.session.borrow();
     let t = s.document().project.track(track)?.clone();
     t.inserts.iter().find_map(|i| match i {
-        Insert::Builtin { instance, fx } if *instance == inst => Some(fx.clone()),
+        Insert::Builtin { instance, fx, .. } if *instance == inst => Some(fx.clone()),
         _ => None,
     })
 }

@@ -358,7 +358,7 @@ impl Mixer {
         for ins in &track.inserts {
             let row = match ins {
                 protocol::model::Insert::Clap(r) => self.insert_row(id, r.instance, &r.plugin_id),
-                protocol::model::Insert::Builtin { instance, fx } => {
+                protocol::model::Insert::Builtin { instance, fx, .. } => {
                     self.builtin_row(id, *instance, fx.kind())
                 }
             };

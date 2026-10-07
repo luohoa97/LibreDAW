@@ -27,6 +27,8 @@ fn clip(id: u32, instrument: u32, pat: u32, start: u32, len: u32) -> Clip {
         len,
         offset: 0,
         muted: false,
+        audio: None,
+        group: None,
     }
 }
 

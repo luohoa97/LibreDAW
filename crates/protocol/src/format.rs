@@ -22,8 +22,8 @@ use crate::beats::{
 use crate::consts::FORMAT_VERSION;
 use crate::ids::InstanceId;
 use crate::model::{
-    Adsr, Channel, ClapRef, Clip, Curve, Insert, Instrument, LoopRegion, Metronome, Mix, Osc, Pattern,
-    PatternGroup, Project, SampleRef, Shape, ShapeTarget, SynthParams, Track, Wave,
+    Adsr, Channel, ClapRef, Clip, Curve, Insert, Instrument, LoopRegion, Metronome, Mix, Osc,
+    Pattern, PatternGroup, Project, SampleRef, Shape, ShapeTarget, SynthParams, Track, Wave,
 };
 use crate::validate::{ValidationError, validate};
 

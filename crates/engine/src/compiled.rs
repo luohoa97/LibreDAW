@@ -221,7 +221,7 @@ impl Slots {
                 if let Some(id) = e.id
                     && !project.tracks.iter().any(|t| {
                         t.inserts.iter().any(|i| {
-                            matches!(i, Insert::Builtin { instance, fx } if *instance == id && fx.kind() == k)
+                            matches!(i, Insert::Builtin { instance, fx, .. } if *instance == id && fx.kind() == k)
                         })
                     })
                 {
@@ -231,7 +231,7 @@ impl Slots {
         }
         for t in &project.tracks {
             for i in &t.inserts {
-                if let Insert::Builtin { instance, fx } = i {
+                if let Insert::Builtin { instance, fx, .. } = i {
                     let _ = self.alloc_fx(fx.kind(), *instance);
                 }
             }
@@ -468,6 +468,9 @@ pub fn compile_with(
                     .and_then(|h| store.and_then(|st| st.get(h))),
             }),
             Instrument::Bass808(b) => InstrumentC::Bass808 { mono: b.mono },
+            // TODO(engine teammate): audio rows play their audio clips (21.1).
+            // Until then the row is silent and unsupported.
+            Instrument::Audio => continue,
         };
         c.channels[i] = Some(ChannelC {
             instrument,
@@ -625,7 +628,7 @@ fn compile_song(project: &Project, c: &Compiled) -> (PatternC, u32) {
 
 /// Compiles one insert; records the pool entry's generation in `fx_gen`.
 fn compile_insert(ins: &Insert, slots: &Slots, fx_gen: &mut [Vec<SlotGen>; KINDS]) -> InsertC {
-    let Insert::Builtin { instance, fx } = ins else {
+    let Insert::Builtin { instance, fx, .. } = ins else {
         return InsertC::Clap;
     };
     let kind = fx.kind();

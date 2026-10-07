@@ -177,7 +177,7 @@ fn copy_sound(src: &Instrument, id: ChannelId) -> Vec<Edit> {
                 value: b.params.get(*p),
             })
             .collect(),
-        Instrument::Synth(_) | Instrument::Clap(_) => Vec::new(),
+        Instrument::Synth(_) | Instrument::Clap(_) | Instrument::Audio => Vec::new(),
     }
 }
 
@@ -202,6 +202,8 @@ fn new_instrument(
                 mode: s.mode,
             },
             Instrument::Bass808(b) => NewInstrument::Bass808 { mono: b.mono },
+            // TODO(mcp teammate): audio rows are made by the audio tools (21.1).
+            Instrument::Audio => NewInstrument::Audio,
             Instrument::Clap(_) => {
                 return Err(format!(
                     "copy_of: instrument {src} is a plugin; its sound cannot be copied, add the plugin again with kind \"plugin\""
@@ -559,6 +561,7 @@ pub fn param_names(i: &Instrument) -> String {
             })
             .collect(),
         Instrument::Clap(_) => vec!["plugin parameter ids as text, for example \"12\"".into()],
+        Instrument::Audio => vec!["none (audio rows have no sound parameters)".into()],
     };
     list.join(", ")
 }
@@ -744,6 +747,9 @@ pub fn instrument_set(project: &Project, a: &InstrumentSetArgs) -> BuildResult {
                     param_id,
                     value,
                 }
+            }
+            Instrument::Audio => {
+                return Err(format!("{label}: an audio row has no sound parameters"));
             }
         };
         b.push(format!("{label}: {name}"), e);
@@ -1928,6 +1934,8 @@ mod tests {
             len: 3840,
             offset: 0,
             muted: false,
+            audio: None,
+            group: None,
         });
         p
     }

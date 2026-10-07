@@ -404,6 +404,8 @@ mod tests {
             len,
             offset: 0,
             muted: false,
+            audio: None,
+            group: None,
         }
     }
 
