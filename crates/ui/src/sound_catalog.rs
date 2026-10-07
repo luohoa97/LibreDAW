@@ -40,6 +40,10 @@ pub struct Entry {
     /// The kit, pack or family it belongs to ("Boom Bap", "Drums"); what
     /// `genre` matches.
     pub family: String,
+    /// The drum kit this sound is part of: (id, name).
+    pub kit: Option<(String, String)>,
+    /// For a drum kit: its pieces as (role, sound id, name).
+    pub slots: Vec<(String, String, String)>,
 }
 
 /// What a search asks for. Empty strings mean "any".
@@ -49,6 +53,10 @@ pub struct Query {
     pub role: String,
     pub source: String,
     pub genre: String,
+    /// Words of a kit name ("909"): only sounds of kits that match.
+    pub kit: String,
+    /// Exactly this kit entry (its id), with its pieces.
+    pub kit_id: String,
     pub offset: usize,
     pub limit: usize,
 }
@@ -90,7 +98,8 @@ fn role_matches(want: &str, role: &str, extra: &[&str], group: bool) -> bool {
 
 fn text_matches(e: &Entry, text: &str) -> bool {
     let hay = format!(
-        "{} {} {} {} {} {}",
+        "{} {} {} {} {} {} {}",
+        e.kit.as_ref().map_or("", |k| k.1.as_str()),
         e.name,
         e.role,
         soundlib::role_title(&e.role),
@@ -101,6 +110,43 @@ fn text_matches(e: &Entry, text: &str) -> bool {
     .to_lowercase();
     text.split_whitespace()
         .all(|w| hay.contains(&w.to_lowercase()))
+}
+
+fn text_matches_words(hay: &str, words: &str) -> bool {
+    let hay = hay.to_lowercase();
+    words
+        .split_whitespace()
+        .all(|w| hay.contains(&w.to_lowercase()))
+}
+
+/// Sounds of one kit sit together (the kit first, then its pieces), in the
+/// order the first of each kit appeared; everything else keeps its place.
+fn group_by_kit(hits: Vec<&Entry>) -> Vec<&Entry> {
+    let key = |e: &Entry| -> Option<String> {
+        match (&e.kit, e.kind) {
+            (Some(k), _) => Some(k.0.clone()),
+            (None, DRUM_KIT) => Some(e.id.clone()),
+            _ => None,
+        }
+    };
+    let mut order: Vec<(Option<String>, Vec<&Entry>)> = Vec::new();
+    let mut at: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    for e in hits {
+        match key(e) {
+            Some(k) => match at.get(&k) {
+                Some(i) => order[*i].1.push(e),
+                None => {
+                    at.insert(k.clone(), order.len());
+                    order.push((Some(k), vec![e]));
+                }
+            },
+            None => order.push((None, vec![e])),
+        }
+    }
+    for (_, v) in &mut order {
+        v.sort_by_key(|e| e.kind != DRUM_KIT);
+    }
+    order.into_iter().flat_map(|(_, v)| v).collect()
 }
 
 fn source_matches(want: &str, source: &str) -> bool {
@@ -155,6 +201,8 @@ fn surge_entries(installed: &dyn Fn(&Sound) -> bool, out: &mut Vec<Entry>) {
             source: SURGE,
             kind: INSTRUMENT,
             family: s.role.clone(),
+            kit: None,
+            slots: Vec::new(),
         });
     }
 }
@@ -180,6 +228,12 @@ pub fn build(
                 source: source_of(source),
                 kind: DRUM_KIT,
                 family: k.title.clone(),
+                kit: None,
+                slots: k
+                    .pieces
+                    .iter()
+                    .map(|p| (p.role.clone(), piece_id(k, p), p.name.clone()))
+                    .collect(),
             });
             for p in &k.pieces {
                 out.push(Entry {
@@ -190,6 +244,8 @@ pub fn build(
                     source: source_of(source),
                     kind: SINGLE,
                     family: k.title.clone(),
+                    kit: Some((kit_id(k), k.title.clone())),
+                    slots: Vec::new(),
                 });
             }
         }
@@ -205,6 +261,17 @@ pub fn build(
                 source: FL,
                 kind: DRUM_KIT,
                 family: fl::pack_title(&k.pack).to_string(),
+                kit: None,
+                slots: fl::kit_sounds(k, &l.index)
+                    .into_iter()
+                    .map(|(slot, e)| {
+                        (
+                            slot.to_string(),
+                            format!("fl:sound:{}", e.id),
+                            e.name.clone(),
+                        )
+                    })
+                    .collect(),
             });
         }
         for i in &l.instruments {
@@ -216,8 +283,19 @@ pub fn build(
                 source: FL,
                 kind: INSTRUMENT,
                 family: fl::pack_title(&i.pack).to_string(),
+                kit: None,
+                slots: Vec::new(),
             });
         }
+        let in_kit: std::collections::HashMap<&str, (String, String)> = l
+            .kits
+            .iter()
+            .flat_map(|k| {
+                k.slots
+                    .values()
+                    .map(move |id| (id.as_str(), (format!("fl:kit:{}", k.id), k.name.clone())))
+            })
+            .collect();
         for e in &l.index.entries {
             out.push(Entry {
                 id: format!("fl:sound:{}", e.id),
@@ -227,6 +305,8 @@ pub fn build(
                 source: FL,
                 kind: SINGLE,
                 family: fl::pack_title(&e.pack).to_string(),
+                kit: in_kit.get(e.id.as_str()).cloned(),
+                slots: Vec::new(),
             });
         }
     }
@@ -252,8 +332,17 @@ pub fn search(entries: &[Entry], q: &Query) -> (Vec<Entry>, usize) {
             }
         })
         .filter(|e| q.genre.trim().is_empty() || eq(&q.genre, &e.family))
+        .filter(|e| q.kit_id.trim().is_empty() || e.id == q.kit_id.trim())
+        .filter(|e| {
+            q.kit.trim().is_empty() || {
+                let own = (e.kind == DRUM_KIT).then_some(e.name.as_str());
+                own.or(e.kit.as_ref().map(|k| k.1.as_str()))
+                    .is_some_and(|n| text_matches_words(n, &q.kit))
+            }
+        })
         .filter(|e| text_matches(e, &q.text))
         .collect();
+    let hits = group_by_kit(hits);
     let total = hits.len();
     let page = hits
         .into_iter()
@@ -362,6 +451,8 @@ mod tests {
             source,
             kind,
             family: String::new(),
+            kit: None,
+            slots: Vec::new(),
         }
     }
 
@@ -405,5 +496,70 @@ mod tests {
         assert_eq!(fl_note(&Status::Failed, true), Some(FL_FAILED));
         assert!(resolve("fl:sound:x", &[], None).is_none());
         assert!(resolve("nonsense", &[], None).is_none());
+    }
+}
+
+#[cfg(test)]
+mod kit_tests {
+    use super::*;
+
+    fn single(id: &str, name: &str, role: &str, kit: Option<(&str, &str)>) -> Entry {
+        Entry {
+            id: id.into(),
+            name: name.into(),
+            role: role.into(),
+            source: FL,
+            kind: SINGLE,
+            kit: kit.map(|(i, n)| (i.into(), n.into())),
+            ..Entry::default()
+        }
+    }
+
+    #[test]
+    fn a_kits_sounds_sit_together_and_filter_by_kit() {
+        let kit = Entry {
+            id: "fl:kit:k1".into(),
+            name: "909".into(),
+            role: "drums".into(),
+            source: FL,
+            kind: DRUM_KIT,
+            slots: vec![("kick".into(), "fl:sound:a".into(), "909 Kick".into())],
+            ..Entry::default()
+        };
+        let all = vec![
+            single("fl:sound:a", "909 Kick", "kick", Some(("fl:kit:k1", "909"))),
+            single("fl:sound:z", "Loose Kick", "kick", None),
+            kit,
+            single(
+                "fl:sound:b",
+                "909 Snare",
+                "snare",
+                Some(("fl:kit:k1", "909")),
+            ),
+        ];
+        let (hits, _) = search(
+            &all,
+            &Query {
+                limit: 50,
+                ..Query::default()
+            },
+        );
+        let ids: Vec<&str> = hits.iter().map(|e| e.id.as_str()).collect();
+        // The kit, then its pieces, then the loose sound.
+        assert_eq!(ids, ["fl:kit:k1", "fl:sound:a", "fl:sound:b", "fl:sound:z"]);
+        let q = Query {
+            kit: "909".into(),
+            limit: 50,
+            ..Query::default()
+        };
+        assert_eq!(search(&all, &q).0.len(), 3, "the kit and its two pieces");
+        let q = Query {
+            kit_id: "fl:kit:k1".into(),
+            limit: 50,
+            ..Query::default()
+        };
+        let (one, _) = search(&all, &q);
+        assert_eq!(one.len(), 1);
+        assert_eq!(one[0].slots[0].1, "fl:sound:a");
     }
 }

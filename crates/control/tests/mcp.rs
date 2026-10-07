@@ -944,3 +944,17 @@ fn sounds_are_searched_then_added_by_id() {
     let e = c.err("sound_add", json!({"id": "surge:nope/none"}));
     assert!(e.contains("sound_search"), "{e}");
 }
+
+#[test]
+fn kit_get_asks_for_one_kit_and_sound_search_filters_by_kit() {
+    let rig = rig(true, |_| {});
+    let mut c = Mcp::connect(&rig);
+    c.init();
+    c.ok("sound_search", json!({"kit": "909", "source": "FL Studio"}));
+    c.ok("kit_get", json!({"id": "fl:kit:abc"}));
+    let reqs = rig.ui.requests();
+    assert!(reqs.iter().any(|q| matches!(&q.body,
+        RequestBody::SoundSearch { tags, .. } if tags.contains(&"kit:909".to_string()))));
+    assert!(reqs.iter().any(|q| matches!(&q.body,
+        RequestBody::SoundSearch { tags, limit: 1, .. } if tags == &["kit_id:fl:kit:abc".to_string()])));
+}

@@ -15,7 +15,6 @@ use std::rc::Rc;
 
 use adw::prelude::*;
 
-
 use crate::app::App;
 use crate::samples_ui;
 use crate::sound_picker;
