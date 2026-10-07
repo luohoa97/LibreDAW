@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::consts::MAX_AGENT_STRING_CHARS;
 use crate::edit::{Applied, Edit, EditError};
-use crate::ids::{ChannelId, PatternId};
+use crate::ids::PatternId;
 use crate::model::{Note, Project};
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -51,15 +51,11 @@ pub enum RequestBody {
     },
     NotesList {
         pattern: PatternId,
-        channel: ChannelId,
     },
 
     // Transport
     Play,
     Stop,
-    SetPlayingPattern {
-        pattern: PatternId,
-    },
     TransportState,
 
     // History (author-scoped for agents, 17.1)
@@ -68,14 +64,18 @@ pub enum RequestBody {
     History,
 
     // Jobs (17.1)
+    /// Renders the timeline from `start` to `end` ticks (default: the loop
+    /// region if enabled, else the whole arrangement) plus `tail_seconds`.
     ExportWav {
-        pattern: PatternId,
-        loops: u32,
         format: WavFormat,
+        start: Option<u32>,
+        end: Option<u32>,
+        tail_seconds: f64,
     },
+    /// Analyzes the same range as `ExportWav` would render.
     Analyze {
-        pattern: PatternId,
-        loops: u32,
+        start: Option<u32>,
+        end: Option<u32>,
     },
     JobStatus {
         job: u64,
@@ -96,19 +96,6 @@ pub enum RequestBody {
     // Plugins
     PluginScan,
     PluginList,
-
-    // Milestone B (15.6)
-    SetTransportMode {
-        mode: crate::engine::TransportMode,
-        loop_song: bool,
-    },
-    /// Renders the whole playlist plus `tail_seconds` (job).
-    ExportSongWav {
-        format: WavFormat,
-        tail_seconds: f64,
-    },
-    /// Analyzes the whole playlist (job).
-    AnalyzeSong,
 
     // Agents in the workstation (18.2)
     /// Declares what the agent is doing; `text: None` ends the activity.
@@ -194,11 +181,11 @@ pub struct SoundInfo {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", content = "id", rename_all = "snake_case")]
 pub enum Focus {
+    #[serde(rename = "instrument")]
     Channel(crate::ids::ChannelId),
     Pattern(PatternId),
     Track(crate::ids::TrackId),
     Insert(crate::ids::InstanceId),
-    PlaylistTrack(crate::ids::PlaylistTrackId),
     Clip(crate::ids::ClipId),
 }
 
@@ -293,7 +280,7 @@ pub enum ReplyBody {
         playing: bool,
         tick: u64,
         tempo_bpm: f64,
-        pattern: Option<PatternId>,
+        loop_region: crate::model::LoopRegion,
     },
     History {
         entries: Vec<HistoryEntry>,
@@ -474,7 +461,7 @@ mod tests {
                         Edit::SetTempo { bpm: 140.0 },
                         Edit::AddNotes {
                             pattern: PatternId(3),
-                            channel: ChannelId(4),
+
                             notes: vec![NewNote {
                                 start: 0,
                                 len: 240,

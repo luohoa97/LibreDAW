@@ -22,7 +22,7 @@ use crate::beats::{
 use crate::consts::FORMAT_VERSION;
 use crate::ids::InstanceId;
 use crate::model::{
-    Adsr, Channel, ClapRef, Insert, Instrument, Metronome, Mix, Osc, Pattern, PlaylistTrack,
+    Adsr, Channel, ClapRef, Clip, Insert, Instrument, LoopRegion, Metronome, Mix, Osc, Pattern,
     Project, SampleRef, SynthParams, Track, Wave,
 };
 use crate::validate::{ValidationError, validate};
@@ -105,16 +105,15 @@ pub fn emit(p: &Project, next_id: u32) -> Result<String, ValidationError> {
         w.push_str("\n[[patterns]]\n");
         line(w, format_args!("id = {}", pat.id));
         line(w, format_args!("name = {}", string(&pat.name)));
+        line(w, format_args!("instrument = {}", pat.instrument));
         line(w, format_args!("length_steps = {}", pat.length_steps));
         line(w, format_args!("step_ticks = {}", pat.step_ticks));
         if pat.swing != 0 {
             line(w, format_args!("swing = {}", pat.swing));
         }
-        for cn in &pat.notes {
-            w.push_str("\n[[patterns.notes]]\n");
-            line(w, format_args!("channel = {}", cn.channel));
+        if !pat.notes.is_empty() {
             w.push_str("notes = [\n");
-            for n in &cn.notes {
+            for n in &pat.notes {
                 let mut extra = String::new();
                 if n.off != 0 {
                     let _ = write!(extra, ", off = {}", n.off);
@@ -163,23 +162,34 @@ pub fn emit(p: &Project, next_id: u32) -> Result<String, ValidationError> {
         }
     }
 
-    for pt in &p.playlist {
-        w.push_str("\n[[playlist]]\n");
-        line(w, format_args!("id = {}", pt.id));
-        line(w, format_args!("name = {}", string(&pt.name)));
-        if !pt.clips.is_empty() {
-            w.push_str("clips = [\n");
-            for c in &pt.clips {
-                line(
-                    w,
-                    format_args!(
-                        "  {{ id = {}, pattern = {}, start = {}, len = {} }},",
-                        c.id, c.pattern, c.start, c.len
-                    ),
-                );
+    w.push_str("\n[timeline]\n");
+    let lr = p.loop_region;
+    line(
+        w,
+        format_args!(
+            "loop = {{ start = {}, end = {}, enabled = {} }}",
+            lr.start, lr.end, lr.enabled
+        ),
+    );
+    if !p.clips.is_empty() {
+        w.push_str("clips = [\n");
+        for c in &p.clips {
+            let mut extra = String::new();
+            if c.offset != 0 {
+                let _ = write!(extra, ", offset = {}", c.offset);
             }
-            w.push_str("]\n");
+            if c.muted {
+                extra.push_str(", muted = true");
+            }
+            line(
+                w,
+                format_args!(
+                    "  {{ id = {}, instrument = {}, pattern = {}, start = {}, len = {}{extra} }},",
+                    c.id, c.instrument, c.pattern, c.start, c.len
+                ),
+            );
         }
+        w.push_str("]\n");
     }
     Ok(o)
 }
@@ -394,7 +404,16 @@ struct VersionOnly {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct FileV2 {
+struct Timeline {
+    #[serde(rename = "loop", default)]
+    loop_region: LoopRegion,
+    #[serde(default)]
+    clips: Vec<Clip>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FileV3 {
     #[allow(dead_code)]
     format_version: u32,
     next_id: u32,
@@ -402,14 +421,13 @@ struct FileV2 {
     time_sig_num: u8,
     metronome: Metronome,
     #[serde(default)]
+    samples: Vec<SampleRef>,
+    #[serde(default)]
     channels: Vec<Channel>,
     #[serde(default)]
     patterns: Vec<Pattern>,
     tracks: Vec<Track>,
-    #[serde(default)]
-    samples: Vec<SampleRef>,
-    #[serde(default)]
-    playlist: Vec<PlaylistTrack>,
+    timeline: Option<Timeline>,
 }
 
 /// Parses project text. Returns the project and its id counter, which is
@@ -422,15 +440,19 @@ pub fn parse(text: &str) -> Result<(Project, u32), FormatError> {
             found,
             supported: FORMAT_VERSION,
         }),
-        // Version 1 is version 2 without the Milestone B fields; their
-        // serde defaults are the migration (7.3). Later breaking changes
-        // migrate on `toml::Table` here before the typed parse.
-        Some(_) => parse_v2(text),
+        // Versions 1 and 2 used multi-channel patterns and a playlist
+        // (15.6); they are converted to the timeline model (20.5).
+        Some(1 | 2) => legacy::parse_v2(text),
+        Some(_) => parse_v3(text),
     }
 }
 
-fn parse_v2(text: &str) -> Result<(Project, u32), FormatError> {
-    let f: FileV2 = toml::from_str(text).map_err(|e| FormatError::Syntax(e.to_string()))?;
+fn parse_v3(text: &str) -> Result<(Project, u32), FormatError> {
+    let f: FileV3 = toml::from_str(text).map_err(|e| FormatError::Syntax(e.to_string()))?;
+    let (clips, loop_region) = match f.timeline {
+        Some(t) => (t.clips, t.loop_region),
+        None => (Vec::new(), LoopRegion::default()),
+    };
     let p = Project {
         tempo_bpm: f.tempo_bpm,
         time_sig_num: f.time_sig_num,
@@ -439,11 +461,245 @@ fn parse_v2(text: &str) -> Result<(Project, u32), FormatError> {
         patterns: f.patterns.into_iter().map(Arc::new).collect(),
         tracks: f.tracks.into_iter().map(Arc::new).collect(),
         samples: f.samples,
-        playlist: f.playlist.into_iter().map(Arc::new).collect(),
+        clips,
+        loop_region,
     };
     validate(&p).map_err(FormatError::Invalid)?;
     let next_id = f.next_id.max(p.max_id() + 1);
     Ok((p, next_id))
+}
+
+/// Versions 1 and 2 (20.5): patterns held notes for several channels and a
+/// playlist placed patterns. Each (pattern, channel) becomes one clip
+/// content; each playlist clip becomes one clip per channel with notes.
+/// Clips that would overlap on one instrument's row after the split are
+/// dropped (the later one by start, then id).
+mod legacy {
+    use std::collections::{BTreeMap, HashMap};
+    use std::sync::Arc;
+
+    use serde::Deserialize;
+
+    use super::FormatError;
+    use crate::ids::{ChannelId, ClipId, PatternId};
+    use crate::model::{
+        Channel, Clip, LoopRegion, Metronome, Note, Pattern, Project, SampleRef, Track,
+    };
+    use crate::validate::{sort_canonical, validate};
+
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct ChannelNotesV2 {
+        channel: ChannelId,
+        notes: Vec<Note>,
+    }
+
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct PatternV2 {
+        id: PatternId,
+        name: String,
+        length_steps: u8,
+        step_ticks: u32,
+        #[serde(default)]
+        swing: u16,
+        #[serde(default)]
+        notes: Vec<ChannelNotesV2>,
+    }
+
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct ClipV2 {
+        #[allow(dead_code)]
+        id: u32,
+        pattern: PatternId,
+        start: u32,
+        len: u32,
+    }
+
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct PlaylistTrackV2 {
+        #[allow(dead_code)]
+        id: u32,
+        #[allow(dead_code)]
+        name: String,
+        #[serde(default)]
+        clips: Vec<ClipV2>,
+    }
+
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct FileV2 {
+        #[allow(dead_code)]
+        format_version: u32,
+        next_id: u32,
+        tempo_bpm: f64,
+        time_sig_num: u8,
+        metronome: Metronome,
+        #[serde(default)]
+        channels: Vec<Channel>,
+        #[serde(default)]
+        patterns: Vec<PatternV2>,
+        tracks: Vec<Track>,
+        #[serde(default)]
+        samples: Vec<SampleRef>,
+        #[serde(default)]
+        playlist: Vec<PlaylistTrackV2>,
+    }
+
+    pub(super) fn parse_v2(text: &str) -> Result<(Project, u32), FormatError> {
+        let f: FileV2 = toml::from_str(text).map_err(|e| FormatError::Syntax(e.to_string()))?;
+        // Ids already used, so new ids start above all of them.
+        let mut max = f.next_id.saturating_sub(1);
+        for c in &f.channels {
+            max = max.max(c.id.0);
+        }
+        for t in &f.tracks {
+            max = max.max(t.id.0);
+            for i in &t.inserts {
+                max = max.max(i.instance().0);
+            }
+        }
+        for p in &f.patterns {
+            max = max.max(p.id.0);
+            for cn in &p.notes {
+                for n in &cn.notes {
+                    max = max.max(n.id.0);
+                }
+            }
+        }
+        for pt in &f.playlist {
+            max = max.max(pt.id);
+            for c in &pt.clips {
+                max = max.max(c.id);
+            }
+        }
+        let mut next = max + 1;
+        let mut fresh = || {
+            let id = next;
+            next += 1;
+            id
+        };
+
+        // (old pattern, channel) -> new content id; the first channel of a
+        // pattern keeps the pattern's own id.
+        let mut contents: BTreeMap<(PatternId, ChannelId), PatternId> = BTreeMap::new();
+        let mut patterns = Vec::new();
+        let mut lengths: HashMap<PatternId, u32> = HashMap::new();
+        for p in &f.patterns {
+            let mut first = true;
+            for cn in &p.notes {
+                let id = if first { p.id } else { PatternId(fresh()) };
+                first = false;
+                contents.insert((p.id, cn.channel), id);
+                let name = if p.notes.len() > 1 {
+                    let ch = f
+                        .channels
+                        .iter()
+                        .find(|c| c.id == cn.channel)
+                        .map(|c| c.name.as_str())
+                        .unwrap_or("Instrument");
+                    format!("{} {}", p.name, ch)
+                        .chars()
+                        .take(crate::consts::MAX_NAME_CHARS)
+                        .collect()
+                } else {
+                    p.name.clone()
+                };
+                let mut notes: Vec<Note> = cn.notes.clone();
+                notes.sort_by_key(|n| (n.start, n.key, n.id));
+                let pat = Pattern {
+                    id,
+                    name,
+                    instrument: cn.channel,
+                    length_steps: p.length_steps,
+                    step_ticks: p.step_ticks,
+                    swing: p.swing,
+                    notes,
+                };
+                lengths.insert(id, pat.length_ticks());
+                patterns.push(Arc::new(pat));
+            }
+        }
+
+        let mut clips: Vec<Clip> = Vec::new();
+        let mut placed: Vec<(u32, u32, PatternId)> = f
+            .playlist
+            .iter()
+            .flat_map(|pt| pt.clips.iter().map(|c| (c.start, c.len, c.pattern)))
+            .collect();
+        placed.sort();
+        for (start, len, old) in &placed {
+            for ((p, ch), id) in contents.range((*old, ChannelId(0))..=(*old, ChannelId(u32::MAX)))
+            {
+                debug_assert_eq!(p, old);
+                let overlaps = clips
+                    .iter()
+                    .any(|c| c.instrument == *ch && c.start < start + len && *start < c.end());
+                if !overlaps {
+                    clips.push(Clip {
+                        id: ClipId(fresh()),
+                        instrument: *ch,
+                        pattern: *id,
+                        start: *start,
+                        len: *len,
+                        offset: 0,
+                        muted: false,
+                    });
+                }
+            }
+        }
+        let mut loop_region = LoopRegion::default();
+        if placed.is_empty() {
+            // No arrangement: each content once at the start, looped.
+            let mut longest = 0;
+            for (_, id) in contents.iter() {
+                let instrument = patterns
+                    .iter()
+                    .find(|p| p.id == *id)
+                    .expect("made above")
+                    .instrument;
+                if clips.iter().any(|c| c.instrument == instrument) {
+                    continue;
+                }
+                let len = lengths[id].max(1);
+                longest = longest.max(len);
+                clips.push(Clip {
+                    id: ClipId(fresh()),
+                    instrument,
+                    pattern: *id,
+                    start: 0,
+                    len,
+                    offset: 0,
+                    muted: false,
+                });
+            }
+            if longest > 0 {
+                loop_region = LoopRegion {
+                    start: 0,
+                    end: longest,
+                    enabled: true,
+                };
+            }
+        }
+        let next_id = next;
+        let mut p = Project {
+            tempo_bpm: f.tempo_bpm,
+            time_sig_num: f.time_sig_num,
+            metronome: f.metronome,
+            channels: f.channels.into_iter().map(Arc::new).collect(),
+            patterns,
+            tracks: f.tracks.into_iter().map(Arc::new).collect(),
+            samples: f.samples,
+            clips,
+            loop_region,
+        };
+        sort_canonical(&mut p);
+        validate(&p).map_err(FormatError::Invalid)?;
+        let next_id = next_id.max(p.max_id() + 1);
+        Ok((p, next_id))
+    }
 }
 
 #[cfg(test)]
@@ -689,18 +945,14 @@ mod tests {
             }));
         }
         let channel_ids: Vec<ChannelId> = p.channels.iter().map(|c| c.id).collect();
-        for _ in 0..r.below(4) {
-            let mut pat = Pattern::new(PatternId(next), r.pick(NAMES).into());
-            next += 1;
-            pat.length_steps = 1 + r.below(64) as u8;
-            let any_step = 1 + r.below(3840) as u32;
-            pat.step_ticks = r.pick(&[60, 120, 240, 480, any_step]);
-            pat.swing = r.below(751) as u16;
-            for &ch in &channel_ids {
-                if r.below(2) == 0 {
-                    continue;
-                }
-                let mut notes = Vec::new();
+        for &ch in &channel_ids {
+            for _ in 0..r.below(3) {
+                let mut pat = Pattern::new(PatternId(next), r.pick(NAMES).into(), ch);
+                next += 1;
+                pat.length_steps = 1 + r.below(64) as u8;
+                let any_step = 1 + r.below(3840) as u32;
+                pat.step_ticks = r.pick(&[60, 120, 240, 480, any_step]);
+                pat.swing = r.below(751) as u16;
                 let root = p.channels.iter().find(|c| c.id == ch).unwrap().root_key;
                 for _ in 0..r.below(20) {
                     let repeat = r.pick(&RATCHETS);
@@ -716,7 +968,7 @@ mod tests {
                     } else {
                         (r.below(128) as u8, 0)
                     };
-                    notes.push(Note {
+                    pat.notes.push(Note {
                         id: NoteId(next),
                         start: r.below(1 << 20) as u32,
                         len,
@@ -727,36 +979,47 @@ mod tests {
                     });
                     next += 1;
                 }
-                notes.sort_by_key(|n| (n.start, n.key, n.id));
-                pat.notes.push(ChannelNotes { channel: ch, notes });
+                pat.notes.sort_by_key(|n| (n.start, n.key, n.id));
+                p.patterns.push(Arc::new(pat));
             }
-            p.patterns.push(Arc::new(pat));
         }
-        let pattern_ids: Vec<PatternId> = p.patterns.iter().map(|x| x.id).collect();
-        for _ in 0..r.below(3) {
-            let id = PlaylistTrackId(next);
-            next += 1;
-            let mut clips = Vec::new();
-            let mut t = 0u32;
-            if !pattern_ids.is_empty() {
-                for _ in 0..r.below(6) {
-                    t += r.below(4000) as u32;
-                    let len = 1 + r.below(8000) as u32;
-                    clips.push(Clip {
-                        id: ClipId(next),
-                        pattern: r.pick(&pattern_ids),
-                        start: t,
-                        len,
-                    });
-                    next += 1;
-                    t += len;
-                }
+        // Clips: per instrument, non-overlapping, using that instrument's
+        // contents, some linked (same content twice), some trimmed.
+        for &ch in &channel_ids {
+            let own: Vec<(PatternId, u32)> = p
+                .patterns
+                .iter()
+                .filter(|x| x.instrument == ch)
+                .map(|x| (x.id, x.length_ticks()))
+                .collect();
+            if own.is_empty() {
+                continue;
             }
-            p.playlist.push(Arc::new(PlaylistTrack {
-                id,
-                name: r.pick(NAMES).into(),
-                clips,
-            }));
+            let mut t = 0u32;
+            for _ in 0..r.below(6) {
+                t += r.below(4000) as u32;
+                let (pattern, content_len) = r.pick(&own);
+                let len = 1 + r.below(8000) as u32;
+                p.clips.push(Clip {
+                    id: ClipId(next),
+                    instrument: ch,
+                    pattern,
+                    start: t,
+                    len,
+                    offset: r.below(content_len.max(1) as u64) as u32,
+                    muted: r.below(5) == 0,
+                });
+                next += 1;
+                t += len;
+            }
+        }
+        if r.below(2) == 0 {
+            let start = r.below(10_000) as u32;
+            p.loop_region = LoopRegion {
+                start,
+                end: start + 1 + r.below(10_000) as u32,
+                enabled: r.below(2) == 0,
+            };
         }
         crate::validate::sort_canonical(&mut p);
         (p, next)
@@ -784,10 +1047,11 @@ mod tests {
         let text = emit(&Project::empty(), FIRST_ID).unwrap();
         assert_eq!(
             text,
-            "format_version = 2\nnext_id = 1\ntempo_bpm = 120.0\ntime_sig_num = 4\n\n\
+            "format_version = 3\nnext_id = 1\ntempo_bpm = 120.0\ntime_sig_num = 4\n\n\
              [metronome]\nenabled = false\ngain_db = -6.0\n\n\
              [[tracks]]\nid = 0\nname = \"Master\"\n\
-             mix = { volume_db = 0.0, pan = 0.0, mute = false, solo = false }\n"
+             mix = { volume_db = 0.0, pan = 0.0, mute = false, solo = false }\n\n\
+             [timeline]\nloop = { start = 0, end = 0, enabled = false }\n"
         );
     }
 
@@ -804,30 +1068,27 @@ mod tests {
             instrument: Instrument::Synth(SynthParams::default()),
             choke_group: 0,
         }));
-        let mut pat = Pattern::new(PatternId(100_001), "P".into());
-        pat.notes.push(ChannelNotes {
-            channel: ch,
-            notes: vec![
-                Note {
-                    id: NoteId(100_002),
-                    start: 0,
-                    len: 240,
-                    key: 36,
-                    vel: 100,
-                    off: 0,
-                    repeat: 1,
-                },
-                Note {
-                    id: NoteId(100_003),
-                    start: 960,
-                    len: 240,
-                    key: 36,
-                    vel: 100,
-                    off: 0,
-                    repeat: 1,
-                },
-            ],
-        });
+        let mut pat = Pattern::new(PatternId(100_001), "P".into(), ch);
+        pat.notes.extend([
+            Note {
+                id: NoteId(100_002),
+                start: 0,
+                len: 240,
+                key: 36,
+                vel: 100,
+                off: 0,
+                repeat: 1,
+            },
+            Note {
+                id: NoteId(100_003),
+                start: 960,
+                len: 240,
+                key: 36,
+                vel: 100,
+                off: 0,
+                repeat: 1,
+            },
+        ]);
         p.patterns.push(Arc::new(pat.clone()));
         crate::validate::sort_canonical(&mut p);
         let before = emit(&p, 200_000).unwrap();
@@ -838,7 +1099,7 @@ mod tests {
             .iter()
             .position(|x| x.id == PatternId(100_001))
             .unwrap();
-        Arc::make_mut(&mut p.patterns[i]).notes[0].notes[1].start = 1200;
+        Arc::make_mut(&mut p.patterns[i]).notes[1].start = 1200;
         let after = emit(&p, 200_000).unwrap();
         let changed = before
             .lines()
@@ -865,15 +1126,15 @@ mod tests {
     #[test]
     fn rejects_newer_version_missing_version_and_unknown_keys() {
         let text = emit(&Project::empty(), 1).unwrap();
-        let newer = text.replace("format_version = 2", "format_version = 3");
+        let newer = text.replace("format_version = 3", "format_version = 4");
         assert_eq!(
             parse(&newer).unwrap_err(),
             FormatError::TooNew {
-                found: 3,
-                supported: 2
+                found: 4,
+                supported: 3
             }
         );
-        let missing = text.replace("format_version = 2\n", "");
+        let missing = text.replace("format_version = 3\n", "");
         assert_eq!(parse(&missing).unwrap_err(), FormatError::MissingVersion);
         let unknown = text.replace("time_sig_num = 4", "time_sig_num = 4\nswing = 3");
         assert!(matches!(
@@ -935,16 +1196,76 @@ mod tests {
                   [[tracks]]\nid = 0\nname = \"Master\"\n\
                   mix = { volume_db = 0.0, pan = 0.0, mute = false, solo = false }\n";
         let (p, next) = parse(v1).unwrap();
-        assert_eq!(next, 5);
-        let n = p.patterns[0].notes[0].notes[0];
+        assert_eq!(next, 6); // the converted clip took id 5
+        let n = p.patterns[0].notes[0];
         assert_eq!((n.off, n.repeat), (0, 1));
         assert_eq!(p.patterns[0].swing, 0);
         assert_eq!(p.channels[0].choke_group, 0);
-        assert!(p.playlist.is_empty() && p.samples.is_empty() && p.tracks[0].sends.is_empty());
-        // Saving writes version 2 with the same note line as version 1.
+        assert!(p.samples.is_empty() && p.tracks[0].sends.is_empty());
+        // Converted to the timeline model (20.5): the pattern is the Kick's
+        // content, placed once at 0 and looped.
+        assert_eq!(p.patterns[0].instrument, ChannelId(1));
+        assert_eq!(p.clips.len(), 1);
+        assert_eq!(
+            (p.clips[0].instrument, p.clips[0].start, p.clips[0].len),
+            (ChannelId(1), 0, 3840)
+        );
+        assert_eq!(
+            p.loop_region,
+            LoopRegion {
+                start: 0,
+                end: 3840,
+                enabled: true
+            }
+        );
+        // Saving writes version 3 with the same note line as version 1.
         let out = emit(&p, next).unwrap();
-        assert!(out.starts_with("format_version = 2\n"));
+        assert!(out.starts_with("format_version = 3\n"));
         assert!(out.contains("  { id = 3, start = 0, len = 240, key = 36, vel = 100 },\n"));
+    }
+
+    #[test]
+    fn version_2_patterns_and_playlist_become_instrument_clips() {
+        let synth = "[channels.instrument]\nkind = \"synth\"\n\
+            osc1 = { wave = \"sine\", semitones = 0.0, cents = 0.0 }\n\
+            osc2 = { wave = \"sine\", semitones = 0.0, cents = 0.0 }\n\
+            osc_mix = 0.0\ncutoff_hz = 2000.0\nresonance = 0.2\nfilter_env_octaves = 0.0\n\
+            amp_env = { attack_ms = 1.0, decay_ms = 100.0, sustain = 0.0, release_ms = 50.0 }\n\
+            filter_env = { attack_ms = 1.0, decay_ms = 100.0, sustain = 0.0, release_ms = 50.0 }\n\
+            gain_db = 0.0\n";
+        let mix = "mix = { volume_db = 0.0, pan = 0.0, mute = false, solo = false }\n";
+        let v2 = format!(
+            "format_version = 2\nnext_id = 20\ntempo_bpm = 140.0\ntime_sig_num = 4\n\n\
+             [metronome]\nenabled = false\ngain_db = -6.0\n\n\
+             [[channels]]\nid = 1\nname = \"Kick\"\nroot_key = 36\ntrack = 0\n{mix}\n{synth}\n\
+             [[channels]]\nid = 2\nname = \"Hat\"\nroot_key = 42\ntrack = 0\n{mix}\n{synth}\n\
+             [[patterns]]\nid = 3\nname = \"Beat\"\nlength_steps = 16\nstep_ticks = 240\n\n\
+             [[patterns.notes]]\nchannel = 1\nnotes = [\n  {{ id = 4, start = 0, len = 240, key = 36, vel = 100 }},\n]\n\n\
+             [[patterns.notes]]\nchannel = 2\nnotes = [\n  {{ id = 5, start = 240, len = 240, key = 42, vel = 90 }},\n]\n\n\
+             [[tracks]]\nid = 0\nname = \"Master\"\n{mix}\n\
+             [[playlist]]\nid = 6\nname = \"Drums\"\nclips = [\n\
+               {{ id = 7, pattern = 3, start = 0, len = 3840 }},\n\
+               {{ id = 8, pattern = 3, start = 3840, len = 3840 }},\n]\n"
+        );
+        let (p, next) = parse(&v2).unwrap();
+        // One content per instrument; the first keeps the old id.
+        assert_eq!(p.patterns.len(), 2);
+        assert_eq!(
+            (p.patterns[0].id, p.patterns[0].instrument),
+            (PatternId(3), ChannelId(1))
+        );
+        assert_eq!(p.patterns[1].instrument, ChannelId(2));
+        assert_eq!(p.patterns[0].notes.len() + p.patterns[1].notes.len(), 2);
+        // Two playlist clips x two instruments = four clips, linked per row.
+        assert_eq!(p.clips.len(), 4);
+        for c in &p.clips {
+            let content = p.pattern(c.pattern).unwrap();
+            assert_eq!(content.instrument, c.instrument);
+        }
+        assert!(next > p.max_id());
+        // The converted project round-trips in version 3.
+        let text = emit(&p, next).unwrap();
+        assert_eq!(parse(&text).unwrap().0, p);
     }
 
     #[test]

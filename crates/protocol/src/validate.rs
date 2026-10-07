@@ -30,7 +30,7 @@ pub enum ValidationError {
     BadMaster,
     /// Sends and sidechains form a loop (17.2).
     RoutingCycle,
-    /// Two clips on one playlist track overlap.
+    /// Two clips on one instrument's row overlap.
     Overlap { what: String, id: u32 },
 }
 
@@ -377,10 +377,9 @@ pub fn validate(p: &Project) -> Result<(), ValidationError> {
     }
 
     let mut total_notes = 0usize;
-    let mut pattern_ids = HashSet::new();
+    let mut pattern_owner = std::collections::HashMap::new();
     for (i, pat) in p.patterns.iter().enumerate() {
         unique(&mut ids, pat.id.0)?;
-        pattern_ids.insert(pat.id);
         if i > 0 && pat.id <= p.patterns[i - 1].id {
             return Err(ValidationError::NotSorted {
                 what: "patterns".into(),
@@ -408,54 +407,48 @@ pub fn validate(p: &Project) -> Result<(), ValidationError> {
             });
         }
         total_notes += count;
-        for (j, cn) in pat.notes.iter().enumerate() {
-            let Some(&root) = channel_roots.get(&cn.channel) else {
-                return Err(ValidationError::MissingRef {
-                    what: "channel".into(),
-                    id: cn.channel.0,
-                });
-            };
-            if j > 0 && cn.channel <= pat.notes[j - 1].channel {
-                return Err(ValidationError::NotSorted {
-                    what: "pattern channels".into(),
+        let Some(&root) = channel_roots.get(&pat.instrument) else {
+            return Err(ValidationError::MissingRef {
+                what: "instrument".into(),
+                id: pat.instrument.0,
+            });
+        };
+        pattern_owner.insert(pat.id, (pat.instrument, pat.length_ticks()));
+        for (k, n) in pat.notes.iter().enumerate() {
+            unique(&mut ids, n.id.0)?;
+            int_range("note.len", n.len as u64, 1, MAX_TICK as u64)?;
+            int_range(
+                "note.end",
+                n.start as u64 + n.len as u64,
+                1,
+                MAX_TICK as u64,
+            )?;
+            int_range("note.key", n.key as u64, 0, 127)?;
+            int_range("note.vel", n.vel as u64, 1, 127)?;
+            range(
+                "note.off",
+                n.off as f64,
+                -(MAX_STEP_OFFSET as f64),
+                MAX_STEP_OFFSET as f64,
+            )?;
+            if !RATCHETS.contains(&n.repeat) || !n.len.is_multiple_of(n.repeat as u32) {
+                return Err(ValidationError::OutOfRange {
+                    field: "note.repeat".into(),
+                    value: n.repeat as f64,
                 });
             }
-            for (k, n) in cn.notes.iter().enumerate() {
-                unique(&mut ids, n.id.0)?;
-                int_range("note.len", n.len as u64, 1, MAX_TICK as u64)?;
-                int_range(
-                    "note.end",
-                    n.start as u64 + n.len as u64,
-                    1,
-                    MAX_TICK as u64,
-                )?;
-                int_range("note.key", n.key as u64, 0, 127)?;
-                int_range("note.vel", n.vel as u64, 1, 127)?;
-                range(
-                    "note.off",
-                    n.off as f64,
-                    -(MAX_STEP_OFFSET as f64),
-                    MAX_STEP_OFFSET as f64,
-                )?;
-                if !RATCHETS.contains(&n.repeat) || !n.len.is_multiple_of(n.repeat as u32) {
-                    return Err(ValidationError::OutOfRange {
-                        field: "note.repeat".into(),
-                        value: n.repeat as f64,
+            if n.off != 0 && n.key as i16 != root as i16 + n.off as i16 {
+                return Err(ValidationError::OutOfRange {
+                    field: "note.off".into(),
+                    value: n.off as f64,
+                });
+            }
+            if k > 0 {
+                let a = &pat.notes[k - 1];
+                if (a.start, a.key, a.id) >= (n.start, n.key, n.id) {
+                    return Err(ValidationError::NotSorted {
+                        what: "notes".into(),
                     });
-                }
-                if n.off != 0 && n.key as i16 != root as i16 + n.off as i16 {
-                    return Err(ValidationError::OutOfRange {
-                        field: "note.off".into(),
-                        value: n.off as f64,
-                    });
-                }
-                if k > 0 {
-                    let a = &cn.notes[k - 1];
-                    if (a.start, a.key, a.id) >= (n.start, n.key, n.id) {
-                        return Err(ValidationError::NotSorted {
-                            what: "notes".into(),
-                        });
-                    }
                 }
             }
         }
@@ -467,59 +460,64 @@ pub fn validate(p: &Project) -> Result<(), ValidationError> {
         });
     }
 
-    // Playlist (15.6).
-    if p.playlist.len() > MAX_PLAYLIST_TRACKS {
-        return Err(ValidationError::TooMany {
-            what: "playlist tracks".into(),
-            max: MAX_PLAYLIST_TRACKS,
-        });
-    }
-    let mut clips = 0usize;
-    for (i, pt) in p.playlist.iter().enumerate() {
-        unique(&mut ids, pt.id.0)?;
-        if i > 0 && pt.id <= p.playlist[i - 1].id {
-            return Err(ValidationError::NotSorted {
-                what: "playlist tracks".into(),
-            });
-        }
-        check_name("playlist.name", &pt.name)?;
-        clips += pt.clips.len();
-        for (j, c) in pt.clips.iter().enumerate() {
-            unique(&mut ids, c.id.0)?;
-            if !pattern_ids.contains(&c.pattern) {
-                return Err(ValidationError::MissingRef {
-                    what: "pattern".into(),
-                    id: c.pattern.0,
-                });
-            }
-            int_range("clip.len", c.len as u64, 1, MAX_TICK as u64)?;
-            int_range(
-                "clip.end",
-                c.start as u64 + c.len as u64,
-                1,
-                MAX_TICK as u64,
-            )?;
-            if j > 0 {
-                let a = &pt.clips[j - 1];
-                if (a.start, a.id) >= (c.start, c.id) {
-                    return Err(ValidationError::NotSorted {
-                        what: "clips".into(),
-                    });
-                }
-                if a.end() > c.start {
-                    return Err(ValidationError::Overlap {
-                        what: "clips".into(),
-                        id: c.id.0,
-                    });
-                }
-            }
-        }
-    }
-    if clips > MAX_CLIPS {
+    // Clips on the timeline (20.2).
+    if p.clips.len() > MAX_CLIPS {
         return Err(ValidationError::TooMany {
             what: "clips".into(),
             max: MAX_CLIPS,
         });
+    }
+    for (j, c) in p.clips.iter().enumerate() {
+        unique(&mut ids, c.id.0)?;
+        let Some(&(owner, content_len)) = pattern_owner.get(&c.pattern) else {
+            return Err(ValidationError::MissingRef {
+                what: "clip content".into(),
+                id: c.pattern.0,
+            });
+        };
+        if owner != c.instrument {
+            return Err(ValidationError::MissingRef {
+                what: "clip content of this instrument".into(),
+                id: c.pattern.0,
+            });
+        }
+        int_range("clip.len", c.len as u64, 1, MAX_TICK as u64)?;
+        int_range(
+            "clip.end",
+            c.start as u64 + c.len as u64,
+            1,
+            MAX_TICK as u64,
+        )?;
+        if c.offset >= content_len.max(1) {
+            return Err(ValidationError::OutOfRange {
+                field: "clip.offset".into(),
+                value: c.offset as f64,
+            });
+        }
+        if j > 0 {
+            let a = &p.clips[j - 1];
+            if (a.instrument, a.start, a.id) >= (c.instrument, c.start, c.id) {
+                return Err(ValidationError::NotSorted {
+                    what: "clips".into(),
+                });
+            }
+            if a.instrument == c.instrument && a.end() > c.start {
+                return Err(ValidationError::Overlap {
+                    what: "clips".into(),
+                    id: c.id.0,
+                });
+            }
+        }
+    }
+    let lr = p.loop_region;
+    if lr.enabled || lr.end != 0 || lr.start != 0 {
+        int_range("loop.end", lr.end as u64, 1, MAX_TICK as u64)?;
+        if lr.start >= lr.end {
+            return Err(ValidationError::OutOfRange {
+                field: "loop.start".into(),
+                value: lr.start as f64,
+            });
+        }
     }
     Ok(())
 }
@@ -612,26 +610,14 @@ pub fn sort_canonical(p: &mut Project) {
     }
     p.patterns.sort_by_key(|pat| pat.id);
     for pat in &mut p.patterns {
-        let sorted = pat.notes.is_sorted_by_key(|cn| cn.channel)
-            && pat
+        if !pat.notes.is_sorted_by_key(|n| (n.start, n.key, n.id)) {
+            Arc::make_mut(pat)
                 .notes
-                .iter()
-                .all(|cn| cn.notes.is_sorted_by_key(|n| (n.start, n.key, n.id)));
-        if !sorted {
-            let pat = Arc::make_mut(pat);
-            pat.notes.sort_by_key(|cn| cn.channel);
-            for cn in &mut pat.notes {
-                cn.notes.sort_by_key(|n| (n.start, n.key, n.id));
-            }
+                .sort_by_key(|n| (n.start, n.key, n.id));
         }
     }
     p.samples.sort_by(|a, b| a.hash.cmp(&b.hash));
-    p.playlist.sort_by_key(|pt| pt.id);
-    for pt in &mut p.playlist {
-        if !pt.clips.is_sorted_by_key(|c| (c.start, c.id)) {
-            Arc::make_mut(pt).clips.sort_by_key(|c| (c.start, c.id));
-        }
-    }
+    p.clips.sort_by_key(|c| (c.instrument, c.start, c.id));
 }
 
 #[cfg(test)]
@@ -640,8 +626,8 @@ mod tests {
 
     use super::*;
     use crate::beats::{BuiltinFx, BuiltinFxKind};
-    use crate::ids::{ChannelId, ClipId, InstanceId, NoteId, PatternId, PlaylistTrackId};
-    use crate::model::{Channel, ChannelNotes, Clip, Note, Pattern, PlaylistTrack, Send, Track};
+    use crate::ids::{ChannelId, ClipId, InstanceId, NoteId, PatternId};
+    use crate::model::{Channel, Clip, Note, Pattern, Send, Track};
 
     fn track(id: u32) -> Arc<Track> {
         Arc::new(Track {
@@ -666,38 +652,32 @@ mod tests {
             instrument: Instrument::Synth(SynthParams::default()),
             choke_group: 1,
         }));
-        let mut pat = Pattern::new(PatternId(4), "P".into());
-        pat.notes.push(ChannelNotes {
-            channel: ChannelId(3),
-            notes: vec![Note {
-                id: NoteId(5),
-                start: 0,
-                len: 240,
-                key: 45,
-                vel: 100,
-                off: 3,
-                repeat: 4,
-            }],
+        let mut pat = Pattern::new(PatternId(4), "P".into(), ChannelId(3));
+        pat.notes.push(Note {
+            id: NoteId(5),
+            start: 0,
+            len: 240,
+            key: 45,
+            vel: 100,
+            off: 3,
+            repeat: 4,
         });
         p.patterns.push(Arc::new(pat));
-        p.playlist.push(Arc::new(PlaylistTrack {
-            id: PlaylistTrackId(6),
-            name: "Drums".into(),
-            clips: vec![
-                Clip {
-                    id: ClipId(7),
-                    pattern: PatternId(4),
-                    start: 0,
-                    len: 3840,
-                },
-                Clip {
-                    id: ClipId(8),
-                    pattern: PatternId(4),
-                    start: 3840,
-                    len: 3840,
-                },
-            ],
-        }));
+        let clip = |id, start| Clip {
+            id: ClipId(id),
+            instrument: ChannelId(3),
+            pattern: PatternId(4),
+            start,
+            len: 3840,
+            offset: 0,
+            muted: false,
+        };
+        p.clips = vec![clip(7, 0), clip(8, 3840)];
+        p.loop_region = crate::model::LoopRegion {
+            start: 0,
+            end: 7680,
+            enabled: true,
+        };
         p
     }
 
@@ -731,18 +711,52 @@ mod tests {
     #[test]
     fn rejects_overlapping_clips_bad_ratchets_and_bad_offsets() {
         let mut p = base();
-        Arc::make_mut(&mut p.playlist[0]).clips[1].start = 3000;
+        p.clips[1].start = 3000;
         assert!(matches!(validate(&p), Err(ValidationError::Overlap { .. })));
 
         let mut p = base();
-        Arc::make_mut(&mut p.patterns[0]).notes[0].notes[0].repeat = 5;
+        Arc::make_mut(&mut p.patterns[0]).notes[0].repeat = 5;
         assert!(matches!(
             validate(&p),
             Err(ValidationError::OutOfRange { .. })
         ));
 
         let mut p = base();
-        Arc::make_mut(&mut p.patterns[0]).notes[0].notes[0].key = 46;
+        Arc::make_mut(&mut p.patterns[0]).notes[0].key = 46;
+        assert!(matches!(
+            validate(&p),
+            Err(ValidationError::OutOfRange { .. })
+        ));
+    }
+
+    #[test]
+    fn clips_must_use_their_own_instruments_content() {
+        let mut p = base();
+        p.channels.push(Arc::new(Channel {
+            id: ChannelId(10),
+            name: "Kick".into(),
+            root_key: 36,
+            track: TrackId(1),
+            mix: Mix::default(),
+            instrument: Instrument::Synth(SynthParams::default()),
+            choke_group: 0,
+        }));
+        p.clips[1].instrument = ChannelId(10);
+        crate::validate::sort_canonical(&mut p);
+        assert!(matches!(
+            validate(&p),
+            Err(ValidationError::MissingRef { .. })
+        ));
+
+        let mut p = base();
+        p.clips[0].offset = 99_999;
+        assert!(matches!(
+            validate(&p),
+            Err(ValidationError::OutOfRange { .. })
+        ));
+
+        let mut p = base();
+        p.loop_region.start = 7680;
         assert!(matches!(
             validate(&p),
             Err(ValidationError::OutOfRange { .. })
@@ -752,7 +766,7 @@ mod tests {
     #[test]
     fn step_predicate_follows_the_pitch_lane() {
         let p = base();
-        let n = p.patterns[0].notes[0].notes[0];
+        let n = p.patterns[0].notes[0];
         assert!(n.is_step_note(42, &p.patterns[0]));
         assert!(!n.is_step_note(41, &p.patterns[0]));
     }
