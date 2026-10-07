@@ -121,6 +121,43 @@ fn a_pitch_lane_offset_keeps_the_note_a_step_note_for_swing() {
 }
 
 #[test]
+fn a_ratchet_off_never_releases_the_next_sub_note_even_with_short_gates() {
+    // Step of 60 ticks: sub-notes start at floor(i*60/8) and last 6 ticks,
+    // so each next sub-note starts 1 or 2 ticks after the previous off.
+    let mut n = step_note(5, 0, 8, 0);
+    n.len = 60;
+    let mut p = pat(0, vec![n]);
+    p.step_ticks = 60;
+    let pr = project(
+        999.0,
+        vec![],
+        vec![synth_channel(1, 0, tone_params())],
+        vec![p],
+    );
+    for cb in [1usize, 37, 256] {
+        let mut r = rig(&pr, 44100.0, true);
+        let frames = ideal_sample(60, 44100, 999, 1) as usize + 64;
+        r.run(frames, cb);
+        let tr: Vec<_> = r.rt.trace().to_vec();
+        assert_eq!(tr.len(), 16, "callback {cb}");
+        for (i, pair) in tr.chunks(2).enumerate() {
+            assert!(pair[0].on && !pair[1].on, "pair {i} callback {cb}");
+            assert_eq!(pair[0].id, pair[1].id);
+            assert!(pair[0].sample < pair[1].sample);
+            let on = ideal_sample((i as i128) * 60 / 8, 44100, 999, 1);
+            assert_eq!(pair[0].sample, on, "on {i} callback {cb}");
+            let off = ideal_sample((i as i128) * 60 / 8 + 6, 44100, 999, 1);
+            assert_eq!(pair[1].sample, off, "off {i} callback {cb}");
+            if let Some(next) = tr.get(i * 2 + 2) {
+                assert!(pair[1].sample < next.sample, "off before next on");
+            }
+        }
+        // After the last off no key stays live.
+        assert_eq!(r.rt.live_notes(protocol::engine::ChannelSlot(0)), 0);
+    }
+}
+
+#[test]
 fn ratchet_8_plays_at_exact_samples_through_the_sequencer() {
     // 120 BPM, 48 kHz: 25 samples per 1 tick... 48000*60/(120*960) = 25.
     let p = pat(0, vec![step_note(9, 0, 8, 0)]);
