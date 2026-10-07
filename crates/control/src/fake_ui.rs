@@ -103,6 +103,11 @@ impl FakeUi {
         &self.server
     }
 
+    /// A shareable handle, e.g. to click "enable" from another thread.
+    pub fn server_arc(&self) -> Arc<ControlServer> {
+        Arc::clone(&self.server)
+    }
+
     /// Every request that reached the UI so far, in order.
     pub fn requests(&self) -> Vec<Request> {
         self.requests
