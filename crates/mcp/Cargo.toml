@@ -18,7 +18,7 @@ path = "src/main.rs"
 libredaw-protocol = { path = "../protocol" }
 # Control socket client shared with the Deno bridge (SPEC 16.2).
 libredaw-script = { path = "../script" }
-# JSON-RPC 2.0 messages and tool results (SPEC 16.2).
-serde_json = "1"
+# JSON-RPC 2.0 messages and tool results (SPEC 16.2). preserve_order keeps key order when `setup` edits client config files.
+serde_json = { version = "1", features = ["preserve_order"] }
 # Derive typed tool arguments so a bad argument gets a clear error (SPEC 16.3).
 serde = { version = "1", features = ["derive"] }
