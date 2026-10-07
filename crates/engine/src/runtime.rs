@@ -632,6 +632,9 @@ impl Runtime {
                         &self.shared.status,
                         EngineEvent::Stopped { tick },
                     );
+                } else {
+                    // A second stop returns the playhead to the start.
+                    self.seq.rewind();
                 }
             }
             EngineCommand::Seek { tick } => {

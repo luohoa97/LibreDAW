@@ -103,8 +103,10 @@ pub struct Sequencer {
     spt: f64,
     transport: Transport,
     pub playing: bool,
-    /// Pattern tick where the next `play` starts.
+    /// Tick where the next `play` starts.
     start_tick: i64,
+    /// Tick the current run started at; `stop` returns here.
+    play_start: i64,
     /// Loop region still ahead of the playhead: `(start, end)` ticks.
     wrap_region: Option<(i64, i64)>,
     /// The arrangement end is still ahead of the playhead.
@@ -133,6 +135,7 @@ impl Sequencer {
             transport: Transport::at(0, 0, spt),
             playing: false,
             start_tick: 0,
+            play_start: 0,
             finished: false,
             wrap_region: None,
             end_armed: false,
@@ -213,19 +216,33 @@ impl Sequencer {
             return;
         }
         self.playing = true;
+        self.play_start = self.start_tick;
         self.transport = Transport::at(self.pos, self.start_tick, self.spt);
         self.sync_cursors(c);
         self.sync_beat(self.start_tick);
         self.arm(c);
     }
 
-    /// Returns the tick the playhead was at.
+    /// Stops and returns the tick the playhead was at. The playhead then
+    /// rests where the run started, or at the loop start when it was
+    /// inside the loop region; a second stop (`rewind`) goes to 0.
     pub fn stop(&mut self, out: &mut Vec<SeqEvent>) -> u64 {
         let tick = self.playhead_tick();
         self.release_all(0, out);
         self.playing = false;
-        self.start_tick = 0;
+        self.start_tick = match self.wrap_region {
+            Some((ls, le)) if (ls..le).contains(&(tick as i64)) => ls,
+            _ => self.play_start,
+        };
         tick
+    }
+
+    /// Returns a stopped playhead to tick 0.
+    pub fn rewind(&mut self) {
+        if !self.playing {
+            self.start_tick = 0;
+            self.play_start = 0;
+        }
     }
 
     /// Moves the playhead anywhere (20.2).
@@ -233,6 +250,7 @@ impl Sequencer {
         let t = tick.min(i64::MAX as u64) as i64;
         if self.playing {
             self.release_all(0, out);
+            self.play_start = t;
             self.transport = Transport::at(self.pos, t, self.spt);
             self.sync_cursors(c);
             self.sync_beat(t);
