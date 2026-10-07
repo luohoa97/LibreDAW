@@ -32,6 +32,10 @@ owner area:
 - NewInstrument::Clap { preset: Option<String> } for picker presets.
 - Starter project 808 row: move to a sampler or Surge XT preset.
 
+## Done since (see docs/HANDOVER.md)
+- Format v4: audio clips, patterns lane, shapes, bypass; Home; agent
+  presence; FL library; Surge sounds; hum to notes; effects; analysis.
+
 ## Later milestones
 - Voice: recording, hum to notes, lyrics (SPEC 21).
 - Provenance export (SPEC 22).
