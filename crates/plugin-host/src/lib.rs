@@ -3,4 +3,8 @@
 //!
 //! `rt` is the audio-thread API, `host` is the GTK main-thread API.
 
+mod gui;
+pub mod host;
+mod inst;
 pub mod rt;
+mod sources;
