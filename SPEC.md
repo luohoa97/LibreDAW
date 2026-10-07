@@ -2338,6 +2338,20 @@ feature is an MCP tool (Amendment 19).
 
 ## Changelog
 
+### Amendment 31 (2026-10-07, owner)
+
+- 21.1: planned, not built. Today a dragged audio file is loaded into a
+  sampler row, so it plays like a piano and the row asks the user to draw
+  a clip. A dropped file must instead become an audio clip (Amendment 28)
+  that already spans the whole sound, placed where it was dropped.
+  - The model gains an audio clip type with the sample, an offset and a
+    length. The format version goes up and the engine plays it. This
+    changes protocol, so it needs the owner's go-ahead before work starts.
+  - A sampler row is made only by dropping onto an instrument row, or
+    through the "+" menu.
+  - Accept: drop "Final Countdown" on empty space; one Audio row appears
+    with one full-length clip and its waveform; no pattern is asked for.
+
 ### Amendment 30 (2026-10-07, owner)
 
 - Added 18.7: Analyze returns per-bar levels and detected sections
