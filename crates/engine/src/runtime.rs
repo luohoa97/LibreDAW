@@ -4,9 +4,10 @@
 //! The live callback and the offline renderer call the same `process_*`.
 
 use crate::bass808::{Bass808, BassCtl};
-use crate::compiled::{Compiled, InstrumentC};
+use crate::compiled::{Compiled, InsertC, InstrumentC};
+use crate::fx::FxPools;
 use crate::metronome::Click;
-use crate::mixer::{Fader, MuteSolo, SMOOTH_SECONDS, resolve_solo};
+use crate::mixer::{Fader, MuteSolo, SMOOTH_SECONDS, Smoother, db_to_lin, resolve_solo};
 use crate::plugins::{
     OUT_EVENT_CAP, OutEvents, PluginApi, PluginNote, ProcessArgs, note, out_event_to_engine,
 };
@@ -16,13 +17,15 @@ use crate::sampler::{Sampler, SamplerCtl};
 use crate::sequencer::{BEAT_CAP, Beat, ChokeEvent, EVENT_CAP, SeqEvent, Sequencer, TraceEvent};
 use crate::synth::{Synth, SynthCtl};
 use protocol::consts::{
-    COMMAND_RING_CAP, EVENT_RING_CAP, MAX_BLOCK, MAX_CHANNELS, MAX_INSERTS, MAX_TEMPO_BPM,
-    MIN_TEMPO_BPM, PLUGIN_EVENT_RING_CAP, RETIRE_RING_CAP, STATE_RING_CAP, TRACK_SLOTS,
+    COMMAND_RING_CAP, EVENT_RING_CAP, FX_PARAMS_PER_INSERT, MAX_BLOCK, MAX_CHANNELS, MAX_INSERTS,
+    MAX_SENDS, MAX_TEMPO_BPM, MIN_TEMPO_BPM, PLUGIN_EVENT_RING_CAP, RETIRE_RING_CAP,
+    STATE_RING_CAP, TRACK_SLOTS,
 };
 use protocol::engine::{
     CTL_METRONOME_ENABLED, CTL_METRONOME_GAIN_DB, ChannelSlot, ControlTable, EngineCommand,
     EngineEvent, EngineStatus, MixControl, PLUGIN_SLOTS, PREVIEW_MAX_SECONDS, ParamTable,
-    PluginEvent, PluginHandle, PluginSlot, SlotGen, TrackSlot, channel_control, track_control,
+    PluginEvent, PluginHandle, PluginSlot, SlotGen, TrackSlot, channel_control, fx_param_index,
+    send_control, track_control,
 };
 use rtrb::{Consumer, Producer, RingBuffer};
 use std::sync::Arc;
@@ -281,6 +284,27 @@ impl Buses {
         (&mut l[..n], &mut r[..n])
     }
 
+    fn lr_ref(&self, t: usize, n: usize) -> (&[f32], &[f32]) {
+        let (l, r) = self.data[t * 2 * MAX_BLOCK..(t + 1) * 2 * MAX_BLOCK].split_at(MAX_BLOCK);
+        (&l[..n], &r[..n])
+    }
+
+    /// Track `src` as read-only and a different track `dst` as writable.
+    fn pair(&mut self, src: usize, dst: usize, n: usize) -> (Lr<'_>, LrMut<'_>) {
+        debug_assert!(src != dst);
+        let w = 2 * MAX_BLOCK;
+        let (s, d): (&[f32], &mut [f32]) = if src < dst {
+            let (lo, hi) = self.data.split_at_mut(dst * w);
+            (&lo[src * w..(src + 1) * w], &mut hi[..w])
+        } else {
+            let (lo, hi) = self.data.split_at_mut(src * w);
+            (&hi[..w], &mut lo[dst * w..(dst + 1) * w])
+        };
+        let (sl, sr) = s.split_at(MAX_BLOCK);
+        let (dl, dr) = d.split_at_mut(MAX_BLOCK);
+        ((&sl[..n], &sr[..n]), (&mut dl[..n], &mut dr[..n]))
+    }
+
     /// Track `t` (>0) as read-only and the master as writable.
     fn track_and_master(&mut self, t: usize, n: usize) -> (Lr<'_>, LrMut<'_>) {
         debug_assert!(t > 0);
@@ -312,6 +336,12 @@ pub struct Runtime {
     beats: Vec<Beat>,
     trace: Vec<TraceEvent>,
     buses: Buses,
+    /// Sidechain key taps: channel sums before inserts and faders, ignoring
+    /// mute and solo (17.2).
+    keys: Buses,
+    chan_key_fader: Vec<Fader>,
+    send_gain: Vec<Smoother>,
+    fx: FxPools,
     track_dirty: [bool; TRACK_SLOTS],
     mono: Vec<f32>,
     chan_l: Vec<f32>,
@@ -358,6 +388,10 @@ impl Runtime {
             beats: Vec::with_capacity(BEAT_CAP),
             trace: Vec::new(),
             buses: Buses::new(),
+            keys: Buses::new(),
+            chan_key_fader: vec![Fader::default(); MAX_CHANNELS],
+            send_gain: vec![Smoother::new(); TRACK_SLOTS * MAX_SENDS],
+            fx: FxPools::new(sample_rate),
             track_dirty: [false; TRACK_SLOTS],
             mono: vec![0.0; MAX_BLOCK],
             chan_l: vec![0.0; MAX_BLOCK],
@@ -531,6 +565,7 @@ impl Runtime {
     }
 
     fn apply_generations(&mut self, new: &Compiled) {
+        self.fx.apply_generations(new);
         for s in 0..MAX_CHANNELS {
             if new.channel_gen[s] != self.chan_gen[s] {
                 // Note-offs for the slot's active notes first (SPEC 4.1).
@@ -538,6 +573,7 @@ impl Runtime {
                 self.release_previews(Some(s as u16));
                 self.preview_tail[s] = 0;
                 self.synths[s].reset();
+                self.chan_key_fader[s].reset();
                 self.bass[s].reset();
                 self.samplers[s].reset();
                 self.chan_fader[s].reset();
@@ -547,6 +583,9 @@ impl Runtime {
         for t in 0..TRACK_SLOTS {
             if new.track_gen[t] != self.track_gen[t] {
                 self.track_fader[t].reset();
+                for k in 0..MAX_SENDS {
+                    self.send_gain[t * MAX_SENDS + k].reset();
+                }
                 self.track_gen[t] = new.track_gen[t];
             }
         }
@@ -761,6 +800,10 @@ impl Runtime {
 
         // Buses
         self.buses.clear(n);
+        let any_key = c.key_source.iter().any(|&k| k);
+        if any_key {
+            self.keys.clear(n);
+        }
         self.track_dirty = [false; TRACK_SLOTS];
 
         // Channels -> track buses
@@ -771,6 +814,7 @@ impl Runtime {
             let vol = ctl.get(channel_control(cs, MixControl::VolumeDb));
             let pan = ctl.get(channel_control(cs, MixControl::Pan));
             let audible = self.ch_audible[s];
+            let key = c.key_source[t];
             match &ch.instrument {
                 InstrumentC::Synth { osc1, osc2 } => {
                     let has_events = ev_mask & (1u64 << s) != 0;
@@ -787,15 +831,7 @@ impl Runtime {
                         &self.events,
                         &mut self.mono[..n],
                     );
-                    let f = &mut self.chan_fader[s];
-                    f.set(vol, pan, audible, true, self.ramp);
-                    let (bl, br) = self.buses.lr(t, n);
-                    for i in 0..n {
-                        let x = self.mono[i];
-                        bl[i] += x * f.l.tick();
-                        br[i] += x * f.r.tick();
-                    }
-                    self.track_dirty[t] = true;
+                    self.mix_channel(s, t, n, false, (vol, pan, audible), key);
                 }
                 InstrumentC::Bass808 { mono } => {
                     let has_events = ev_mask & (1u64 << s) != 0;
@@ -814,15 +850,7 @@ impl Runtime {
                         &self.chokes,
                         &mut self.mono[..n],
                     );
-                    let f = &mut self.chan_fader[s];
-                    f.set(vol, pan, audible, true, self.ramp);
-                    let (bl, br) = self.buses.lr(t, n);
-                    for i in 0..n {
-                        let x = self.mono[i];
-                        bl[i] += x * f.l.tick();
-                        br[i] += x * f.r.tick();
-                    }
-                    self.track_dirty[t] = true;
+                    self.mix_channel(s, t, n, false, (vol, pan, audible), key);
                 }
                 InstrumentC::Sampler(sc) => {
                     let has_events = ev_mask & (1u64 << s) != 0;
@@ -844,16 +872,10 @@ impl Runtime {
                         &mut self.chan_r[..n],
                     );
                     let mono_src = sc.sample.as_ref().is_none_or(|d| d.channels == 1);
-                    let f = &mut self.chan_fader[s];
-                    f.set(vol, pan, audible, mono_src, self.ramp);
-                    let (bl, br) = self.buses.lr(t, n);
-                    for i in 0..n {
-                        let l = self.chan_l[i];
-                        let r = if mono_src { l } else { self.chan_r[i] };
-                        bl[i] += l * f.l.tick();
-                        br[i] += r * f.r.tick();
+                    if mono_src {
+                        self.mono[..n].copy_from_slice(&self.chan_l[..n]);
                     }
-                    self.track_dirty[t] = true;
+                    self.mix_channel(s, t, n, !mono_src, (vol, pan, audible), key);
                 }
                 InstrumentC::Clap => {
                     let ps = PluginSlot::Instrument(cs);
@@ -876,14 +898,7 @@ impl Runtime {
                     if !ok {
                         continue;
                     }
-                    let f = &mut self.chan_fader[s];
-                    f.set(vol, pan, audible, false, self.ramp);
-                    let (bl, br) = self.buses.lr(t, n);
-                    for i in 0..n {
-                        bl[i] += self.chan_l[i] * f.l.tick();
-                        br[i] += self.chan_r[i] * f.r.tick();
-                    }
-                    self.track_dirty[t] = true;
+                    self.mix_channel(s, t, n, true, (vol, pan, audible), key);
                 }
             }
         }
@@ -910,14 +925,36 @@ impl Runtime {
             self.track_dirty[0] = true;
         }
 
-        // Tracks 1.. then master: inserts, fader, meter.
-        for t in (1..TRACK_SLOTS).chain(std::iter::once(0)) {
-            if !c.tracks_present[t] {
-                continue;
-            }
-            let ts = TrackSlot(t as u16);
+        // Tracks in routing order (sources before the tracks they feed, the
+        // master last): inserts, pre-fader sends, fader, post-fader sends,
+        // meter, and the sum into the master.
+        let bpm = ctl.tempo().clamp(MIN_TEMPO_BPM, MAX_TEMPO_BPM);
+        for &t16 in &c.order {
+            let t = t16 as usize;
+            let ts = TrackSlot(t16);
+            let tc = &c.tracks[t];
             let mut has_inserts = false;
             for index in 0..MAX_INSERTS {
+                match tc.inserts.get(index) {
+                    Some(InsertC::Empty) => continue,
+                    Some(ins) if !matches!(ins, InsertC::Clap) => {
+                        has_inserts = true;
+                        let mut p = [0.0f32; FX_PARAMS_PER_INSERT];
+                        for (i, v) in p.iter_mut().enumerate() {
+                            *v = self.shared.params.get(fx_param_index(ts, index, i));
+                        }
+                        let (bl, br) = self.buses.lr(t, n);
+                        let key = match ins {
+                            InsertC::Compressor { key: Some(k), .. } => {
+                                Some(self.keys.lr_ref(*k as usize, n))
+                            }
+                            _ => None,
+                        };
+                        self.fx.process(ins, &p, bpm, bl, br, key);
+                        continue;
+                    }
+                    _ => {}
+                }
                 let ps = PluginSlot::Insert {
                     track: ts,
                     index: index as u8,
@@ -946,29 +983,43 @@ impl Runtime {
             if !self.track_dirty[t] && !has_inserts && t != 0 {
                 continue;
             }
+            // Send levels follow mute and solo (the track's audibility) and
+            // are smoothed like the faders.
+            for snd in &tc.sends {
+                let db = ctl.get(send_control(ts, snd.index as usize));
+                let g = if self.tr_audible[t] {
+                    db_to_lin(db)
+                } else {
+                    0.0
+                };
+                self.send_gain[t * MAX_SENDS + snd.index as usize].set(g, self.ramp);
+            }
+            // Pre-fader sends tap the bus as it is after the inserts.
+            for snd in tc.sends.iter().filter(|s| s.pre_fader) {
+                self.route_send(t, snd.to as usize, snd.index as usize, n);
+            }
             let vol = ctl.get(track_control(ts, MixControl::VolumeDb));
             let pan = ctl.get(track_control(ts, MixControl::Pan));
             let f = &mut self.track_fader[t];
             f.set(vol, pan, self.tr_audible[t], false, self.ramp);
             let (mut pl, mut pr) = (0.0f32, 0.0f32);
-            if t == 0 {
-                let (bl, br) = self.buses.lr(0, n);
-                for i in 0..n {
-                    bl[i] *= f.l.tick();
-                    br[i] *= f.r.tick();
-                    pl = pl.max(bl[i].abs());
-                    pr = pr.max(br[i].abs());
+            let (bl, br) = self.buses.lr(t, n);
+            for i in 0..n {
+                bl[i] *= f.l.tick();
+                br[i] *= f.r.tick();
+                pl = pl.max(bl[i].abs());
+                pr = pr.max(br[i].abs());
+            }
+            if t != 0 {
+                for snd in tc.sends.iter().filter(|s| !s.pre_fader) {
+                    self.route_send(t, snd.to as usize, snd.index as usize, n);
                 }
-            } else {
                 let ((tl, tr), (ml, mr)) = self.buses.track_and_master(t, n);
                 for i in 0..n {
-                    let l = tl[i] * f.l.tick();
-                    let r = tr[i] * f.r.tick();
-                    pl = pl.max(l.abs());
-                    pr = pr.max(r.abs());
-                    ml[i] += l;
-                    mr[i] += r;
+                    ml[i] += tl[i];
+                    mr[i] += tr[i];
                 }
+                self.track_dirty[0] = true;
             }
             let st = &self.shared.status;
             st.track_peaks[t * 2].fetch_max(pl.to_bits(), Relaxed);
@@ -988,6 +1039,62 @@ impl Runtime {
         let st = &self.shared.status;
         st.playing.store(self.seq.playing, Relaxed);
         st.playhead_tick.store(self.seq.playhead_tick(), Relaxed);
+    }
+
+    /// Adds channel `s` (source in `mono` or in `chan_l`/`chan_r`) to track
+    /// bus `t` through its fader; for a sidechain source track also to the
+    /// key bus through a fader that ignores mute and solo.
+    fn mix_channel(
+        &mut self,
+        s: usize,
+        t: usize,
+        n: usize,
+        stereo: bool,
+        (vol, pan, audible): (f32, f32, bool),
+        key: bool,
+    ) {
+        let f = &mut self.chan_fader[s];
+        f.set(vol, pan, audible, !stereo, self.ramp);
+        let (bl, br) = self.buses.lr(t, n);
+        for i in 0..n {
+            let (xl, xr) = if stereo {
+                (self.chan_l[i], self.chan_r[i])
+            } else {
+                (self.mono[i], self.mono[i])
+            };
+            bl[i] += xl * f.l.tick();
+            br[i] += xr * f.r.tick();
+        }
+        if key {
+            let f = &mut self.chan_key_fader[s];
+            f.set(vol, pan, true, !stereo, self.ramp);
+            let (kl, kr) = self.keys.lr(t, n);
+            for i in 0..n {
+                let (xl, xr) = if stereo {
+                    (self.chan_l[i], self.chan_r[i])
+                } else {
+                    (self.mono[i], self.mono[i])
+                };
+                kl[i] += xl * f.l.tick();
+                kr[i] += xr * f.r.tick();
+            }
+        }
+        self.track_dirty[t] = true;
+    }
+
+    /// Adds track `t`'s bus, scaled by send `idx`, to track `to`.
+    fn route_send(&mut self, t: usize, to: usize, idx: usize, n: usize) {
+        if to == t {
+            return;
+        }
+        let g = &mut self.send_gain[t * MAX_SENDS + idx];
+        let ((sl, sr), (dl, dr)) = self.buses.pair(t, to, n);
+        for i in 0..n {
+            let k = g.tick();
+            dl[i] += sl[i] * k;
+            dr[i] += sr[i] * k;
+        }
+        self.track_dirty[to] = true;
     }
 
     /// Reads mute and solo for every present channel and track and resolves
@@ -1040,6 +1147,21 @@ impl Runtime {
             let t = self.ch_track[s] as usize;
             if self.tr_ms[t].present && !self.tr_ms[t].mute {
                 self.tr_audible[t] = true;
+            }
+        }
+        // A return track is heard while a track that is heard sends to it,
+        // so solo on a source keeps its reverb (sources come first in
+        // `order`, so chains of returns resolve in one pass).
+        for &t in &c.order {
+            let t = t as usize;
+            if t == 0 || !self.tr_audible[t] {
+                continue;
+            }
+            for snd in &c.tracks[t].sends {
+                let to = snd.to as usize;
+                if self.tr_ms[to].present && !self.tr_ms[to].mute {
+                    self.tr_audible[to] = true;
+                }
             }
         }
     }

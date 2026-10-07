@@ -1,13 +1,15 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! Slot assignment and the immutable compiled state (SPEC 4.1).
 
+use crate::fx::{ALL_KINDS, KINDS, kind_index, pool_size};
 use crate::groove::{ratchet_part, swung_start};
 use crate::sampler::SamplerC;
 use crate::samples::SampleStore;
-use protocol::consts::{MAX_CHANNELS, MAX_CHOKE_GROUP, MAX_SENDS, TRACK_SLOTS};
+use protocol::beats::{BuiltinFx, BuiltinFxKind, SaturatorCurve};
+use protocol::consts::{MAX_CHANNELS, MAX_CHOKE_GROUP, MAX_INSERTS, MAX_SENDS, TRACK_SLOTS};
 use protocol::engine::{ChannelSlot, SlotGen, TrackSlot};
-use protocol::ids::{ChannelId, PatternId, TrackId};
-use protocol::model::{Instrument, Project, Wave};
+use protocol::ids::{ChannelId, InstanceId, PatternId, TrackId};
+use protocol::model::{Insert, Instrument, Project, Wave};
 
 /// Returned when all 64 channel slots or 32 track slots are taken.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -35,6 +37,8 @@ struct Entry<I: Copy> {
 pub struct Slots {
     channels: Vec<Entry<ChannelId>>,
     tracks: Vec<Entry<TrackId>>,
+    /// Built-in effect pool entries, per kind (`fx::kind_index`).
+    fx: [Vec<Entry<InstanceId>>; KINDS],
     counter: SlotGen,
 }
 
@@ -50,6 +54,7 @@ impl Slots {
         let mut s = Slots {
             channels: vec![Entry { id: None, gen_: 0 }; MAX_CHANNELS],
             tracks: vec![Entry { id: None, gen_: 0 }; TRACK_SLOTS],
+            fx: ALL_KINDS.map(|k| vec![Entry { id: None, gen_: 0 }; pool_size(k)]),
             counter: 0,
         };
         s.counter += 1;
@@ -155,6 +160,35 @@ impl Slots {
         }
     }
 
+    /// Pool entry of the built-in effect `id` of `kind`, assigning one if
+    /// the instance has none. `None` when the pool is full.
+    pub fn alloc_fx(&mut self, kind: BuiltinFxKind, id: InstanceId) -> Option<u8> {
+        let k = kind_index(kind);
+        if let Some(i) = self.fx_slot(kind, id) {
+            return Some(i);
+        }
+        let i = self.fx[k].iter().position(|e| e.id.is_none())?;
+        let g = self.next_gen();
+        self.fx[k][i] = Entry {
+            id: Some(id),
+            gen_: g,
+        };
+        Some(i as u8)
+    }
+
+    pub fn fx_slot(&self, kind: BuiltinFxKind, id: InstanceId) -> Option<u8> {
+        self.fx[kind_index(kind)]
+            .iter()
+            .position(|e| e.id == Some(id))
+            .map(|i| i as u8)
+    }
+
+    /// Generation of a pool entry, 0 for a free one.
+    pub fn fx_gen(&self, kind: BuiltinFxKind, i: u8) -> SlotGen {
+        let e = &self.fx[kind_index(kind)][i as usize];
+        if e.id.is_some() { e.gen_ } else { 0 }
+    }
+
     /// Assigns slots to every channel and track of `project` and frees the
     /// slots of entities that are gone. Existing assignments keep their slot
     /// and generation.
@@ -178,6 +212,29 @@ impl Slots {
         }
         for c in &project.channels {
             self.alloc_channel(c.id)?;
+        }
+        // Built-in effects: free the entries of inserts that are gone, then
+        // assign the new ones. A full pool leaves the insert without an entry
+        // (it compiles as a bypass); `apply()` keeps projects under the counts.
+        for k in ALL_KINDS {
+            for e in &mut self.fx[kind_index(k)] {
+                if let Some(id) = e.id
+                    && !project.tracks.iter().any(|t| {
+                        t.inserts.iter().any(|i| {
+                            matches!(i, Insert::Builtin { instance, fx } if *instance == id && fx.kind() == k)
+                        })
+                    })
+                {
+                    e.id = None;
+                }
+            }
+        }
+        for t in &project.tracks {
+            for i in &t.inserts {
+                if let Insert::Builtin { instance, fx } = i {
+                    let _ = self.alloc_fx(fx.kind(), *instance);
+                }
+            }
         }
         Ok(())
     }
@@ -220,10 +277,42 @@ pub struct SendC {
     pub index: u8,
 }
 
+/// One insert slot as the audio thread runs it. The position in
+/// `TrackC::inserts` is the insert index (plugin slot, parameter table).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum InsertC {
+    /// A CLAP insert; the plugin sits in `PluginSlot::Insert`.
+    Clap,
+    /// A built-in effect that got no pool entry: bypassed.
+    Empty,
+    Eq {
+        pool: u8,
+    },
+    Compressor {
+        pool: u8,
+        key: Option<u16>,
+    },
+    Saturator {
+        pool: u8,
+        curve: SaturatorCurve,
+    },
+    Reverb {
+        pool: u8,
+    },
+    Delay {
+        pool: u8,
+        ping_pong: bool,
+    },
+    Limiter {
+        pool: u8,
+    },
+}
+
 /// Per track routing and effects.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct TrackC {
     pub sends: Vec<SendC>,
+    pub inserts: Vec<InsertC>,
 }
 
 /// A note ready for the audio thread. `end` is clamped to the pattern end.
@@ -258,6 +347,10 @@ pub struct Compiled {
     pub track_gen: [SlotGen; TRACK_SLOTS],
     pub channels: Vec<Option<ChannelC>>,
     pub tracks_present: [bool; TRACK_SLOTS],
+    /// Tracks some compressor takes its sidechain key from.
+    pub key_source: [bool; TRACK_SLOTS],
+    /// Pool entry generations per effect kind (`fx::kind_index`).
+    pub fx_gen: [Vec<SlotGen>; KINDS],
     /// Indexed by track slot.
     pub tracks: Vec<TrackC>,
     /// Present track slots, every track after the tracks that feed it
@@ -299,6 +392,8 @@ pub fn compile_with(
         track_gen: [0; TRACK_SLOTS],
         channels: vec![None; MAX_CHANNELS],
         tracks_present: [false; TRACK_SLOTS],
+        key_source: [false; TRACK_SLOTS],
+        fx_gen: ALL_KINDS.map(|k| vec![0; pool_size(k)]),
         tracks: vec![TrackC::default(); TRACK_SLOTS],
         order: Vec::new(),
         patterns: Vec::with_capacity(project.patterns.len()),
@@ -307,7 +402,17 @@ pub fn compile_with(
         if let Some(s) = slots.track_slot(t.id) {
             c.track_gen[s.0 as usize] = slots.track_gen(s);
             c.tracks_present[s.0 as usize] = true;
+            let mut tc_inserts = Vec::new();
+            for ins in t.inserts.iter().take(MAX_INSERTS) {
+                tc_inserts.push(compile_insert(ins, slots, &mut c.fx_gen));
+            }
+            for ins in &tc_inserts {
+                if let InsertC::Compressor { key: Some(k), .. } = ins {
+                    c.key_source[*k as usize] = true;
+                }
+            }
             let tc = &mut c.tracks[s.0 as usize];
+            tc.inserts = tc_inserts;
             for (index, snd) in t.sends.iter().enumerate().take(MAX_SENDS) {
                 if let Some(to) = slots.track_slot(snd.to) {
                     tc.sends.push(SendC {
@@ -420,20 +525,61 @@ pub fn compile_with(
     Box::new(c)
 }
 
+/// Compiles one insert; records the pool entry's generation in `fx_gen`.
+fn compile_insert(ins: &Insert, slots: &Slots, fx_gen: &mut [Vec<SlotGen>; KINDS]) -> InsertC {
+    let Insert::Builtin { instance, fx } = ins else {
+        return InsertC::Clap;
+    };
+    let kind = fx.kind();
+    let Some(pool) = slots.fx_slot(kind, *instance) else {
+        return InsertC::Empty;
+    };
+    fx_gen[kind_index(kind)][pool as usize] = slots.fx_gen(kind, pool);
+    match fx {
+        BuiltinFx::Eq { .. } => InsertC::Eq { pool },
+        BuiltinFx::Compressor { sidechain, .. } => InsertC::Compressor {
+            pool,
+            key: sidechain
+                .and_then(|id| slots.track_slot(id))
+                .filter(|s| s.0 != 0)
+                .map(|s| s.0),
+        },
+        BuiltinFx::Saturator { curve, .. } => InsertC::Saturator {
+            pool,
+            curve: *curve,
+        },
+        BuiltinFx::Reverb { .. } => InsertC::Reverb { pool },
+        BuiltinFx::Delay { ping_pong, .. } => InsertC::Delay {
+            pool,
+            ping_pong: *ping_pong,
+        },
+        BuiltinFx::Limiter { .. } => InsertC::Limiter { pool },
+    }
+}
+
 /// Processing order of the present tracks (17.2): every track comes after
 /// the tracks that feed it, the master last. Edges: sends, and the implicit
 /// track-to-master edge. `apply()` rejects cycles; a cycle that gets here
 /// anyway is broken by slot order instead of dropping tracks.
 pub fn topo_order(c: &Compiled) -> Vec<u16> {
     let present: Vec<usize> = (1..TRACK_SLOTS).filter(|&t| c.tracks_present[t]).collect();
-    let mut indeg = [0u32; TRACK_SLOTS];
+    // Edge list: from -> to. Sends, and sidechain key -> compressor track.
+    let mut edges: Vec<(usize, usize)> = Vec::new();
     for &t in &present {
         for s in &c.tracks[t].sends {
-            let to = s.to as usize;
-            if to != 0 && to != t && c.tracks_present[to] {
-                indeg[to] += 1;
+            edges.push((t, s.to as usize));
+        }
+        for i in &c.tracks[t].inserts {
+            if let InsertC::Compressor { key: Some(k), .. } = i {
+                edges.push((*k as usize, t));
             }
         }
+    }
+    edges
+        .retain(|&(a, b)| a != 0 && b != 0 && a != b && c.tracks_present[a] && c.tracks_present[b]);
+    let mut indeg = [0u32; TRACK_SLOTS];
+    for &(_, b) in &edges {
+        indeg[b] += 1;
     }
     let mut done = [false; TRACK_SLOTS];
     let mut out = Vec::with_capacity(present.len() + 1);
@@ -447,10 +593,9 @@ pub fn topo_order(c: &Compiled) -> Vec<u16> {
             .expect("a track is left");
         done[next] = true;
         out.push(next as u16);
-        for s in &c.tracks[next].sends {
-            let to = s.to as usize;
-            if to != 0 && to != next && c.tracks_present[to] && indeg[to] > 0 {
-                indeg[to] -= 1;
+        for &(a, b) in &edges {
+            if a == next && indeg[b] > 0 {
+                indeg[b] -= 1;
             }
         }
     }
