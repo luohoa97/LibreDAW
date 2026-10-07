@@ -4,12 +4,19 @@
 //! replacement; the offline renderer calls them once.
 
 use crate::compiled::Slots;
-use protocol::beats::{Bass808Param, Bass808Params};
+use protocol::beats::{Bass808Param, Bass808Params, SamplerParam, SamplerParams};
 use protocol::engine::{
     CTL_METRONOME_ENABLED, CTL_METRONOME_GAIN_DB, ChannelSlot, ControlTable, MixControl,
     ParamTable, TrackSlot, channel_control, param_index, track_control,
 };
 use protocol::model::{Instrument, Mix, Project, SynthParam, SynthParams};
+
+/// Writes the continuous sampler values of a channel.
+pub fn write_sampler_params(params: &ParamTable, slot: ChannelSlot, p: &SamplerParams) {
+    for q in SamplerParam::ALL {
+        params.set(param_index(slot, q.index()), p.get(*q) as f32);
+    }
+}
 
 /// Writes the continuous 808 values of a channel.
 pub fn write_bass808_params(params: &ParamTable, slot: ChannelSlot, p: &Bass808Params) {
@@ -60,6 +67,8 @@ pub fn write_controls(
             write_synth_params(params, s, p);
         } else if let Instrument::Bass808(b) = &ch.instrument {
             write_bass808_params(params, s, &b.params);
+        } else if let Instrument::Sampler(sm) = &ch.instrument {
+            write_sampler_params(params, s, &sm.params);
         }
     }
 }

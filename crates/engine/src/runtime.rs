@@ -12,6 +12,7 @@ use crate::plugins::{
 };
 use crate::preview::{PREVIEW_CAP, PreviewNote, Previews, TAIL_SECONDS, insert_sorted};
 use crate::rt::{RtGuard, enter_rt_fp_mode, restore_fp_mode};
+use crate::sampler::{Sampler, SamplerCtl};
 use crate::sequencer::{BEAT_CAP, Beat, ChokeEvent, EVENT_CAP, SeqEvent, Sequencer, TraceEvent};
 use crate::synth::{Synth, SynthCtl};
 use protocol::consts::{
@@ -302,6 +303,7 @@ pub struct Runtime {
     seq: Sequencer,
     synths: Vec<Synth>,
     bass: Vec<Bass808>,
+    samplers: Vec<Sampler>,
     chokes: Vec<ChokeEvent>,
     chan_fader: Vec<Fader>,
     track_fader: Vec<Fader>,
@@ -347,6 +349,7 @@ impl Runtime {
             track_gen: [0; TRACK_SLOTS],
             synths: vec![Synth::new(); MAX_CHANNELS],
             bass: vec![Bass808::new(); MAX_CHANNELS],
+            samplers: vec![Sampler::new(); MAX_CHANNELS],
             chokes: Vec::with_capacity(CHOKE_CAP),
             chan_fader: vec![Fader::default(); MAX_CHANNELS],
             track_fader: vec![Fader::default(); TRACK_SLOTS],
@@ -505,7 +508,9 @@ impl Runtime {
 
     pub fn active_voices(&self, slot: ChannelSlot) -> usize {
         let s = slot.0 as usize;
-        self.synths[s].active_voices() + self.bass[s].active_voices()
+        self.synths[s].active_voices()
+            + self.bass[s].active_voices()
+            + self.samplers[s].active_voices()
     }
 
     pub fn has_compiled(&self) -> bool {
@@ -534,6 +539,7 @@ impl Runtime {
                 self.preview_tail[s] = 0;
                 self.synths[s].reset();
                 self.bass[s].reset();
+                self.samplers[s].reset();
                 self.chan_fader[s].reset();
                 self.chan_gen[s] = new.channel_gen[s];
             }
@@ -726,7 +732,7 @@ impl Runtime {
             ev_mask |= 1u64 << e.slot;
             // A note-on in a choke group stops the group's other channels.
             if e.on
-                && let Some(ch) = c.channels[e.slot as usize]
+                && let Some(ch) = &c.channels[e.slot as usize]
                 && ch.choke_group != 0
                 && self.chokes.len() < self.chokes.capacity()
             {
@@ -741,7 +747,7 @@ impl Runtime {
         let mut choke_mask = 0u64;
         for k in &self.chokes {
             for s in 0..MAX_CHANNELS {
-                if let Some(ch) = c.channels[s]
+                if let Some(ch) = &c.channels[s]
                     && ch.choke_group == k.group
                     && s as u16 != k.source
                 {
@@ -759,13 +765,13 @@ impl Runtime {
 
         // Channels -> track buses
         for s in 0..MAX_CHANNELS {
-            let Some(ch) = c.channels[s] else { continue };
+            let Some(ch) = &c.channels[s] else { continue };
             let t = ch.track.0 as usize;
             let cs = ChannelSlot(s as u16);
             let vol = ctl.get(channel_control(cs, MixControl::VolumeDb));
             let pan = ctl.get(channel_control(cs, MixControl::Pan));
             let audible = self.ch_audible[s];
-            match ch.instrument {
+            match &ch.instrument {
                 InstrumentC::Synth { osc1, osc2 } => {
                     let has_events = ev_mask & (1u64 << s) != 0;
                     if !has_events && !self.synths[s].is_active() {
@@ -775,7 +781,7 @@ impl Runtime {
                     self.mono[..n].fill(0.0);
                     self.synths[s].render(
                         &sctl,
-                        (osc1, osc2),
+                        (*osc1, *osc2),
                         self.sample_rate,
                         s as u16,
                         &self.events,
@@ -800,7 +806,7 @@ impl Runtime {
                     self.mono[..n].fill(0.0);
                     self.bass[s].render(
                         &bctl,
-                        mono,
+                        *mono,
                         self.sample_rate,
                         s as u16,
                         ch.choke_group,
@@ -818,7 +824,37 @@ impl Runtime {
                     }
                     self.track_dirty[t] = true;
                 }
-                InstrumentC::Sampler => {}
+                InstrumentC::Sampler(sc) => {
+                    let has_events = ev_mask & (1u64 << s) != 0;
+                    if !has_events && !self.samplers[s].is_active() {
+                        continue;
+                    }
+                    let sctl = SamplerCtl::read(&self.shared.params, cs, self.sample_rate);
+                    self.chan_l[..n].fill(0.0);
+                    self.chan_r[..n].fill(0.0);
+                    self.samplers[s].render(
+                        sc,
+                        &sctl,
+                        self.sample_rate,
+                        s as u16,
+                        ch.choke_group,
+                        &self.events,
+                        &self.chokes,
+                        &mut self.chan_l[..n],
+                        &mut self.chan_r[..n],
+                    );
+                    let mono_src = sc.sample.as_ref().is_none_or(|d| d.channels == 1);
+                    let f = &mut self.chan_fader[s];
+                    f.set(vol, pan, audible, mono_src, self.ramp);
+                    let (bl, br) = self.buses.lr(t, n);
+                    for i in 0..n {
+                        let l = self.chan_l[i];
+                        let r = if mono_src { l } else { self.chan_r[i] };
+                        bl[i] += l * f.l.tick();
+                        br[i] += r * f.r.tick();
+                    }
+                    self.track_dirty[t] = true;
+                }
                 InstrumentC::Clap => {
                     let ps = PluginSlot::Instrument(cs);
                     if !self.plug.attached(ps) {
@@ -959,7 +995,7 @@ impl Runtime {
     fn read_mixer(&mut self, c: &Compiled) {
         let ctl = &self.shared.controls;
         for s in 0..MAX_CHANNELS {
-            match c.channels[s] {
+            match &c.channels[s] {
                 Some(ch) => {
                     let cs = ChannelSlot(s as u16);
                     self.ch_ms[s] = MuteSolo {

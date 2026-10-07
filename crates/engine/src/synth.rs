@@ -25,7 +25,13 @@ pub struct EnvCoefs {
 }
 
 impl EnvCoefs {
-    fn new(sr: f64, attack_ms: f32, decay_ms: f32, sustain: f32, release_ms: f32) -> EnvCoefs {
+    pub(crate) fn new(
+        sr: f64,
+        attack_ms: f32,
+        decay_ms: f32,
+        sustain: f32,
+        release_ms: f32,
+    ) -> EnvCoefs {
         let coef = |ms: f32| -> f32 {
             if ms <= 0.0 {
                 0.0
@@ -100,7 +106,7 @@ impl SynthCtl {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum Stage {
+pub(crate) enum Stage {
     Idle,
     Attack,
     Decay,
@@ -109,29 +115,29 @@ enum Stage {
 }
 
 #[derive(Clone, Copy, Debug)]
-struct Env {
-    stage: Stage,
-    v: f32,
+pub(crate) struct Env {
+    pub(crate) stage: Stage,
+    pub(crate) v: f32,
 }
 
 impl Env {
-    const IDLE: Env = Env {
+    pub(crate) const IDLE: Env = Env {
         stage: Stage::Idle,
         v: 0.0,
     };
 
-    fn gate_on(&mut self) {
+    pub(crate) fn gate_on(&mut self) {
         self.stage = Stage::Attack;
     }
 
-    fn release(&mut self) {
+    pub(crate) fn release(&mut self) {
         if self.stage != Stage::Idle {
             self.stage = Stage::Release;
         }
     }
 
     #[inline]
-    fn next(&mut self, c: &EnvCoefs) -> f32 {
+    pub(crate) fn next(&mut self, c: &EnvCoefs) -> f32 {
         match self.stage {
             Stage::Idle => {}
             Stage::Attack => {

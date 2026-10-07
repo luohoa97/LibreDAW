@@ -2,6 +2,8 @@
 //! Slot assignment and the immutable compiled state (SPEC 4.1).
 
 use crate::groove::{ratchet_part, swung_start};
+use crate::sampler::SamplerC;
+use crate::samples::SampleStore;
 use protocol::consts::{MAX_CHANNELS, MAX_CHOKE_GROUP, MAX_SENDS, TRACK_SLOTS};
 use protocol::engine::{ChannelSlot, SlotGen, TrackSlot};
 use protocol::ids::{ChannelId, PatternId, TrackId};
@@ -182,7 +184,7 @@ impl Slots {
 }
 
 /// Structural instrument description of a channel (SPEC 17.1).
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum InstrumentC {
     Synth {
         osc1: Wave,
@@ -190,15 +192,15 @@ pub enum InstrumentC {
     },
     /// A CLAP instrument; the plugin sits in `PluginSlot::Instrument`.
     Clap,
-    /// Sample playback (15.1); silent until the sampler lands.
-    Sampler,
+    /// Sample playback (15.1).
+    Sampler(SamplerC),
     /// 808 bass (15.2); silent until the 808 lands.
     Bass808 {
         mono: bool,
     },
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ChannelC {
     pub instrument: InstrumentC,
     pub track: TrackSlot,
@@ -278,6 +280,18 @@ impl Compiled {
 /// Builds the compiled state. Runs on the compiler thread. Entities without
 /// a slot in `slots` are skipped (call `Slots::sync` first).
 pub fn compile(project: &Project, slots: &Slots, sample_rate: f64) -> Box<Compiled> {
+    compile_with(project, slots, sample_rate, None)
+}
+
+/// As `compile`, with the decoded samples of `store`. A sampler whose sample
+/// is not in the store (not requested, still loading, failed) compiles as
+/// silence; recompile when `SampleStore::poll` reports it.
+pub fn compile_with(
+    project: &Project,
+    slots: &Slots,
+    sample_rate: f64,
+    store: Option<&SampleStore>,
+) -> Box<Compiled> {
     let mut c = Compiled {
         sample_rate,
         time_sig_num: project.time_sig_num.max(1),
@@ -318,7 +332,15 @@ pub fn compile(project: &Project, slots: &Slots, sample_rate: f64) -> Box<Compil
                 osc2: p.osc2.wave,
             },
             Instrument::Clap(_) => InstrumentC::Clap,
-            Instrument::Sampler(_) => InstrumentC::Sampler,
+            Instrument::Sampler(sm) => InstrumentC::Sampler(SamplerC {
+                mode: sm.mode,
+                reverse: sm.reverse,
+                root_key: ch.root_key,
+                sample: sm
+                    .sample
+                    .as_deref()
+                    .and_then(|h| store.and_then(|st| st.get(h))),
+            }),
             Instrument::Bass808(b) => InstrumentC::Bass808 { mono: b.mono },
         };
         c.channels[i] = Some(ChannelC {
