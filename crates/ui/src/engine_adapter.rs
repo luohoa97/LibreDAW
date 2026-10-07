@@ -1,40 +1,83 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//! The only module that talks to the `engine` crate (docs/phase2-interfaces.md,
+//! The only module that names the `engine` crate (docs/phase2-interfaces.md,
 //! "engine -> ui").
 //!
-//! The engine crate's `compile`, `Slots`, and `Engine` are not on main yet,
-//! so this is a stub with the same shape: `compile` builds a small summary
-//! instead of a `Compiled`, and `EngineLink` keeps the commands, plugin
-//! events, and compiled states it is given instead of feeding an audio
-//! thread. When the engine lands, only this file changes: `Compiled` becomes
-//! `Box<engine::Compiled>`, `compile` calls `engine::compile` with a
-//! `engine::Slots` built from our `SlotAllocator`, and `EngineLink` wraps
-//! `engine::Engine`.
+//! `EngineLink` is the GTK-thread side of the engine. It is either live (an
+//! open audio stream, `Engine`) or a stub with the same ring semantics that
+//! keeps what it is given. The stub serves tests and the case where no audio
+//! device can be opened: the document, undo, save, and the control socket
+//! still work, and the app tells the user audio is off.
 
 use std::collections::VecDeque;
+use std::path::Path;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU32};
 
+use protocol::control::WavFormat;
 use protocol::engine::{
-    ControlTable, EngineCommand, EngineEvent, EngineStatus, ParamTable, PluginEvent,
+    ControlTable, EngineCommand, EngineEvent, EngineStatus, ParamTable, PluginEvent, PluginHandle,
+    PluginSlot,
 };
+use protocol::ids::PatternId;
+use protocol::model::Project;
 
 use crate::compiler::CompileJob;
+use crate::slots::SlotAllocator;
 
-/// Stand-in for `engine::Compiled`.
-#[derive(Debug, PartialEq, Eq)]
-pub struct Compiled {
-    pub revision: u64,
-    pub channels: usize,
-    pub notes: usize,
+pub use engine::{Compiled, EngineConfig, EngineError, Host, Slots};
+
+/// Runs on the compiler thread.
+pub fn compile(job: &CompileJob) -> Box<Compiled> {
+    engine::compile(&job.project, &job.slots.inner, job.sample_rate)
 }
 
-/// Stand-in for `engine::compile`. Runs on the compiler thread.
-pub fn compile(job: &CompileJob) -> Box<Compiled> {
-    Box::new(Compiled {
-        revision: job.revision,
-        channels: job.project.channels.len(),
-        notes: job.project.note_count(),
-    })
+/// Writes every control and parameter value of `project` (4.3, 17.1).
+pub fn write_controls(project: &Project, slots: &SlotAllocator, link: &EngineLink) {
+    engine::write_controls(project, &slots.inner, &link.controls, &link.params);
+}
+
+/// Notes in all patterns of a compiled state (for tests and diagnostics).
+pub fn compiled_note_count(c: &Compiled) -> usize {
+    c.patterns
+        .iter()
+        .map(|p| p.notes.iter().map(Vec::len).sum::<usize>())
+        .sum()
+}
+
+/// Output device names of a host.
+pub fn devices(host: Host) -> Vec<String> {
+    engine::Engine::devices(host)
+}
+
+/// Offline render on the calling thread (8). `plugins` are export instances
+/// created on the GTK thread and attached by handle.
+pub fn render(
+    project: std::sync::Arc<Project>,
+    pattern: PatternId,
+    loops: u32,
+    sample_rate: u32,
+    slots: &SlotAllocator,
+    plugins: &[(PluginSlot, PluginHandle)],
+    progress: &AtomicU32,
+    cancel: &AtomicBool,
+) -> Result<Vec<[f32; 2]>, EngineError> {
+    let req = engine::RenderRequest {
+        project,
+        pattern,
+        loops,
+        tail_seconds: 2.0,
+        sample_rate,
+    };
+    engine::render_offline(&req, &slots.inner, plugins, progress, cancel)
+}
+
+pub fn write_wav(
+    path: &Path,
+    frames: &[[f32; 2]],
+    rate: u32,
+    fmt: WavFormat,
+) -> std::io::Result<()> {
+    engine::write_wav(path, frames, rate, fmt)
 }
 
 /// The GTK-thread side of the engine: the shared tables and the producer
@@ -44,14 +87,20 @@ pub struct EngineLink {
     pub params: Arc<ParamTable>,
     pub status: Arc<EngineStatus>,
     sample_rate: f64,
-    /// Capacity of the stub's rings; `None` means unlimited. Tests set it to
-    /// exercise the "ring full, retry" paths.
+    live: Option<engine::Engine>,
+    /// Stub only: capacity of the rings; `None` means unlimited. Tests set it
+    /// to exercise the "ring full, retry" paths.
     pub ring_capacity: Option<usize>,
+    /// Stub only: what was given to the rings, newest last (bounded).
     pub submitted: Vec<Box<Compiled>>,
     pub commands: Vec<EngineCommand>,
     pub plugin_events: Vec<PluginEvent>,
+    /// Stub only: events the test wants the "audio thread" to have sent.
     pub events: VecDeque<EngineEvent>,
 }
+
+/// How many submitted states the stub keeps.
+const STUB_KEEP: usize = 8;
 
 impl EngineLink {
     /// A link that is not connected to an audio stream.
@@ -61,11 +110,45 @@ impl EngineLink {
             params: Arc::new(ParamTable::new()),
             status: Arc::new(EngineStatus::new()),
             sample_rate,
+            live: None,
             ring_capacity: None,
             submitted: Vec::new(),
             commands: Vec::new(),
             plugin_events: Vec::new(),
             events: VecDeque::new(),
+        }
+    }
+
+    /// Opens the audio stream with `first` installed.
+    pub fn start(cfg: &EngineConfig, first: Box<Compiled>) -> Result<EngineLink, EngineError> {
+        let e = engine::Engine::start(cfg, first)?;
+        Ok(EngineLink {
+            controls: e.controls.clone(),
+            params: e.params.clone(),
+            status: e.status.clone(),
+            sample_rate: e.sample_rate(),
+            live: Some(e),
+            ring_capacity: None,
+            submitted: Vec::new(),
+            commands: Vec::new(),
+            plugin_events: Vec::new(),
+            events: VecDeque::new(),
+        })
+    }
+
+    pub fn is_live(&self) -> bool {
+        self.live.is_some()
+    }
+
+    /// True if the backend lost the device and the stream must be rebuilt.
+    pub fn needs_restart(&self) -> bool {
+        self.live.as_ref().is_some_and(|e| e.needs_restart())
+    }
+
+    /// Stops the stream (4.7 step 1) and waits for it to be dropped.
+    pub fn stop(&mut self) {
+        if let Some(e) = self.live.take() {
+            e.stop();
         }
     }
 
@@ -75,6 +158,9 @@ impl EngineLink {
 
     /// State ring. `Err` means full: retry on the next tick.
     pub fn submit(&mut self, c: Box<Compiled>) -> Result<(), Box<Compiled>> {
+        if let Some(e) = &mut self.live {
+            return e.submit(c);
+        }
         if self
             .ring_capacity
             .is_some_and(|n| self.submitted.len() >= n)
@@ -82,11 +168,17 @@ impl EngineLink {
             return Err(c);
         }
         self.submitted.push(c);
+        if self.ring_capacity.is_none() && self.submitted.len() > STUB_KEEP {
+            self.submitted.remove(0);
+        }
         Ok(())
     }
 
     /// Command ring. `Err` means full.
     pub fn command(&mut self, c: EngineCommand) -> Result<(), EngineCommand> {
+        if let Some(e) = &mut self.live {
+            return e.command(c);
+        }
         if self.ring_capacity.is_some_and(|n| self.commands.len() >= n) {
             return Err(c);
         }
@@ -96,6 +188,9 @@ impl EngineLink {
 
     /// Plugin event ring. `Err` means full.
     pub fn plugin_event(&mut self, e: PluginEvent) -> Result<(), PluginEvent> {
+        if let Some(l) = &mut self.live {
+            return l.plugin_event(e);
+        }
         if self
             .ring_capacity
             .is_some_and(|n| self.plugin_events.len() >= n)
@@ -107,6 +202,10 @@ impl EngineLink {
     }
 
     pub fn drain_events(&mut self, mut f: impl FnMut(EngineEvent)) {
+        if let Some(e) = &mut self.live {
+            e.drain_events(f);
+            return;
+        }
         while let Some(e) = self.events.pop_front() {
             f(e);
         }

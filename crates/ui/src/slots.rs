@@ -4,16 +4,21 @@
 //! engine resets a slot's runtime state when the generation it sees in a
 //! new `Compiled` differs from the one it holds.
 //!
+//! The allocation itself is the engine's `Slots`, held through
+//! `engine_adapter`. This wrapper adds the lookups the UI needs, including
+//! where each CLAP instance sits in the engine's plugin table.
+//!
 //! Generations come from one counter, so a slot that is freed and reused
 //! never repeats an earlier generation. A channel that is removed and then
 //! brought back by undo is a new lifetime and gets a fresh slot generation.
 
 use std::collections::HashMap;
 
-use protocol::consts::{MAX_CHANNELS, TRACK_SLOTS};
 use protocol::engine::{ChannelSlot, PluginSlot, SlotGen, TrackSlot};
 use protocol::ids::{ChannelId, InstanceId, TrackId};
 use protocol::model::{Insert, Instrument, Project};
+
+use crate::engine_adapter::Slots;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SlotError {
@@ -30,105 +35,34 @@ impl std::fmt::Display for SlotError {
 
 impl std::error::Error for SlotError {}
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct SlotAllocator {
-    channels: Vec<Option<(ChannelId, SlotGen)>>,
-    /// Index 0 is the master and is always occupied.
-    tracks: Vec<Option<(TrackId, SlotGen)>>,
-    next_gen: SlotGen,
+    pub(crate) inner: Slots,
 }
 
 impl SlotAllocator {
     pub fn new() -> SlotAllocator {
         SlotAllocator {
-            channels: vec![None; MAX_CHANNELS],
-            tracks: {
-                let mut t = vec![None; TRACK_SLOTS];
-                t[0] = Some((TrackId::MASTER, 1));
-                t
-            },
-            next_gen: 2,
+            inner: Slots::new(),
         }
-    }
-
-    fn fresh_gen(&mut self) -> SlotGen {
-        let g = self.next_gen;
-        self.next_gen += 1;
-        g
     }
 
     /// Frees slots of entities that are gone and allocates slots for new
     /// ones. Entities that stay keep their slot and generation.
     pub fn sync(&mut self, p: &Project) -> Result<(), SlotError> {
-        for s in &mut self.channels {
-            if let Some((id, _)) = s
-                && p.channel(*id).is_none()
-            {
-                *s = None;
-            }
-        }
-        for s in self.tracks.iter_mut().skip(1) {
-            if let Some((id, _)) = s
-                && p.track(*id).is_none()
-            {
-                *s = None;
-            }
-        }
-        for c in &p.channels {
-            if self.channel_slot(c.id).is_none() {
-                let i = self
-                    .channels
-                    .iter()
-                    .position(Option::is_none)
-                    .ok_or(SlotError::Full)?;
-                let g = self.fresh_gen();
-                self.channels[i] = Some((c.id, g));
-            }
-        }
-        for t in &p.tracks {
-            if self.track_slot(t.id).is_none() {
-                let i = self
-                    .tracks
-                    .iter()
-                    .skip(1)
-                    .position(Option::is_none)
-                    .ok_or(SlotError::Full)?
-                    + 1;
-                let g = self.fresh_gen();
-                self.tracks[i] = Some((t.id, g));
-            }
-        }
-        Ok(())
+        self.inner.sync(p).map_err(|_| SlotError::Full)
     }
 
     pub fn channel_slot(&self, id: ChannelId) -> Option<(ChannelSlot, SlotGen)> {
-        self.channels
-            .iter()
-            .position(|s| matches!(s, Some((c, _)) if *c == id))
-            .map(|i| (ChannelSlot(i as u16), self.channels[i].expect("found").1))
+        self.inner
+            .channel_slot(id)
+            .map(|s| (s, self.inner.channel_gen(s)))
     }
 
     pub fn track_slot(&self, id: TrackId) -> Option<(TrackSlot, SlotGen)> {
-        self.tracks
-            .iter()
-            .position(|s| matches!(s, Some((t, _)) if *t == id))
-            .map(|i| (TrackSlot(i as u16), self.tracks[i].expect("found").1))
-    }
-
-    /// Occupied channel slots: `(slot, generation, id)`.
-    pub fn channels(&self) -> impl Iterator<Item = (ChannelSlot, SlotGen, ChannelId)> + '_ {
-        self.channels
-            .iter()
-            .enumerate()
-            .filter_map(|(i, s)| s.map(|(id, g)| (ChannelSlot(i as u16), g, id)))
-    }
-
-    /// Occupied track slots: `(slot, generation, id)`.
-    pub fn tracks(&self) -> impl Iterator<Item = (TrackSlot, SlotGen, TrackId)> + '_ {
-        self.tracks
-            .iter()
-            .enumerate()
-            .filter_map(|(i, s)| s.map(|(id, g)| (TrackSlot(i as u16), g, id)))
+        self.inner
+            .track_slot(id)
+            .map(|s| (s, self.inner.track_gen(s)))
     }
 
     /// Where every CLAP instance of the project sits in the engine's plugin
@@ -159,17 +93,12 @@ impl SlotAllocator {
     }
 }
 
-impl Default for SlotAllocator {
-    fn default() -> SlotAllocator {
-        SlotAllocator::new()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::document::tests::{Rng, random_edit};
     use crate::document::{Document, apply};
+    use protocol::consts::TRACK_SLOTS;
     use protocol::edit::{Edit, NewInstrument};
     use protocol::model::SynthParams;
     use std::collections::HashSet;
@@ -254,7 +183,12 @@ mod tests {
             .0;
         }
         s.sync(&d.project).unwrap();
-        let slots: HashSet<u16> = s.tracks().map(|(sl, _, _)| sl.0).collect();
+        let slots: HashSet<u16> = d
+            .project
+            .tracks
+            .iter()
+            .map(|t| s.track_slot(t.id).unwrap().0.0)
+            .collect();
         assert_eq!(slots.len(), TRACK_SLOTS);
         assert!(slots.iter().all(|x| (*x as usize) < TRACK_SLOTS));
     }

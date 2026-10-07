@@ -30,12 +30,11 @@ use protocol::model::{Insert, Instrument, Project};
 use crate::change::{needs_compile, param_diffs, removed_instances};
 use crate::compiler::{CompileJob, Compiler};
 use crate::document::{Document, commit_plugin_state};
-use crate::engine_adapter::{Compiled, EngineLink, compile};
+use crate::engine_adapter::{Compiled, EngineLink, compile, write_controls};
 use crate::history::{Applied, Author, Done, EditFailure, Editor, HistoryError, Scope, Submitted};
 use crate::plugin_adapter::PluginOut;
 use crate::registry::{Notice, Registry, clap_ref};
 use crate::slots::SlotAllocator;
-use crate::tables;
 
 /// Who caused a document change, for parameter replay.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -263,7 +262,7 @@ impl Session {
         if let Err(e) = self.slots.sync(&new) {
             self.messages.push(format!("Engine slots: {e}"));
         }
-        tables::write_all(&self.link.controls, &self.link.params, &new, &self.slots);
+        write_controls(&new, &self.slots, &self.link);
         if origin == Origin::External {
             self.out_events.extend(param_diffs(old, &new, &self.slots));
         }

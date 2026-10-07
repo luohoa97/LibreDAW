@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 use super::*;
+use crate::engine_adapter::compiled_note_count;
 use protocol::edit::{MixValue, NewInstrument, NewNote};
 use protocol::engine::{MixControl, channel_control, track_control};
 use protocol::ids::{ChannelId, PatternId, TrackId};
@@ -124,12 +125,7 @@ fn structural_edits_recompile_and_the_newest_revision_reaches_the_engine() {
     assert!(s.jobs_compiled() >= 1);
     assert!(s.jobs_compiled() <= s.jobs_requested());
     let last = s.link.submitted.last().unwrap();
-    assert_eq!(
-        last.revision,
-        s.document().revision,
-        "newest is never dropped"
-    );
-    assert_eq!(last.notes, 16);
+    assert_eq!(compiled_note_count(last), 16, "newest is never dropped");
 }
 
 #[test]
@@ -156,8 +152,7 @@ fn a_full_state_ring_is_retried_not_lost() {
     s.link.ring_capacity = None;
     s.tick();
     assert_eq!(s.link.submitted.len(), 1);
-    assert_eq!(s.link.submitted[0].revision, s.document().revision);
-    assert_eq!(s.link.submitted[0].notes, 1);
+    assert_eq!(compiled_note_count(&s.link.submitted[0]), 1);
 }
 
 #[test]

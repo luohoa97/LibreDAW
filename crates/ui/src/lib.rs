@@ -11,4 +11,3 @@ pub mod plugin_adapter;
 pub mod registry;
 pub mod session;
 pub mod slots;
-pub mod tables;
