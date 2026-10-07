@@ -1423,9 +1423,9 @@ range checks.
 ### Review 2 (2026-10-07): sections 13, 15, 16
 
 Process as in draft 2: four area reviewers plus a license auditor, each
-finding judged by two reviewers from other areas. 37 findings; 5 refuted
+finding judged by two reviewers from other areas. 39 findings; 5 refuted
 by both judges and dropped; 1 split verdict kept by the orchestrator;
-32 fixed. All fixes are in section 17.
+34 fixed. All fixes are in section 17.
 
 | ID | Sev | Found | Resolution |
 |---|---|---|---|
