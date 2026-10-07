@@ -8,7 +8,7 @@ CI fails if this file is out of date.
 
 | Crate | Version | License | Why |
 |---|---|---|---|
-| cpal | 0.18.2 | Apache-2.0 | audio I/O (fixed stack); its `pipewire` feature adds the native PipeWire host (pipewire, libspa, and bindgen at build time) and its `jack` feature the JACK backend |
+| cpal | 0.18.2 | Apache-2.0 | audio I/O (fixed stack); its `pipewire` feature adds the native PipeWire host (pipewire, libspa, and bindgen at build time), its `realtime-dbus` feature promotes the PipeWire callback thread to SCHED_RR through rtkit (audio_thread_priority, dbus), and its `jack` feature the JACK backend |
 | serde | 1.0.229 | MIT OR Apache-2.0 | derive (de)serialization for the project file and the control API (protocol) |
 | serde_json | 1.0.151 | MIT OR Apache-2.0 | JSON for the control API used by scripts and agents (protocol tests now; ui, script, mcp later) |
 | toml | 1.1.6+spec-1.1.0 | MIT OR Apache-2.0 | parse the project file, SPEC 7.2 (protocol); saving uses our own emitter |
@@ -22,6 +22,7 @@ CI fails if this file is out of date.
 | alsa-sys | 0.4.0 | MIT |
 | annotate-snippets | 0.11.5 | MIT OR Apache-2.0 |
 | anstyle | 1.0.14 | MIT OR Apache-2.0 |
+| audio_thread_priority | 0.35.1 | MPL-2.0 |
 | bindgen | 0.72.1 | BSD-3-Clause |
 | bitflags | 1.3.2 | MIT/Apache-2.0 |
 | bitflags | 2.13.2 | MIT OR Apache-2.0 |
@@ -33,6 +34,7 @@ CI fails if this file is out of date.
 | cookie-factory | 0.3.3 | MIT |
 | cpal | 0.18.2 | Apache-2.0 |
 | dasp_sample | 0.11.0 | MIT OR Apache-2.0 |
+| dbus | 0.6.5 | Apache-2.0/MIT |
 | either | 1.19.0 | MIT OR Apache-2.0 |
 | equivalent | 1.0.2 | Apache-2.0 OR MIT |
 | errno | 0.3.14 | MIT OR Apache-2.0 |
@@ -47,6 +49,7 @@ CI fails if this file is out of date.
 | jack-sys | 0.5.1 | MIT OR Apache-2.0 |
 | lazy_static | 1.5.1 | MIT OR Apache-2.0 |
 | libc | 0.2.190 | MIT OR Apache-2.0 |
+| libdbus-sys | 0.2.7 | Apache-2.0/MIT |
 | libloading | 0.7.4 | ISC |
 | libloading | 0.8.9 | ISC |
 | libspa | 0.10.1 | MIT |
@@ -99,6 +102,7 @@ Linked dynamically, never bundled. LGPL libraries are only ever linked dynamical
 | libpipewire-0.3 (PipeWire) | MIT | engine, through cpal's `pipewire` feature (pipewire-sys links it) | native PipeWire audio backend |
 | libjack (JACK or PipeWire-JACK) | LGPL-2.1-or-later | engine, through the `jack` crate, loaded with dlopen at run time | JACK audio backend |
 | libclang (build time only) | Apache-2.0 WITH LLVM-exception | bindgen, while building pipewire-sys | generates the libpipewire bindings; not linked into our binaries |
+| libdbus-1 | AFL-2.1 OR GPL-2.0-or-later (used under GPL-2.0-or-later) | engine, through cpal's `realtime-dbus` feature (libdbus-sys) | asks rtkit to make the audio thread real-time |
 | GTK4 | LGPL-2.1-or-later | ui (planned) | UI toolkit |
 | libadwaita | LGPL-2.1-or-later | ui (planned) | app shell widgets |
 | GLib | LGPL-2.1-or-later | ui (planned) | main loop, timers, fd sources |

@@ -18,7 +18,7 @@ set -l target x86_64-unknown-linux-gnu
 function justification
     switch $argv[1]
         case cpal
-            echo "audio I/O (fixed stack); its `pipewire` feature adds the native PipeWire host (pipewire, libspa, and bindgen at build time) and its `jack` feature the JACK backend"
+            echo "audio I/O (fixed stack); its `pipewire` feature adds the native PipeWire host (pipewire, libspa, and bindgen at build time), its `realtime-dbus` feature promotes the PipeWire callback thread to SCHED_RR through rtkit (audio_thread_priority, dbus), and its `jack` feature the JACK backend"
         case serde
             echo "derive (de)serialization for the project file and the control API (protocol)"
         case toml
@@ -86,6 +86,7 @@ begin
     echo '| libpipewire-0.3 (PipeWire) | MIT | engine, through cpal'\''s `pipewire` feature (pipewire-sys links it) | native PipeWire audio backend |'
     echo '| libjack (JACK or PipeWire-JACK) | LGPL-2.1-or-later | engine, through the `jack` crate, loaded with dlopen at run time | JACK audio backend |'
     echo '| libclang (build time only) | Apache-2.0 WITH LLVM-exception | bindgen, while building pipewire-sys | generates the libpipewire bindings; not linked into our binaries |'
+    echo '| libdbus-1 | AFL-2.1 OR GPL-2.0-or-later (used under GPL-2.0-or-later) | engine, through cpal'\''s `realtime-dbus` feature (libdbus-sys) | asks rtkit to make the audio thread real-time |'
     echo '| GTK4 | LGPL-2.1-or-later | ui (planned) | UI toolkit |'
     echo '| libadwaita | LGPL-2.1-or-later | ui (planned) | app shell widgets |'
     echo '| GLib | LGPL-2.1-or-later | ui (planned) | main loop, timers, fd sources |'
