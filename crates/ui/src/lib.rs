@@ -37,6 +37,8 @@ pub mod palette;
 pub mod perf;
 pub mod plugin_adapter;
 pub mod prefs;
+pub mod presence;
+pub mod presence_ui;
 pub mod registry;
 pub mod render_cache;
 pub mod roll_logic;

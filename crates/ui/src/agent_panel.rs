@@ -185,6 +185,12 @@ impl AgentPanel {
                     undo.connect_clicked(move |_| app.undo());
                     row.add_suffix(&undo);
                 }
+                if !a.focus.is_empty() {
+                    let (hover, foci) = (gtk::EventControllerMotion::new(), a.focus.clone());
+                    hover.connect_enter(move |_, _, _| crate::presence_ui::hover(foci.clone()));
+                    hover.connect_leave(|_| crate::presence_ui::hover(Vec::new()));
+                    row.add_controller(hover);
+                }
                 recent.add(&row);
             }
             self.page.add(&recent);
