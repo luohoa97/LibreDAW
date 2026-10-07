@@ -21,11 +21,12 @@ use crate::widgets::color_bar::ColorBar;
 pub struct ChannelList {
     pub widget: gtk::Box,
     app: Rc<App>,
-    rows: gtk::Box,
+    rows: gtk::ListBox,
     signature: RefCell<String>,
     editing: Cell<u32>,
     labels: RefCell<Vec<(ChannelId, gtk::EditableLabel)>>,
-    row_widgets: RefCell<Vec<(ChannelId, gtk::Box)>>,
+    row_widgets: RefCell<Vec<(ChannelId, gtk::ListBoxRow)>>,
+    selecting: Cell<bool>,
 }
 
 /// What decides whether the rows must be rebuilt.
@@ -52,12 +53,16 @@ impl ChannelList {
         widget.set_valign(gtk::Align::Start);
         widget.set_hexpand(false);
         widget.set_halign(gtk::Align::Start);
-        widget.set_accessible_role(gtk::AccessibleRole::List);
-        widget.update_property(&[gtk::accessible::Property::Label("Channels")]);
         let spacer = gtk::Box::new(gtk::Orientation::Vertical, 0);
         spacer.set_height_request(RULER_H as i32);
         widget.append(&spacer);
-        let rows = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        // A stock list: hover and selection come from libadwaita.
+        let rows = gtk::ListBox::new();
+        rows.add_css_class("navigation-sidebar");
+        rows.add_css_class("ldaw-channel-list");
+        rows.set_selection_mode(gtk::SelectionMode::Single);
+        rows.set_activate_on_single_click(false);
+        rows.update_property(&[gtk::accessible::Property::Label("Channels")]);
         rows.set_hexpand(false);
         widget.append(&rows);
         let l = Rc::new(ChannelList {
@@ -68,8 +73,43 @@ impl ChannelList {
             editing: Cell::new(0),
             labels: RefCell::new(Vec::new()),
             row_widgets: RefCell::new(Vec::new()),
+            selecting: Cell::new(false),
         });
         l.apply_width();
+        // Selecting a row selects the channel everywhere; Return or a
+        // double-click on the row opens its notes.
+        {
+            let l2 = l.clone();
+            l.rows.connect_row_selected(move |_, row| {
+                if l2.selecting.get() {
+                    return;
+                }
+                let id = row.and_then(|r| {
+                    l2.row_widgets
+                        .borrow()
+                        .iter()
+                        .find(|(_, w)| w == r)
+                        .map(|(id, _)| *id)
+                });
+                if let Some(id) = id
+                    && l2.app.current_channel() != Some(id)
+                {
+                    l2.app.select_channel(id);
+                }
+            });
+            let l2 = l.clone();
+            l.rows.connect_row_activated(move |_, row| {
+                let id = l2
+                    .row_widgets
+                    .borrow()
+                    .iter()
+                    .find(|(_, w)| w == row)
+                    .map(|(id, _)| *id);
+                if let Some(id) = id {
+                    l2.app.edit_notes(Some(id));
+                }
+            });
+        }
         let l2 = l.clone();
         app.on_change(move || l2.sync());
         let l2 = l.clone();
@@ -116,13 +156,19 @@ impl ChannelList {
     /// not destroy the row that is handling it).
     fn update_selection(&self) {
         let sel = self.app.current_channel();
+        self.selecting.set(true);
         for (id, row) in self.row_widgets.borrow().iter() {
             if sel == Some(*id) {
-                row.add_css_class("selected");
-            } else {
-                row.remove_css_class("selected");
+                if !row.is_selected() {
+                    self.rows.select_row(Some(row));
+                }
+                break;
             }
         }
+        if sel.is_none() {
+            self.rows.unselect_all();
+        }
+        self.selecting.set(false);
     }
 
     fn rebuild(self: &Rc<ChannelList>, row_h: u32) {
@@ -144,7 +190,11 @@ impl ChannelList {
             chans.iter().map(|c| s.sample_missing(c)).collect()
         };
         for (ch, miss) in chans.into_iter().zip(missing) {
-            let row = self.build_row(ch.id, &ch.name, ch.mix.mute, ch.choke_group, miss, row_h);
+            let content = self.build_row(ch.id, &ch.name, ch.mix.mute, ch.choke_group, miss, row_h);
+            let row = gtk::ListBoxRow::new();
+            row.set_child(Some(&content));
+            row.set_activatable(true);
+            row.set_height_request(row_h as i32);
             self.rows.append(&row);
             self.row_widgets.borrow_mut().push((ch.id, row));
         }
@@ -166,9 +216,6 @@ impl ChannelList {
             row.add_css_class("muted");
         }
         row.set_height_request(row_h as i32);
-        row.set_margin_start(2);
-        row.set_margin_end(2);
-        row.set_accessible_role(gtk::AccessibleRole::ListItem);
 
         let bar = ColorBar::new(id.0);
         bar.set_margin_top(8);
@@ -204,7 +251,20 @@ impl ChannelList {
         label.set_max_width_chars(14);
         label.set_valign(gtk::Align::Center);
         label.add_css_class("ldaw-channel-name");
-        label.set_tooltip_text(Some("Double-click to rename"));
+        label.set_tooltip_text(Some("Double-click to edit notes. F2 renames."));
+        // A double-click on the name opens the notes; renaming is F2, the
+        // channel menu, or the Rename action.
+        {
+            let (a, dbl) = (self.app.clone(), gtk::GestureClick::new());
+            dbl.set_propagation_phase(gtk::PropagationPhase::Capture);
+            dbl.connect_pressed(move |g, n, _, _| {
+                if n == 2 {
+                    g.set_state(gtk::EventSequenceState::Claimed);
+                    a.edit_notes(Some(id));
+                }
+            });
+            label.add_controller(dbl);
+        }
         label.update_property(&[gtk::accessible::Property::Label(&format!("Name of {name}"))]);
         {
             let (l, a, orig) = (self.clone(), self.app.clone(), name.to_string());
@@ -244,7 +304,6 @@ impl ChannelList {
             let a = self.app.clone();
             click.connect_pressed(move |_, n, _, _| {
                 if n == 1 {
-                    a.select_channel(id);
                     let key = {
                         let s = a.session.borrow();
                         s.document().project.channel(id).map(|c| c.root_key)
@@ -292,6 +351,20 @@ impl ChannelList {
         mb.update_property(&[gtk::accessible::Property::Label(&format!(
             "Channel menu for {name}"
         ))]);
+        // Wide windows also get the notes button itself (docs 3.3).
+        if self.app.size_class().step_name_col() >= 200 {
+            let notes = gtk::Button::from_icon_name("document-edit-symbolic");
+            notes.add_css_class("flat");
+            notes.add_css_class("circular");
+            notes.set_valign(gtk::Align::Center);
+            notes.set_tooltip_text(Some("Edit Notes"));
+            notes.update_property(&[gtk::accessible::Property::Label(&format!(
+                "Edit notes of {name}"
+            ))]);
+            let a = self.app.clone();
+            notes.connect_clicked(move |_| a.edit_notes(Some(id)));
+            row.append(&notes);
+        }
         row.append(&mb);
 
         let group = gio::SimpleActionGroup::new();
@@ -312,8 +385,7 @@ impl ChannelList {
         add(
             "notes",
             Box::new(move || {
-                a.select_channel(id);
-                a.command(UiCommand::EditNotes);
+                a.edit_notes(Some(id));
             }),
         );
         let lab = label.clone();

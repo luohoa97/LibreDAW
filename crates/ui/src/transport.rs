@@ -39,7 +39,6 @@ pub struct Transport {
     tempo_group: gtk::Box,
     settings_btn: gtk::MenuButton,
     pop: gtk::Popover,
-    seps: [gtk::Separator; 2],
     master: Meter,
     master_btn: gtk::Button,
     metro_shown: Cell<bool>,
@@ -190,11 +189,10 @@ impl Transport {
         bar.append(&back);
         bar.append(&play);
         bar.append(&metro);
-        let sep1 = gtk::Separator::new(gtk::Orientation::Vertical);
-        bar.append(&sep1);
+        // Groups are set apart by space, not by lines.
+        pos_btn.set_margin_start(12);
         bar.append(&pos_btn);
-        let sep2 = gtk::Separator::new(gtk::Orientation::Vertical);
-        bar.append(&sep2);
+        tempo_group.set_margin_start(12);
         bar.append(&tempo_group);
         bar.append(&tempo_btn);
         bar.append(&extras);
@@ -228,7 +226,6 @@ impl Transport {
             tempo_group,
             settings_btn,
             pop,
-            seps: [sep1, sep2],
             master,
             master_btn,
             metro_shown: Cell::new(true),
@@ -456,9 +453,6 @@ impl Transport {
         bp.add_setter(&self.metro, "visible", Some(&false.to_value()));
         bp.add_setter(&self.settings_btn, "visible", Some(&false.to_value()));
         bp.add_setter(&self.master_btn, "visible", Some(&false.to_value()));
-        for s in &self.seps {
-            bp.add_setter(s, "visible", Some(&false.to_value()));
-        }
     }
 
     /// Moves the settings popover to the button that is visible.

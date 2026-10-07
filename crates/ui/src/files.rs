@@ -267,10 +267,8 @@ pub fn fresh_project(a: &Rc<App>) {
         ui.pattern = None;
         ui.channel = None;
     }
-    a.edit(vec![protocol::edit::Edit::AddPattern {
-        name: "Pattern 1".into(),
-        length_steps: 16,
-    }]);
+    // A starter beat: one pattern and four channels, ready to play.
+    crate::channels::add_starter_beat(a);
     a.session.borrow_mut().editor.mark_saved();
     a.notify();
 }
@@ -307,6 +305,11 @@ pub fn open_path(app: &Rc<App>, path: PathBuf) {
                     a.session.borrow_mut().apply_recovered(&rec.loaded.doc);
                     a.notify();
                     a.toast(&persist::recovered_message(&time_text(rec.modified)));
+                }
+                // A project always has a pattern: an old one without any
+                // gets "Pattern 1" as one undoable edit.
+                if a.ensure_pattern().is_some() {
+                    a.notify();
                 }
                 let _ = LastSession {
                     path: Some(path),
@@ -349,6 +352,7 @@ pub fn open_recovery_bundle(app: &Rc<App>, bundle_dir: PathBuf, modified: System
                 a.ui.borrow_mut().pattern = None;
                 a.ui.borrow_mut().channel = None;
                 a.notify();
+                a.ensure_pattern();
                 a.toast(&persist::recovered_message(&time_text(modified)));
                 // The old recovery bundle goes away once this session has
                 // written its own.

@@ -18,9 +18,10 @@ use protocol::edit::Edit;
 use protocol::engine::{EngineCommand, TransportMode};
 use protocol::ids::{ChannelId, PatternId, TrackId};
 
+use crate::selection::{self, Selection};
 use crate::session::Session;
 use crate::settings::Settings;
-use crate::size_class::{PatternFocus, SizeClass};
+use crate::size_class::SizeClass;
 use doc::history::{Applied, Author, HistoryError, Scope, Submitted};
 use doc::persist::ViewState;
 
@@ -73,10 +74,8 @@ pub struct App {
     pub bridge: RefCell<Option<crate::control_bridge::Bridge>>,
     preview_timer: RefCell<Option<gtk::glib::SourceId>>,
     rest_timer: RefCell<Option<gtk::glib::SourceId>>,
-    /// Window size class and what the Pattern page shows (what the user
-    /// chose; `effective_focus` applies the size class).
+    /// Window size class (not document state).
     size: Cell<SizeClass>,
-    focus: Cell<PatternFocus>,
     view_listeners: RefCell<Vec<Rc<dyn Fn()>>>,
     command_listeners: RefCell<Vec<CommandListener>>,
     peaks: RefCell<[std::collections::HashMap<TrackId, [f32; 2]>; 2]>,
@@ -96,7 +95,7 @@ pub enum UiCommand {
     ShowSound,
     /// Open the sound browser.
     ShowSounds,
-    /// Put the piano roll in front (narrow) or focus it (wide).
+    /// Show the notes page of the selected channel and focus the piano roll.
     EditNotes,
     /// Open the inspector on the Agent page.
     ShowAgent,
@@ -120,7 +119,6 @@ impl App {
             preview_timer: RefCell::new(None),
             rest_timer: RefCell::new(None),
             size: Cell::new(SizeClass::from_size(1360.0, 800.0)),
-            focus: Cell::new(PatternFocus::Both),
             view_listeners: RefCell::new(Vec::new()),
             command_listeners: RefCell::new(Vec::new()),
             peaks: RefCell::default(),
@@ -201,7 +199,7 @@ impl App {
         }
     }
 
-    // ---- window size and pattern focus (not document state) ----
+    // ---- window size (not document state) ----
 
     pub fn size_class(&self) -> SizeClass {
         self.size.get()
@@ -209,22 +207,6 @@ impl App {
 
     pub fn set_size_class(&self, c: SizeClass) {
         if self.size.replace(c) != c {
-            self.notify_view();
-        }
-    }
-
-    /// What the user chose for the Pattern page.
-    pub fn pattern_focus(&self) -> PatternFocus {
-        self.focus.get()
-    }
-
-    /// What the Pattern page shows now (size class applied).
-    pub fn effective_focus(&self) -> PatternFocus {
-        self.size.get().effective_focus(self.focus.get())
-    }
-
-    pub fn set_pattern_focus(&self, f: PatternFocus) {
-        if self.focus.replace(f) != f {
             self.notify_view();
         }
     }
@@ -241,7 +223,7 @@ impl App {
         self.command_listeners.borrow_mut().push(Rc::new(f));
     }
 
-    /// Called when the size class or the pattern focus changes.
+    /// Called when the size class changes.
     pub fn on_view_change(&self, f: impl Fn() + 'static) {
         self.view_listeners.borrow_mut().push(Rc::new(f));
     }
@@ -284,18 +266,73 @@ impl App {
 
     /// Keeps the selection pointing at things that exist.
     pub fn fix_selection(&self) {
-        let s = self.session.borrow();
-        let p = &s.document().project;
+        let sel = selection::fix(self.selection(), &self.session.borrow().document().project);
+        self.set_selection(sel);
+    }
+
+    /// The selection: the one source of truth for what every view shows.
+    pub fn selection(&self) -> Selection {
+        let ui = self.ui.borrow();
+        Selection {
+            pattern: ui.pattern,
+            channel: ui.channel,
+            track: ui.track,
+        }
+    }
+
+    fn set_selection(&self, sel: Selection) {
         let mut ui = self.ui.borrow_mut();
-        if ui.pattern.is_none_or(|id| p.pattern(id).is_none()) {
-            ui.pattern = p.patterns.first().map(|x| x.id);
+        ui.pattern = sel.pattern;
+        ui.channel = sel.channel;
+        ui.track = sel.track;
+    }
+
+    /// Makes sure the project has a pattern: if it has none, adds
+    /// "Pattern 1" (inside the open undo gesture, if there is one) and
+    /// selects it.
+    pub fn ensure_pattern(&self) -> Option<PatternId> {
+        if let Some(p) = self
+            .session
+            .borrow()
+            .document()
+            .project
+            .patterns
+            .first()
+            .map(|p| p.id)
+        {
+            return Some(p);
         }
-        if ui.channel.is_none_or(|id| p.channel(id).is_none()) {
-            ui.channel = p.channels.first().map(|x| x.id);
+        let e = vec![Edit::AddPattern {
+            name: "Pattern 1".into(),
+            length_steps: 16,
+        }];
+        let made = if self.session.borrow().editor.gesture_open() {
+            self.gesture_edit(e)
+        } else {
+            self.edit(e)
+        };
+        let id = PatternId(made?.created[0]);
+        self.ui.borrow_mut().pattern = Some(id);
+        Some(id)
+    }
+
+    /// "Edit Notes": selects the channel (the selected one when `None`),
+    /// makes sure a pattern exists, and asks the Pattern page to show that
+    /// channel's notes. Every way to ask for it comes here.
+    pub fn edit_notes(&self, channel: Option<ChannelId>) {
+        let plan = {
+            let s = self.session.borrow();
+            selection::plan_edit_notes(&s.document().project, &self.selection(), channel)
+        };
+        let Some(plan) = plan else {
+            self.toast("Add a channel first");
+            return;
+        };
+        if plan.create_pattern {
+            self.ensure_pattern();
         }
-        if p.track(ui.track).is_none() {
-            ui.track = TrackId::MASTER;
-        }
+        self.select_channel(plan.select);
+        self.command(UiCommand::EditNotes);
     }
 
     /// Runs after a document change: fixes the selection, shows messages
@@ -317,15 +354,12 @@ impl App {
     }
 
     pub fn select_channel(&self, id: ChannelId) {
-        let track = {
-            let s = self.session.borrow();
-            s.document().project.channel(id).map(|c| c.track)
-        };
-        if let Some(t) = track {
-            let mut ui = self.ui.borrow_mut();
-            ui.channel = Some(id);
-            ui.track = t;
-        }
+        let sel = selection::select_channel(
+            self.selection(),
+            &self.session.borrow().document().project,
+            id,
+        );
+        self.set_selection(sel);
         self.notify();
     }
 

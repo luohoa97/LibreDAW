@@ -158,6 +158,9 @@ pub fn add(app: &Rc<App>, what: NewChannel) -> Option<ChannelId> {
     };
     let fallback = app.ui.borrow().track;
     let grouped = app.gesture_begin("Add channel");
+    // A project always has a pattern: the first channel creates one in the
+    // same undo step, so its steps are there to click.
+    app.ensure_pattern();
     let run = |e: Vec<Edit>| {
         if grouped {
             app.gesture_edit(e)
@@ -193,6 +196,106 @@ pub fn add(app: &Rc<App>, what: NewChannel) -> Option<ChannelId> {
     Some(id)
 }
 
+/// The starter beat of a new project: "Pattern 1" (one bar) with Kick,
+/// Snare, Hat and Bass channels, each on its own track, and a plain steady
+/// pattern so Play already sounds like something. One undo step. Nothing
+/// plays until the user presses Play.
+pub fn add_starter_beat(app: &Rc<App>) {
+    let grouped = app.gesture_begin("New project");
+    let run = |e: Vec<Edit>| {
+        if grouped {
+            app.gesture_edit(e)
+        } else {
+            app.edit(e)
+        }
+    };
+    let pattern = app.ensure_pattern();
+    let preset = |name: &str| {
+        presets::presets()
+            .into_iter()
+            .find(|p| p.name == name)
+            .map(|p| (NewInstrument::Synth { params: p.params }, p.root_key))
+    };
+    // (channel name, instrument and root key, steps, velocity)
+    type Part = (&'static str, (NewInstrument, u8), Vec<u8>, u8);
+    let parts: Vec<Part> = vec![
+        (
+            "Kick",
+            preset("Kick").unwrap_or((
+                NewInstrument::Synth {
+                    params: SynthParams::default(),
+                },
+                36,
+            )),
+            vec![0, 4, 8, 12],
+            110,
+        ),
+        (
+            "Snare",
+            preset("Snare").unwrap_or((
+                NewInstrument::Synth {
+                    params: SynthParams::default(),
+                },
+                38,
+            )),
+            vec![4, 12],
+            100,
+        ),
+        (
+            "Hat",
+            preset("Closed hat").unwrap_or((
+                NewInstrument::Synth {
+                    params: SynthParams::default(),
+                },
+                42,
+            )),
+            vec![2, 6, 10, 14],
+            80,
+        ),
+        (
+            "Bass",
+            (NewInstrument::Bass808 { mono: true }, 36),
+            vec![0, 10],
+            100,
+        ),
+    ];
+    let mut first = None;
+    for (name, (instrument, root_key), steps, vel) in parts {
+        let Some(t) = run(vec![Edit::AddTrack { name: name.into() }]) else {
+            continue;
+        };
+        let track = TrackId(t.created[0]);
+        let made = run(vec![Edit::AddChannel {
+            name: name.into(),
+            instrument,
+            root_key,
+            track,
+        }]);
+        let Some(ch) = made.map(|a| ChannelId(a.created[0])) else {
+            continue;
+        };
+        first.get_or_insert(ch);
+        if let Some(pattern) = pattern {
+            run(steps
+                .into_iter()
+                .map(|step| Edit::SetStep {
+                    pattern,
+                    channel: ch,
+                    step,
+                    on: true,
+                    vel: Some(vel),
+                })
+                .collect());
+        }
+    }
+    if grouped {
+        app.gesture_end();
+    }
+    if let Some(c) = first {
+        app.select_channel(c);
+    }
+}
+
 /// Adds every piece of a kit as a sampler channel, all on one new track
 /// named `track_name`, as one undo step. Returns the channels.
 pub fn add_kit(app: &Rc<App>, track_name: &str, pieces: Vec<SamplerSetup>) -> Vec<ChannelId> {
@@ -209,6 +312,7 @@ pub fn add_kit(app: &Rc<App>, track_name: &str, pieces: Vec<SamplerSetup>) -> Ve
     };
     let fallback = app.ui.borrow().track;
     let grouped = app.gesture_begin("Add kit");
+    app.ensure_pattern();
     let run = |e: Vec<Edit>| {
         if grouped {
             app.gesture_edit(e)
@@ -445,6 +549,145 @@ mod tests {
         }
         a.undo();
         assert_eq!(counts(&a), (0, 1));
+    }
+
+    fn pattern_count(a: &App) -> usize {
+        a.session.borrow().document().project.patterns.len()
+    }
+
+    #[test]
+    fn the_first_channel_creates_pattern_1_in_the_same_undo_step() {
+        let a = app();
+        assert_eq!(pattern_count(&a), 0);
+        let id = add(&a, NewChannel::Preset("Kick".into())).unwrap();
+        assert_eq!(pattern_count(&a), 1);
+        assert!(a.current_pattern().is_some(), "and it is selected");
+        assert_eq!(a.current_channel(), Some(id));
+        a.undo();
+        assert_eq!(pattern_count(&a), 0, "one step undoes the pattern too");
+        assert_eq!(counts(&a), (0, 1));
+        a.redo();
+        assert_eq!((pattern_count(&a), counts(&a)), (1, (1, 2)));
+        // A second channel does not add another pattern.
+        add(&a, NewChannel::Bass808).unwrap();
+        assert_eq!(pattern_count(&a), 1);
+    }
+
+    #[test]
+    fn the_starter_beat_is_one_pattern_four_channels_and_one_undo_step() {
+        let a = app();
+        add_starter_beat(&a);
+        let names: Vec<String> = {
+            let s = a.session.borrow();
+            s.document()
+                .project
+                .channels
+                .iter()
+                .map(|c| c.name.clone())
+                .collect()
+        };
+        assert_eq!(names, ["Kick", "Snare", "Hat", "Bass"]);
+        assert_eq!(counts(&a), (4, 5), "each channel has a track of its own");
+        assert_eq!(pattern_count(&a), 1);
+        {
+            let s = a.session.borrow();
+            let p = &s.document().project;
+            let pat = &p.patterns[0];
+            assert_eq!(pat.length_steps, 16);
+            for c in &p.channels {
+                assert!(
+                    !pat.notes_of(c.id).is_empty(),
+                    "{} has steps to see",
+                    c.name
+                );
+            }
+        }
+        assert!(a.current_pattern().is_some() && a.current_channel().is_some());
+        assert!(!a.ui.borrow().playing, "nothing plays until Play");
+        a.undo();
+        assert_eq!((counts(&a), pattern_count(&a)), ((0, 1), 0));
+    }
+
+    #[test]
+    fn edit_notes_selects_makes_a_pattern_and_asks_the_page_to_show_it() {
+        use crate::app::UiCommand;
+        use std::cell::Cell;
+        let a = app();
+        let id = add(&a, NewChannel::Preset("Kick".into())).unwrap();
+        let other = add(&a, NewChannel::Preset("Snare".into())).unwrap();
+        assert_eq!(a.current_channel(), Some(other));
+        let got = Rc::new(Cell::new(0));
+        let g = got.clone();
+        a.on_command(move |c| {
+            if c == UiCommand::EditNotes {
+                g.set(g.get() + 1);
+            }
+        });
+        a.edit_notes(Some(id));
+        assert_eq!(a.current_channel(), Some(id));
+        assert_eq!(got.get(), 1);
+        // No channel named: the selected one.
+        a.edit_notes(None);
+        assert_eq!(a.current_channel(), Some(id));
+        assert_eq!(got.get(), 2);
+        // With the pattern gone it is made again, as part of the call.
+        let p = a.current_pattern().unwrap();
+        a.edit(vec![Edit::RemovePattern { pattern: p }]);
+        assert_eq!(pattern_count(&a), 0);
+        a.edit_notes(Some(other));
+        assert_eq!(pattern_count(&a), 1);
+        assert_eq!(a.current_channel(), Some(other));
+        assert!(a.current_pattern().is_some());
+        // Nothing to edit: a toast, no command.
+        let empty = {
+            let s = Session::new(
+                Document::new(),
+                true,
+                EngineLink::stub(48000.0),
+                Registry::new(Vec::new(), 48000.0),
+            );
+            App::with_dirs(
+                s,
+                Dirs {
+                    music: std::env::temp_dir(),
+                    data: std::env::temp_dir(),
+                    config: std::env::temp_dir(),
+                },
+            )
+        };
+        let n = Rc::new(Cell::new(0));
+        let n2 = n.clone();
+        empty.on_command(move |_| n2.set(n2.get() + 1));
+        empty.edit_notes(None);
+        assert_eq!(n.get(), 0);
+    }
+
+    #[test]
+    fn the_selection_stays_one_thing_through_edits() {
+        let a = app();
+        let k = add(&a, NewChannel::Preset("Kick".into())).unwrap();
+        let s = add(&a, NewChannel::Preset("Snare".into())).unwrap();
+        a.select_channel(k);
+        let sel = a.selection();
+        assert_eq!(sel.channel, Some(k));
+        assert_eq!(a.current_channel(), sel.channel);
+        let track = a
+            .session
+            .borrow()
+            .document()
+            .project
+            .channel(k)
+            .unwrap()
+            .track;
+        assert_eq!(sel.track, track, "the mixer track follows the channel");
+        // Removing the selected channel moves the selection to a channel
+        // that exists, never leaves it dangling.
+        remove(&a, k);
+        assert_eq!(a.current_channel(), Some(s));
+        // Undo brings it back; selecting an unknown id changes nothing.
+        a.undo();
+        a.select_channel(protocol::ids::ChannelId(9999));
+        assert_eq!(a.current_channel(), Some(s));
     }
 
     #[test]

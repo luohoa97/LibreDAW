@@ -103,9 +103,9 @@ pub const SHORTCUTS: &[Shortcut] = &[
     ),
     s("win.zoom-reset", &["<Control>0"], "Reset zoom", "View"),
     s(
-        "win.focus-pattern",
-        &["<Control>b"],
-        "Focus Steps or Notes",
+        "win.edit-notes",
+        &["<Control>Return"],
+        "Edit the notes of the selected channel",
         "View",
     ),
     // Steps (inside the step grid)

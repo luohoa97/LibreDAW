@@ -120,11 +120,11 @@ impl Mixer {
 
         let master_slot = gtk::Box::new(gtk::Orientation::Horizontal, 0);
         master_slot.set_margin_end(8);
+        master_slot.set_margin_start(8);
         master_slot.set_margin_top(8);
         master_slot.set_margin_bottom(8);
         let root = gtk::Box::new(gtk::Orientation::Horizontal, 0);
         root.append(&stack);
-        root.append(&gtk::Separator::new(gtk::Orientation::Vertical));
         root.append(&master_slot);
         root.set_accessible_role(gtk::AccessibleRole::Group);
         root.update_property(&[gtk::accessible::Property::Label("Mixer")]);

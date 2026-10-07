@@ -33,6 +33,7 @@ pub mod render_cache;
 pub mod roll_logic;
 pub mod run;
 pub mod samples_ui;
+pub mod selection;
 pub mod session;
 pub mod settings;
 pub mod shortcuts;

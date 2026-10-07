@@ -580,7 +580,8 @@ impl StepGrid {
             if selected == Some(ch.id) {
                 let mut c = pal.accent;
                 c.set_alpha(0.14);
-                draw::fill(s, &c, 0.0, y, w, layout.row_h);
+                let band_w = layout.content_size(proj.channels.len(), steps).0.min(w);
+                draw::fill(s, &c, 0.0, y, band_w, layout.row_h);
             }
             let body = colors.channel_color(ch.id.0);
             if row > 0 {

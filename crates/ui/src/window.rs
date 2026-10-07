@@ -26,7 +26,7 @@ use crate::palette;
 use crate::pattern_page::{self, PatternPage};
 use crate::prefs;
 use crate::shortcuts::{self, SHORTCUTS};
-use crate::size_class::{self, PatternFocus, SizeClass, split_position};
+use crate::size_class::{self, SizeClass};
 use crate::transport::Transport;
 use crate::{browser, export, inspector};
 use doc::bundle::{AutosaveDebounce, AutosaveWorker};
@@ -327,6 +327,11 @@ fn install_debug_shot(gapp: &adw::Application, ui: &Rc<Ui>, app: &Rc<App>) {
         // After the project's saved view has been restored.
         let u = ui.clone();
         glib::timeout_add_local_once(Duration::from_millis(900), move || go_to_page(&u, &p));
+    }
+    // LIBREDAW_EDIT_NOTES=1 opens the notes page of the selected channel.
+    if std::env::var_os("LIBREDAW_EDIT_NOTES").is_some() {
+        let a = app.clone();
+        glib::timeout_add_local_once(Duration::from_millis(1400), move || a.edit_notes(None));
     }
     if let Ok(name) = std::env::var("LIBREDAW_CHANNEL") {
         let a = app.clone();
@@ -713,10 +718,7 @@ fn install_actions(gapp: &adw::Application, ui: &Rc<Ui>, app: &Rc<App>) {
     let u = ui.clone();
     add("zoom-reset", Box::new(move || u.pattern.roll.reset_zoom()));
     let a = app.clone();
-    add(
-        "focus-pattern",
-        Box::new(move || a.set_pattern_focus(a.pattern_focus().cycle())),
-    );
+    add("edit-notes", Box::new(move || a.edit_notes(None)));
 
     // Channels and plugins.
     let u = ui.clone();
@@ -910,12 +912,9 @@ fn install_accels(gapp: &adw::Application, window: &adw::ApplicationWindow, ui: 
 /// Saves and restores the window view (`.view.toml`).
 fn install_view_hooks(ui: &Rc<Ui>, app: &Rc<App>) {
     let (u1, u2) = (ui.clone(), ui.clone());
-    let a1 = app.clone();
-    let a2 = app.clone();
     app.set_view_hooks(
         move || {
             let (px_per_tick, row_h, scroll_x, scroll_y, snap) = u1.pattern.roll.view_params();
-            let total = u1.pattern.paned.height().max(1) as f64;
             ViewState {
                 px_per_tick,
                 row_h,
@@ -923,10 +922,8 @@ fn install_view_hooks(ui: &Rc<Ui>, app: &Rc<App>) {
                 scroll_y,
                 snap: snap as u32,
                 page: page_name(&u1),
-                focus: a1.pattern_focus().name().to_string(),
                 sounds_open: u1.sounds_toggle.is_active(),
                 inspector_open: u1.inspector_toggle.is_active(),
-                split: (u1.pattern.paned.position() as f64 / total).clamp(0.1, 0.9),
                 ..ViewState::default()
             }
         },
@@ -942,17 +939,8 @@ fn install_view_hooks(ui: &Rc<Ui>, app: &Rc<App>) {
                 .snap
                 .set_selected(u2.pattern.roll.snap_index() as u32);
             go_to_page(&u2, &v.page);
-            if let Some(f) = PatternFocus::from_name(&v.focus) {
-                a2.set_pattern_focus(f);
-            }
             u2.sounds_toggle.set_active(v.sounds_open);
             u2.inspector_toggle.set_active(v.inspector_open);
-            let total = u2.pattern.paned.height();
-            if total > 0 {
-                u2.pattern
-                    .paned
-                    .set_position(split_position(total, v.split, 120));
-            }
         },
     );
 }

@@ -1,8 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//! The Pattern page (docs/ui-design.md 3.2 to 3.4): a pattern strip, then
-//! steps over notes in one vertical paned. The steps section is a channel
-//! header column beside one step grid; the notes section is the piano roll
-//! with its toolbar. At narrow widths one section shows at a time.
+//! The Pattern page (docs/ui-design.md 3.2 to 3.4): an `AdwNavigationView`
+//! with two pages. The root page "Steps" has the pattern strip on top and
+//! the channel names beside the step grid. "Edit Notes" (the channel menu,
+//! the notes button, a double-click or Return on a channel, Ctrl+Return)
+//! pushes a page titled with the channel's name that shows the piano roll,
+//! with a back button, Escape and Alt+Left to return. There are no
+//! hand-drawn dividers: structure comes from the toolbar views and spacing.
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -13,13 +16,13 @@ use gtk::glib;
 
 use protocol::consts::MAX_STEPS;
 use protocol::edit::Edit;
-use protocol::ids::{ChannelId, PatternId};
+use protocol::ids::PatternId;
 
 use crate::app::{App, UiCommand};
 use crate::channel_list::ChannelList;
 use crate::lane_logic::Lane;
+use crate::selection::{self, NotesState, StepsState};
 use crate::shortcuts;
-use crate::size_class::{PatternFocus, split_position};
 use crate::view_math::SNAPS;
 use crate::widgets::lane_editor::LaneEditor;
 use crate::widgets::piano_roll::PianoRoll;
@@ -30,11 +33,33 @@ pub struct PatternPage {
     pub widget: gtk::Widget,
     pub roll: PianoRoll,
     pub snap: gtk::DropDown,
-    pub paned: gtk::Paned,
     pub channels: Rc<ChannelList>,
-    /// Share of the height for steps, applied once the paned has a size.
-    pub pending_split: Rc<Cell<Option<f64>>>,
+    pub nav: adw::NavigationView,
 }
+
+impl PatternPage {
+    /// Whether the notes page is the one showing.
+    pub fn showing_notes(&self) -> bool {
+        on_notes(&self.nav)
+    }
+
+    /// Back to the steps.
+    pub fn show_steps(&self) {
+        if self.showing_notes() {
+            self.nav.pop();
+        }
+    }
+}
+
+/// Whether the notes page is the one showing.
+fn on_notes(nav: &adw::NavigationView) -> bool {
+    nav.visible_page()
+        .and_then(|p| p.tag())
+        .is_some_and(|t| t.as_str() == NOTES_TAG)
+}
+
+const STEPS_TAG: &str = "steps";
+const NOTES_TAG: &str = "notes";
 
 /// A toolbar row that never forces the window wider: it scrolls sideways
 /// when it does not fit.
@@ -92,77 +117,81 @@ pub fn add_channel_menu() -> gio::Menu {
 pub fn build(window: &adw::ApplicationWindow, app: &Rc<App>) -> PatternPage {
     let _ = window;
     let channels = ChannelList::new(app);
-    let steps_box = build_steps(app, &channels);
-    let (roll, notes_box, snap) = build_notes(app);
+    let steps_content = build_steps(app, &channels);
+    let (roll, notes_page, snap) = build_notes(app);
 
-    let paned = gtk::Paned::new(gtk::Orientation::Vertical);
-    paned.set_start_child(Some(&steps_box));
-    paned.set_end_child(Some(&notes_box));
-    paned.set_resize_start_child(true);
-    paned.set_resize_end_child(true);
-    paned.set_shrink_start_child(false);
-    paned.set_shrink_end_child(false);
-    paned.set_wide_handle(true);
-
-    // The pattern strip above the paned.
+    // Root page: the pattern strip over the steps.
     let strip = build_strip(app);
-    let root = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    root.append(&strip);
-    root.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
-    paned.set_vexpand(true);
-    root.append(&paned);
+    let steps_view = adw::ToolbarView::new();
+    steps_view.add_top_bar(&strip);
+    steps_view.set_content(Some(&steps_content));
+    let steps_page = adw::NavigationPage::with_tag(&steps_view, "Steps", STEPS_TAG);
 
-    // Which sections show: the focus and the size class decide.
-    let apply_focus = {
-        let (a, s, n) = (app.clone(), steps_box.clone(), notes_box.clone());
-        move || {
-            let f = a.effective_focus();
-            s.set_visible(f.shows_steps());
-            n.set_visible(f.shows_notes());
-        }
-    };
-    apply_focus();
-    app.on_view_change(apply_focus);
+    let nav = adw::NavigationView::new();
+    nav.set_pop_on_escape(false);
+    nav.add(&steps_page);
+    nav.add(&notes_page.page);
+    nav.set_hexpand(true);
+    nav.set_vexpand(true);
 
-    // The divider starts at the size class's share once it has a height.
-    let pending = Rc::new(Cell::new(Some(app.size_class().default_split())));
+    // "Edit Notes": show the page of the selected channel and move the
+    // keyboard into the piano roll.
     {
-        let (p, pend) = (paned.clone(), pending.clone());
-        paned.add_tick_callback(move |_, _| {
-            let total = p.height();
-            if total > 0
-                && let Some(f) = pend.take()
-            {
-                p.set_position(split_position(total, f, 120));
+        let (nav, r) = (nav.clone(), roll.clone());
+        app.on_command(move |c| {
+            if c != UiCommand::EditNotes {
+                return;
             }
-            glib::ControlFlow::Continue
+            r.reveal();
+            let showing = on_notes(&nav);
+            if !showing {
+                nav.push_by_tag(NOTES_TAG);
+            }
+            let r = r.clone();
+            glib::idle_add_local_once(move || {
+                r.grab_focus();
+            });
         });
     }
-
-    // "Edit Notes" from a channel menu.
+    // The notes page needs a channel: if the last one goes away, leave.
     {
-        let (a, r) = (app.clone(), roll.clone());
-        app.on_command(move |c| {
-            if c == UiCommand::EditNotes {
-                if a.size_class().can_show_both() {
-                    if a.pattern_focus() == PatternFocus::Steps {
-                        a.set_pattern_focus(PatternFocus::Both);
-                    }
-                    r.grab_focus();
-                } else {
-                    a.set_pattern_focus(PatternFocus::Notes);
-                }
+        let (nav, a) = (nav.clone(), app.clone());
+        app.on_change(move || {
+            let showing = on_notes(&nav);
+            if showing && a.current_channel().is_none() {
+                nav.pop();
             }
         });
+    }
+    // The back button, Escape (when the roll has nothing to clear) and
+    // Alt+Left return to the steps.
+    {
+        let nav2 = nav.clone();
+        notes_page.back.connect_clicked(move |_| {
+            nav2.pop();
+        });
+        let keys = gtk::EventControllerKey::new();
+        let nav2 = nav.clone();
+        keys.connect_key_pressed(move |_, key, _, state| {
+            let back = key == gtk::gdk::Key::Escape
+                || (key == gtk::gdk::Key::Left && state.contains(gtk::gdk::ModifierType::ALT_MASK));
+            let on_page = on_notes(&nav2);
+            if back && on_page {
+                nav2.pop();
+                glib::Propagation::Stop
+            } else {
+                glib::Propagation::Proceed
+            }
+        });
+        notes_page.page.add_controller(keys);
     }
 
     PatternPage {
-        widget: root.upcast(),
+        widget: nav.clone().upcast(),
         roll,
         snap,
-        paned,
         channels,
-        pending_split: pending,
+        nav,
     }
 }
 
@@ -207,16 +236,6 @@ fn build_strip(app: &Rc<App>) -> gtk::ScrolledWindow {
     swing.add_mark(50.0, gtk::PositionType::Bottom, None);
     swing.set_tooltip_text(Some("Swing"));
     swing.update_property(&[gtk::accessible::Property::Label("Swing")]);
-    let spacer = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-    spacer.set_hexpand(true);
-    let focus = gtk::Button::from_icon_name("view-dual-symbolic");
-    focus.add_css_class("flat");
-    focus.set_action_name(Some("win.focus-pattern"));
-    focus.set_tooltip_text(Some(&shortcuts::tooltip(
-        "Focus Steps or Notes",
-        "win.focus-pattern",
-    )));
-    focus.update_property(&[gtk::accessible::Property::Label("Focus steps or notes")]);
 
     for w in [
         pattern_btn.upcast_ref::<gtk::Widget>(),
@@ -226,8 +245,6 @@ fn build_strip(app: &Rc<App>) -> gtk::ScrolledWindow {
         bars_label.upcast_ref(),
         swing_label.upcast_ref(),
         swing.upcast_ref(),
-        spacer.upcast_ref(),
-        focus.upcast_ref(),
     ] {
         bar.append(w);
     }
@@ -248,6 +265,10 @@ fn build_strip(app: &Rc<App>) -> gtk::ScrolledWindow {
         });
         let a = app.clone();
         remove.connect_clicked(move |_| {
+            if a.session.borrow().document().project.patterns.len() <= 1 {
+                a.toast("A project needs at least one pattern");
+                return;
+            }
             if let Some(p) = a.current_pattern() {
                 a.edit(vec![Edit::RemovePattern { pattern: p }]);
                 let a2 = a.clone();
@@ -410,12 +431,34 @@ fn steps_per_bar(app: &App) -> u32 {
 
 // ---- steps ----
 
+/// A status page with one button that makes the first pattern.
+fn no_pattern_page(app: &Rc<App>) -> adw::StatusPage {
+    let page = adw::StatusPage::new();
+    page.set_icon_name(Some("view-list-symbolic"));
+    page.set_title("No Pattern");
+    page.set_description(Some("A pattern holds the steps and notes of your beat."));
+    page.add_css_class("compact");
+    let b = gtk::Button::with_label("New Pattern");
+    b.add_css_class("suggested-action");
+    b.add_css_class("pill");
+    b.set_halign(gtk::Align::Center);
+    let a = app.clone();
+    b.connect_clicked(move |_| {
+        if let Some(p) = a.ensure_pattern() {
+            a.select_pattern(p);
+        }
+    });
+    page.set_child(Some(&b));
+    page
+}
+
 fn build_steps(app: &Rc<App>, channels: &Rc<ChannelList>) -> gtk::Widget {
     let stack = gtk::Stack::new();
     stack.set_vexpand(true);
     stack.set_hexpand(true);
+    stack.add_css_class("view");
 
-    // Empty state.
+    // Empty state: no channels.
     let empty = adw::StatusPage::new();
     empty.set_icon_name(Some("audio-x-generic-symbolic"));
     empty.set_title("No Channels Yet");
@@ -432,6 +475,7 @@ fn build_steps(app: &Rc<App>, channels: &Rc<ChannelList>) -> gtk::Widget {
     add.update_property(&[gtk::accessible::Property::Label("Add channel")]);
     empty.set_child(Some(&add));
     stack.add_named(&empty, Some("empty"));
+    stack.add_named(&no_pattern_page(app), Some("nopattern"));
 
     // Rows: header column and grid side by side, scrolling together.
     let grid = StepGrid::new(app.clone());
@@ -449,9 +493,10 @@ fn build_steps(app: &Rc<App>, channels: &Rc<ChannelList>) -> gtk::Widget {
     let left = gtk::Box::new(gtk::Orientation::Vertical, 0);
     left.append(&channels.widget);
     left.append(&selector);
+    // Names and steps are set apart by space, not by a line.
+    left.set_margin_end(12);
     let both = gtk::Box::new(gtk::Orientation::Horizontal, 0);
     both.append(&left);
-    both.append(&gtk::Separator::new(gtk::Orientation::Vertical));
     both.append(&hscroll);
     let add_row = gtk::MenuButton::new();
     add_row.set_child(Some(
@@ -481,8 +526,15 @@ fn build_steps(app: &Rc<App>, channels: &Rc<ChannelList>) -> gtk::Widget {
     let sync = {
         let (a, st) = (app.clone(), stack.clone());
         move || {
-            let none = a.session.borrow().document().project.channels.is_empty();
-            st.set_visible_child_name(if none { "empty" } else { "rows" });
+            let state = {
+                let s = a.session.borrow();
+                selection::steps_state(&s.document().project, &a.selection())
+            };
+            st.set_visible_child_name(match state {
+                StepsState::NoChannels => "empty",
+                StepsState::NoPattern => "nopattern",
+                StepsState::Rows => "rows",
+            });
         }
     };
     sync();
@@ -551,9 +603,13 @@ fn lane_selector(lane: &LaneEditor) -> gtk::Widget {
 
 // ---- notes ----
 
-fn build_notes(app: &Rc<App>) -> (PianoRoll, gtk::Widget, gtk::DropDown) {
-    let root = gtk::Box::new(gtk::Orientation::Vertical, 0);
+/// The notes page and the buttons the Pattern page wires up.
+struct NotesPage {
+    page: adw::NavigationPage,
+    back: gtk::Button,
+}
 
+fn build_notes(app: &Rc<App>) -> (PianoRoll, NotesPage, gtk::DropDown) {
     let tools = gtk::Box::new(gtk::Orientation::Horizontal, 6);
     tools.add_css_class("toolbar");
     let back = gtk::Button::new();
@@ -565,10 +621,12 @@ fn build_notes(app: &Rc<App>) -> (PianoRoll, gtk::Widget, gtk::DropDown) {
     ));
     back.add_css_class("flat");
     back.set_tooltip_text(Some("Back to Steps"));
-    back.set_visible(false);
-    let channel = gtk::DropDown::from_strings(&[]);
-    channel.set_tooltip_text(Some("Channel to Edit"));
-    channel.update_property(&[gtk::accessible::Property::Label("Channel to edit")]);
+    let title = gtk::Label::new(None);
+    title.add_css_class("heading");
+    title.set_ellipsize(gtk::pango::EllipsizeMode::End);
+    title.set_xalign(0.0);
+    title.set_hexpand(true);
+    title.set_accessible_role(gtk::AccessibleRole::Heading);
     let labels: Vec<&str> = SNAPS.iter().map(|s| s.0).collect();
     let snap = gtk::DropDown::from_strings(&labels);
     snap.set_tooltip_text(Some("Snap to Grid"));
@@ -589,7 +647,7 @@ fn build_notes(app: &Rc<App>) -> (PianoRoll, gtk::Widget, gtk::DropDown) {
     vel.update_property(&[gtk::accessible::Property::Label("Show velocity lane")]);
     for w in [
         back.upcast_ref::<gtk::Widget>(),
-        channel.upcast_ref(),
+        title.upcast_ref(),
         snap.upcast_ref(),
         zoom_out.upcast_ref(),
         zoom_in.upcast_ref(),
@@ -597,8 +655,6 @@ fn build_notes(app: &Rc<App>) -> (PianoRoll, gtk::Widget, gtk::DropDown) {
     ] {
         tools.append(w);
     }
-    root.append(&toolbar_scroller(&tools));
-    root.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
 
     let roll = PianoRoll::new(app.clone());
     let grid = gtk::Grid::new();
@@ -607,7 +663,7 @@ fn build_notes(app: &Rc<App>) -> (PianoRoll, gtk::Widget, gtk::DropDown) {
     grid.attach(&roll, 0, 0, 1, 1);
     grid.attach(&vs, 1, 0, 1, 1);
     grid.attach(&hs, 0, 1, 1, 1);
-    let hint = gtk::Label::new(Some("Click the grid to add a note."));
+    let hint = gtk::Label::new(Some("Click to add notes"));
     hint.add_css_class("dim-label");
     hint.set_can_target(false);
     hint.set_halign(gtk::Align::Center);
@@ -625,11 +681,15 @@ fn build_notes(app: &Rc<App>) -> (PianoRoll, gtk::Widget, gtk::DropDown) {
     let stack = gtk::Stack::new();
     stack.add_named(&overlay, Some("roll"));
     stack.add_named(&none, Some("none"));
+    stack.add_named(&no_pattern_page(app), Some("nopattern"));
     stack.set_vexpand(true);
-    root.append(&stack);
+    stack.add_css_class("view");
 
-    let updating = Rc::new(Cell::new(false));
-    let ids: Rc<RefCell<Vec<ChannelId>>> = Rc::new(RefCell::new(Vec::new()));
+    let view = adw::ToolbarView::new();
+    view.add_top_bar(&tools);
+    view.set_content(Some(&stack));
+    let page = adw::NavigationPage::with_tag(&view, "Notes", NOTES_TAG);
+
     {
         let r = roll.clone();
         snap.connect_selected_notify(move |d| r.set_snap_index(d.selected() as usize));
@@ -639,82 +699,46 @@ fn build_notes(app: &Rc<App>) -> (PianoRoll, gtk::Widget, gtk::DropDown) {
         zoom_out.connect_clicked(move |_| r.zoom_x(1.0 / 1.3));
         let r = roll.clone();
         vel.connect_toggled(move |b| r.set_velocity_lane(b.is_active()));
-        let a = app.clone();
-        back.connect_clicked(move |_| a.set_pattern_focus(PatternFocus::Steps));
-        let (a, ids2, up) = (app.clone(), ids.clone(), updating.clone());
-        channel.connect_selected_notify(move |d| {
-            if up.get() {
-                return;
-            }
-            if let Some(id) = ids2.borrow().get(d.selected() as usize).copied() {
-                a.select_channel(id);
-            }
-        });
-    }
-    {
-        let (a, b) = (app.clone(), back.clone());
-        let f = move || b.set_visible(!a.size_class().can_show_both());
-        f();
-        app.on_view_change(f);
     }
 
     let sync = {
-        let (a, stack, hint, channel, ids, up) = (
+        let (a, stack, hint, page, title) = (
             app.clone(),
             stack.clone(),
             hint.clone(),
-            channel.clone(),
-            ids.clone(),
-            updating.clone(),
+            page.clone(),
+            title.clone(),
         );
         move || {
-            up.set(true);
-            let (names, new_ids, has_notes, has_channel) = {
+            let sel = a.selection();
+            let (state, show_hint, name) = {
                 let s = a.session.borrow();
                 let p = &s.document().project;
-                let cur = a.current_channel();
-                let pat = a.current_pattern().and_then(|id| p.pattern(id));
-                let has_notes = match (pat, cur) {
-                    (Some(pt), Some(c)) => !pt.notes_of(c).is_empty(),
-                    _ => false,
-                };
                 (
-                    p.channels
-                        .iter()
-                        .map(|c| c.name.clone())
-                        .collect::<Vec<_>>(),
-                    p.channels.iter().map(|c| c.id).collect::<Vec<_>>(),
-                    has_notes,
-                    cur.is_some() && pat.is_some(),
+                    selection::notes_state(&sel),
+                    selection::show_notes_hint(p, &sel),
+                    sel.channel
+                        .and_then(|id| p.channel(id))
+                        .map(|c| c.name.clone()),
                 )
             };
-            stack.set_visible_child_name(if has_channel { "roll" } else { "none" });
-            hint.set_visible(has_channel && !has_notes);
-            let current_names: Vec<String> = channel
-                .model()
-                .and_then(|m| m.downcast::<gtk::StringList>().ok())
-                .map(|l| {
-                    (0..l.n_items())
-                        .filter_map(|i| l.string(i).map(|s| s.to_string()))
-                        .collect()
-                })
-                .unwrap_or_default();
-            if current_names != names {
-                let refs: Vec<&str> = names.iter().map(String::as_str).collect();
-                channel.set_model(Some(&gtk::StringList::new(&refs)));
+            stack.set_visible_child_name(match state {
+                NotesState::NoPattern => "nopattern",
+                NotesState::PickChannel => "none",
+                NotesState::Roll => "roll",
+            });
+            hint.set_visible(state == NotesState::Roll && show_hint);
+            // The page is named after the channel it edits.
+            let name = name.unwrap_or_else(|| "Notes".to_string());
+            if page.title() != name {
+                page.set_title(&name);
             }
-            *ids.borrow_mut() = new_ids.clone();
-            if let Some(i) = a
-                .current_channel()
-                .and_then(|id| new_ids.iter().position(|x| *x == id))
-                && channel.selected() as usize != i
-            {
-                channel.set_selected(i as u32);
+            if title.text() != name {
+                title.set_text(&name);
             }
-            up.set(false);
         }
     };
     sync();
     app.on_change(sync);
-    (roll, root.upcast(), snap)
+    (roll, NotesPage { page, back }, snap)
 }

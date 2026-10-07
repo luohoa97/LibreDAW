@@ -64,7 +64,9 @@
 /* Channel header rows in the step section. */
 .ldaw-channel-color { min-width: 4px; border-radius: 2px; }
 .ldaw-channel-row.muted label.ldaw-channel-name { opacity: 0.55; }
-.ldaw-channel-row.selected { background-color: alpha(@accent_bg_color, 0.18); }
+/* The names are a stock navigation list; flatten its rows to the step row height. */
+list.ldaw-channel-list { background: none; }
+list.ldaw-channel-list > row { min-height: 0; padding: 0 4px; margin: 0; }
 
 /* Touch sizes (bp-narrow). */
 window.touch .toolbar button { min-height: 44px; min-width: 44px; }

@@ -458,6 +458,14 @@ impl PianoRoll {
             .max(1)
     }
 
+    /// Scrolls to the channel's notes (or its root key when it has none),
+    /// as when the channel first appears; "Edit Notes" calls this so the
+    /// roll always opens on the sound being edited.
+    pub fn reveal(&self) {
+        self.imp().last_shown.set(None);
+        self.refresh();
+    }
+
     fn refresh(&self) {
         if let Some(v) = self.view() {
             prune_selection(&mut self.imp().selection.borrow_mut(), &v.notes);
@@ -1091,6 +1099,11 @@ impl PianoRoll {
                 true
             }
             gdk::Key::Escape => {
+                // With nothing selected Escape is not ours: it goes back
+                // to the steps.
+                if imp.selection.borrow().is_empty() {
+                    return false;
+                }
                 imp.selection.borrow_mut().clear();
                 self.after_input();
                 true
