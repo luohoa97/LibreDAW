@@ -50,14 +50,38 @@ impl StepLayout {
         }
     }
 
+    /// The layout with cells widened to fill `width` (docs/ui-design.md
+    /// 4.2), never below the base width and never above `MAX_CELL_W`.
+    pub fn fitted(&self, width: f64, steps: u32) -> StepLayout {
+        if steps == 0 {
+            return *self;
+        }
+        let groups = (steps - 1) / self.group.max(1);
+        let avail = width - self.name_w - self.left_pad - 8.0 - groups as f64 * self.group_gap;
+        let cw = (avail - (steps - 1) as f64 * self.cell_gap) / steps as f64;
+        StepLayout {
+            cell_w: cw.clamp(self.cell_w, MAX_CELL_W.max(self.cell_w)),
+            ..*self
+        }
+    }
+
     /// Height of a cell inside a row.
     pub fn cell_h(&self) -> f64 {
         (self.row_h - 8.0).max(8.0)
     }
 }
 
+/// The layout the step grid and the lane editor both use at `width`: base
+/// cells for the size class, widened to fill the width.
+pub fn grid_layout(row_h: f64, touch: bool, width: f64, steps: u32) -> StepLayout {
+    StepLayout::cells_only(row_h, touch).fitted(width, steps)
+}
+
 /// Height of the step ruler (and of the spacer above the header column).
 pub const RULER_H: f64 = 24.0;
+
+/// Widest a step cell grows when the grid has room (docs/ui-design.md 4.2).
+pub const MAX_CELL_W: f64 = 72.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Hit {
@@ -143,7 +167,28 @@ impl StepLayout {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Cell {
     Off,
-    On { vel: u8 },
+    /// A step note with its lanes: velocity, pitch offset in semitones, and
+    /// ratchet count (1 = no ratchet).
+    On {
+        vel: u8,
+        off: i8,
+        repeat: u8,
+    },
+}
+
+impl Cell {
+    /// A plain step: no pitch offset, no ratchet.
+    pub fn on(vel: u8) -> Cell {
+        Cell::On {
+            vel,
+            off: 0,
+            repeat: 1,
+        }
+    }
+
+    pub fn is_on(&self) -> bool {
+        matches!(self, Cell::On { .. })
+    }
 }
 
 /// A row as the grid shows it.
@@ -164,10 +209,16 @@ pub fn row_view(pattern: &Pattern, channel: &Channel) -> RowView {
             let i = (n.start / pattern.step_ticks) as usize;
             if let Some(c) = cells.get_mut(i) {
                 *c = match *c {
-                    Cell::On { vel } => Cell::On {
+                    Cell::On { vel, off, repeat } => Cell::On {
                         vel: vel.max(n.vel),
+                        off,
+                        repeat,
                     },
-                    Cell::Off => Cell::On { vel: n.vel },
+                    Cell::Off => Cell::On {
+                        vel: n.vel,
+                        off: n.off,
+                        repeat: n.repeat.max(1),
+                    },
                 };
             }
         } else {
@@ -184,7 +235,16 @@ pub fn row_view(pattern: &Pattern, channel: &Channel) -> RowView {
 pub fn cell_label(channel_name: &str, step: u32, cell: Cell, read_only: bool) -> String {
     let state = match cell {
         Cell::Off => "off".to_string(),
-        Cell::On { vel } => format!("on, velocity {vel}"),
+        Cell::On { vel, off, repeat } => {
+            let mut s = format!("on, velocity {vel}");
+            if off != 0 {
+                s.push_str(&format!(", pitch {off:+} semitones"));
+            }
+            if repeat > 1 {
+                s.push_str(&format!(", ratchet {repeat}"));
+            }
+            s
+        }
     };
     let ro = if read_only {
         ", read only, piano roll data"
@@ -282,6 +342,24 @@ mod tests {
     }
 
     #[test]
+    fn cells_grow_to_fill_the_width_within_limits() {
+        let base = StepLayout::cells_only(40.0, false);
+        let (w, _) = base.content_size(1, 16);
+        // No spare room: the base width.
+        assert_eq!(base.fitted(w, 16).cell_w, base.cell_w);
+        // Plenty of room: capped.
+        assert_eq!(base.fitted(5000.0, 16).cell_w, MAX_CELL_W);
+        // In between: the content ends at the available width.
+        let f = base.fitted(w + 160.0, 16);
+        assert!(f.cell_w > base.cell_w && f.cell_w < MAX_CELL_W);
+        let (fw, _) = f.content_size(1, 16);
+        assert!((fw - (w + 160.0)).abs() < 1e-6);
+        // Too narrow never shrinks below the base.
+        assert_eq!(base.fitted(10.0, 16).cell_w, base.cell_w);
+        assert_eq!(base.fitted(500.0, 0), base);
+    }
+
+    #[test]
     fn hit_testing() {
         let l = StepLayout::default();
         let (rows, steps) = (3, 16);
@@ -337,9 +415,9 @@ mod tests {
         let p = pat(vec![n(1, 0, 240, 36, 90), n(2, 480, 240, 36, 120)]);
         let r = row_view(&p, &c);
         assert_eq!(r.cells.len(), 16);
-        assert_eq!(r.cells[0], Cell::On { vel: 90 });
+        assert_eq!(r.cells[0], Cell::on(90));
         assert_eq!(r.cells[1], Cell::Off);
-        assert_eq!(r.cells[2], Cell::On { vel: 120 });
+        assert_eq!(r.cells[2], Cell::on(120));
         assert!(!r.piano_roll_data);
 
         // A note of another length or key makes the row read-only (5.2).
@@ -431,6 +509,69 @@ mod tests {
     }
 
     #[test]
+    fn row_shows_the_step_lanes() {
+        use doc::document::{Document, apply_batch};
+        use protocol::edit::{Edit, NewInstrument};
+        let (d, ids) = apply_batch(
+            &Document::new(),
+            &[
+                Edit::AddChannel {
+                    name: "c".into(),
+                    instrument: NewInstrument::Synth {
+                        params: SynthParams::default(),
+                    },
+                    root_key: 60,
+                    track: TrackId::MASTER,
+                },
+                Edit::AddPattern {
+                    name: "p".into(),
+                    length_steps: 16,
+                },
+            ],
+        )
+        .unwrap();
+        let (ch, pat) = (ChannelId(ids[0]), PatternId(ids[1]));
+        let (d, _) = apply_batch(
+            &d,
+            &[
+                Edit::SetStep {
+                    pattern: pat,
+                    channel: ch,
+                    step: 2,
+                    on: true,
+                    vel: Some(90),
+                },
+                Edit::SetStepLanes {
+                    pattern: pat,
+                    channel: ch,
+                    step: 2,
+                    vel: Some(64),
+                    off: Some(-5),
+                    repeat: Some(4),
+                },
+            ],
+        )
+        .unwrap();
+        let r = row_view(
+            d.project.pattern(pat).unwrap(),
+            d.project.channel(ch).unwrap(),
+        );
+        assert_eq!(
+            r.cells[2],
+            Cell::On {
+                vel: 64,
+                off: -5,
+                repeat: 4
+            }
+        );
+        assert!(!r.piano_roll_data, "a pitched step is still a step note");
+        assert_eq!(
+            cell_label("c", 2, r.cells[2], false),
+            "c, step 3, on, velocity 64, pitch -5 semitones, ratchet 4"
+        );
+    }
+
+    #[test]
     fn cursor_moves_and_clamps() {
         assert_eq!(move_cursor((0, 0), -1, -1, 3, 16), (0, 0));
         assert_eq!(move_cursor((2, 15), 1, 1, 3, 16), (2, 15));
@@ -441,7 +582,7 @@ mod tests {
     #[test]
     fn accessible_label_text() {
         assert_eq!(
-            cell_label("Kick", 4, Cell::On { vel: 100 }, false),
+            cell_label("Kick", 4, Cell::on(100), false),
             "Kick, step 5, on, velocity 100"
         );
         assert_eq!(

@@ -28,6 +28,7 @@ use protocol::ids::{ChannelId, PatternId};
 
 use crate::app::App;
 use crate::draw::{self, Palette, mix};
+use crate::engine_adapter;
 use crate::palette::{self, Role};
 use crate::perf;
 use crate::render_cache::{LayerCache, LayoutCache};
@@ -104,7 +105,8 @@ mod imp {
             let obj = self.obj();
             obj.set_focusable(true);
             obj.set_can_focus(true);
-            obj.set_halign(gtk::Align::Start);
+            obj.set_halign(gtk::Align::Fill);
+            obj.set_hexpand(true);
             obj.update_property(&[gtk::accessible::Property::Label("Steps")]);
 
             let drag = gtk::GestureDrag::new();
@@ -226,6 +228,15 @@ impl StepGrid {
         self.queue_draw();
     }
 
+    /// The layout at the current width: cells grow to fill spare room
+    /// (docs/ui-design.md 4.2), up to a maximum width. The lane editor
+    /// computes the same layout, so the columns line up.
+    fn layout(&self) -> StepLayout {
+        let (_, steps) = self.dims();
+        let base = self.imp().layout.get();
+        base.fitted(self.width() as f64, steps)
+    }
+
     /// Row height (the header column uses the same value).
     pub fn row_height(&self) -> f64 {
         self.imp().layout.get().row_h
@@ -324,7 +335,7 @@ impl StepGrid {
 
     fn hover_at(&self, p: Option<(f64, f64)>) {
         let (rows, steps) = self.dims();
-        let layout = self.imp().layout.get();
+        let layout = self.layout();
         let h = p.and_then(|(x, y)| match layout.hit(x, y, rows, steps) {
             Hit::Cell { row, step } => Some((row, step)),
             _ => None,
@@ -338,7 +349,7 @@ impl StepGrid {
         self.grab_focus();
         self.imp().drag_start.set((x, y));
         let (rows, steps) = self.dims();
-        let layout = self.imp().layout.get();
+        let layout = self.layout();
         if let Hit::Cell { row, step } = layout.hit(x, y, rows, steps) {
             self.imp().cursor.set((row, step));
             if let Some(c) = self.channel_at(row) {
@@ -369,7 +380,7 @@ impl StepGrid {
             Some(s) => (s.row, s.on, s.last),
             None => return,
         };
-        let Some(step) = self.imp().layout.get().nearest_step(x, steps) else {
+        let Some(step) = self.layout().nearest_step(x, steps) else {
             return;
         };
         if last == Some(step) {
@@ -521,7 +532,7 @@ impl StepGrid {
     fn draw_static(&self, s: &gtk::Snapshot) {
         let pal = Palette::current();
         let colors = palette::colors();
-        let layout = self.imp().layout.get();
+        let layout = self.layout();
         let (w, h) = (self.width() as f64, self.height() as f64);
         draw::fill(s, &pal.bg, 0.0, 0.0, w, h);
         let app = self.app();
@@ -580,7 +591,33 @@ impl StepGrid {
                 let cy = y + pad_y;
                 let on = rv.cells.get(st as usize).copied();
                 match on {
-                    Some(StepCell::On { vel }) => {
+                    Some(StepCell::On { vel, off, repeat }) => {
+                        // Swing delays odd steps: the cell starts when the
+                        // note does (the same function the compiler calls)
+                        // and keeps its right edge, so neighbors never
+                        // overlap. A ghost outline marks the column.
+                        let start = st * pat.step_ticks;
+                        let delay = engine_adapter::swung_start(start, pat.step_ticks, pat.swing)
+                            .saturating_sub(start);
+                        let shift = if pat.step_ticks > 0 {
+                            delay as f64 / pat.step_ticks as f64 * (layout.cell_w + layout.cell_gap)
+                        } else {
+                            0.0
+                        }
+                        .min((layout.cell_w - 8.0).max(0.0));
+                        let (cx, cw) = (x + shift, layout.cell_w - shift);
+                        if shift > 0.5 {
+                            draw::rounded(s, &off_edge, x, cy, layout.cell_w, ch_h, 4.0);
+                            draw::rounded(
+                                s,
+                                &pal.bg,
+                                x + 1.0,
+                                cy + 1.0,
+                                layout.cell_w - 2.0,
+                                ch_h - 2.0,
+                                3.0,
+                            );
+                        }
                         // Louder steps are more opaque; the bar under the
                         // cell carries the same level for anyone who cannot
                         // tell opacity apart.
@@ -589,12 +626,31 @@ impl StepGrid {
                         if muted {
                             c = mix(&c, &pal.bg, 0.4);
                         }
-                        draw::rounded(s, &c, x, cy, layout.cell_w, ch_h, 4.0);
-                        if layout.cell_w >= 20.0 {
-                            let bw = (layout.cell_w - 8.0) * (vel as f64 / 127.0);
+                        draw::rounded(s, &c, cx, cy, cw, ch_h, 4.0);
+                        if cw >= 20.0 {
+                            let bw = (cw - 8.0) * (vel as f64 / 127.0);
                             let mut bc = colors.get(Role::ViewBg);
                             bc.set_alpha(0.55);
-                            draw::fill(s, &bc, x + 4.0, cy + ch_h - 5.0, bw, 2.0);
+                            draw::fill(s, &bc, cx + 4.0, cy + ch_h - 5.0, bw, 2.0);
+                        }
+                        // Ratchets: a gap before each repeat, at the
+                        // positions the compiler plays them.
+                        for i in 1..repeat {
+                            let (o, _) = engine_adapter::ratchet_part(pat.step_ticks, repeat, i);
+                            let tx = cx + o as f64 / pat.step_ticks.max(1) as f64 * cw;
+                            draw::fill(s, &pal.bg, tx - 1.0, cy + 2.0, 2.0, ch_h - 4.0);
+                        }
+                        if off != 0 && cw >= 24.0 {
+                            let l = text.get(self, &format!("{off:+}"), false);
+                            let (tw, th) = l.pixel_size();
+                            let tc = palette::readable_on(&c);
+                            draw::layout_at(
+                                s,
+                                &l,
+                                &tc,
+                                cx + (cw - tw as f64) / 2.0,
+                                cy + (ch_h - th as f64) / 2.0 - 3.0,
+                            );
                         }
                     }
                     _ => {
@@ -631,7 +687,7 @@ impl StepGrid {
     /// Playhead, hover, and keyboard cursor: a few rectangles per frame.
     fn draw_dynamic(&self, s: &gtk::Snapshot) {
         let imp = self.imp();
-        let layout = imp.layout.get();
+        let layout = self.layout();
         let app = self.app();
         let pal = Palette::current();
         let sess = app.session.borrow();

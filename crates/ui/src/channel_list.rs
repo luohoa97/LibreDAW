@@ -34,7 +34,10 @@ pub fn signature(app: &App, row_h: u32) -> String {
     let p = &s.document().project;
     let mut out = format!("{row_h}|");
     for c in &p.channels {
-        out.push_str(&format!("{}:{}:{};", c.id, c.name, c.mix.mute as u8));
+        out.push_str(&format!(
+            "{}:{}:{}:{};",
+            c.id, c.name, c.mix.mute as u8, c.choke_group
+        ));
     }
     out
 }
@@ -133,7 +136,7 @@ impl ChannelList {
             .channels
             .clone();
         for ch in chans {
-            let row = self.build_row(ch.id, &ch.name, ch.mix.mute, false, row_h);
+            let row = self.build_row(ch.id, &ch.name, ch.mix.mute, ch.choke_group, row_h);
             self.rows.append(&row);
             self.row_widgets.borrow_mut().push((ch.id, row));
         }
@@ -144,15 +147,12 @@ impl ChannelList {
         id: ChannelId,
         name: &str,
         muted: bool,
-        selected: bool,
+        choke: u8,
         row_h: u32,
     ) -> gtk::Box {
         let row = gtk::Box::new(gtk::Orientation::Horizontal, 4);
         row.add_css_class("ldaw-channel-row");
         row.set_hexpand(false);
-        if selected {
-            row.add_css_class("selected");
-        }
         if muted {
             row.add_css_class("muted");
         }
@@ -245,6 +245,21 @@ impl ChannelList {
         first.append(Some("Edit _Sound"), Some("row.sound"));
         first.append(Some("Edit _Notes"), Some("row.notes"));
         menu.append_section(None, &first);
+        // Channels in the same choke group cut each other off (15.1).
+        let choke_menu = gio::Menu::new();
+        let none = gio::MenuItem::new(Some("None"), None);
+        none.set_action_and_target_value(Some("row.choke"), Some(&0i32.to_variant()));
+        choke_menu.append_item(&none);
+        for g in 1..=protocol::consts::MAX_CHOKE_GROUP as i32 {
+            let item = gio::MenuItem::new(Some(&format!("Group {g}")), None);
+            item.set_action_and_target_value(Some("row.choke"), Some(&g.to_variant()));
+            choke_menu.append_item(&item);
+        }
+        menu.append_section(None, &{
+            let m = gio::Menu::new();
+            m.append_submenu(Some("C_hoke Group"), &choke_menu);
+            m
+        });
         let second = gio::Menu::new();
         second.append(Some("_Rename"), Some("row.rename"));
         second.append(Some("Remove _Channel"), Some("row.remove"));
@@ -287,6 +302,24 @@ impl ChannelList {
         add("rename", Box::new(move || lab.start_editing()));
         let a = self.app.clone();
         add("remove", Box::new(move || channels::remove(&a, id)));
+        {
+            let a = self.app.clone();
+            let act = gio::SimpleAction::new_stateful(
+                "choke",
+                Some(gtk::glib::VariantTy::INT32),
+                &(choke as i32).to_variant(),
+            );
+            act.connect_activate(move |act, v| {
+                if let Some(g) = v.and_then(|v| v.get::<i32>()) {
+                    act.set_state(&g.to_variant());
+                    a.edit(vec![Edit::SetChokeGroup {
+                        channel: id,
+                        group: g as u8,
+                    }]);
+                }
+            });
+            group.add_action(&act);
+        }
         row.insert_action_group("row", Some(&group));
         row
     }

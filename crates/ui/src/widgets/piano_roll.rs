@@ -1297,7 +1297,15 @@ impl PianoRoll {
             draw::fill(s, &pal.row_odd, vp.key_w, vt, vp.grid_width(), vp.vel_h);
             draw::hline(s, &pal.line_bar, vt, 0.0, w);
             draw::fill(s, &pal.bg, 0.0, vt, vp.key_w, vp.vel_h);
-            let l = text.get(self, "Velocity", false);
+            // The label stays inside the key column: smaller type, and an
+            // ellipsis if a larger font still does not fit, so it never
+            // runs under the first velocity stem.
+            let l = self.create_pango_layout(Some("Velocity"));
+            let attrs = gtk::pango::AttrList::new();
+            attrs.insert(gtk::pango::AttrFloat::new_scale(0.75));
+            l.set_attributes(Some(&attrs));
+            l.set_ellipsize(gtk::pango::EllipsizeMode::End);
+            l.set_width(((vp.key_w - 8.0) * gtk::pango::SCALE as f64) as i32);
             draw::layout_at(s, &l, &pal.text_dim, 6.0, vt + 4.0);
             s.push_clip(&draw::rect(vp.key_w, vt, vp.grid_width(), vp.vel_h));
             for (t, level) in vm::grid_lines(t0, t1, vp.px_per_tick, v.bar_ticks, snap, 9.0) {

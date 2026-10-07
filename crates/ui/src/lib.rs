@@ -18,6 +18,7 @@ pub mod files;
 pub mod help;
 pub mod inspector;
 pub mod knob_logic;
+pub mod lane_logic;
 pub mod mixer;
 pub mod palette;
 pub mod pattern_page;

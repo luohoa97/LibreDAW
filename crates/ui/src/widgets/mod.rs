@@ -3,6 +3,7 @@
 
 pub mod color_bar;
 pub mod knob;
+pub mod lane_editor;
 pub mod meter;
 pub mod piano_roll;
 pub mod step_grid;

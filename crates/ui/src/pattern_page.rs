@@ -17,9 +17,11 @@ use protocol::ids::{ChannelId, PatternId};
 
 use crate::app::{App, UiCommand};
 use crate::channel_list::ChannelList;
+use crate::lane_logic::Lane;
 use crate::shortcuts;
 use crate::size_class::{PatternFocus, split_position};
 use crate::view_math::SNAPS;
+use crate::widgets::lane_editor::LaneEditor;
 use crate::widgets::piano_roll::PianoRoll;
 use crate::widgets::step_grid::StepGrid;
 use doc::presets;
@@ -189,6 +191,18 @@ fn build_strip(app: &Rc<App>) -> gtk::ScrolledWindow {
     let bars = gtk::SpinButton::with_range(1.0, 16.0, 1.0);
     bars.set_tooltip_text(Some("Pattern Length in Bars"));
     bars.update_property(&[gtk::accessible::Property::Label("Pattern length in bars")]);
+    // Swing: percent of a step by which odd steps are delayed (15.4).
+    let swing_label = gtk::Label::new(Some("Swing"));
+    swing_label.add_css_class("dim-label");
+    let swing = gtk::Scale::with_range(gtk::Orientation::Horizontal, 0.0, 75.0, 1.0);
+    swing.set_width_request(140);
+    swing.set_draw_value(true);
+    swing.set_value_pos(gtk::PositionType::Right);
+    swing.set_format_value_func(|_, v| format!("{}%", v.round() as i32));
+    swing.add_mark(0.0, gtk::PositionType::Bottom, None);
+    swing.add_mark(50.0, gtk::PositionType::Bottom, None);
+    swing.set_tooltip_text(Some("Swing"));
+    swing.update_property(&[gtk::accessible::Property::Label("Swing")]);
     let spacer = gtk::Box::new(gtk::Orientation::Horizontal, 0);
     spacer.set_hexpand(true);
     let focus = gtk::Button::from_icon_name("view-dual-symbolic");
@@ -206,6 +220,8 @@ fn build_strip(app: &Rc<App>) -> gtk::ScrolledWindow {
         remove.upcast_ref(),
         bars.upcast_ref(),
         bars_label.upcast_ref(),
+        swing_label.upcast_ref(),
+        swing.upcast_ref(),
         spacer.upcast_ref(),
         focus.upcast_ref(),
     ] {
@@ -258,8 +274,35 @@ fn build_strip(app: &Rc<App>) -> gtk::ScrolledWindow {
         });
     }
 
+    {
+        let (a, up) = (app.clone(), updating.clone());
+        swing.connect_value_changed(move |s| {
+            if up.get() {
+                return;
+            }
+            let Some(p) = a.current_pattern() else { return };
+            let want = (s.value().round() as u16 * 10).min(protocol::consts::MAX_SWING);
+            let cur = a
+                .session
+                .borrow()
+                .document()
+                .project
+                .pattern(p)
+                .map(|x| x.swing);
+            if cur != Some(want) {
+                a.edit_resting(
+                    "Swing",
+                    vec![Edit::SetSwing {
+                        pattern: p,
+                        swing: want,
+                    }],
+                );
+            }
+        });
+    }
+
     let sync = {
-        let (a, ids, up, btn, list, bars, pop) = (
+        let (a, ids, up, btn, list, bars, pop, swing) = (
             app.clone(),
             ids.clone(),
             updating.clone(),
@@ -267,9 +310,26 @@ fn build_strip(app: &Rc<App>) -> gtk::ScrolledWindow {
             pat_list.clone(),
             bars.clone(),
             pop.clone(),
+            swing.clone(),
         );
         move || {
             up.set(true);
+            let cur_swing = a
+                .current_pattern()
+                .and_then(|id| {
+                    a.session
+                        .borrow()
+                        .document()
+                        .project
+                        .pattern(id)
+                        .map(|p| p.swing)
+                })
+                .unwrap_or(0);
+            let pct = cur_swing as f64 / 10.0;
+            if (swing.value() - pct).abs() > 0.5 {
+                swing.set_value(pct);
+            }
+            swing.set_sensitive(a.current_pattern().is_some());
             let (names, new_ids) = {
                 let s = a.session.borrow();
                 let p = &s.document().project;
@@ -371,13 +431,22 @@ fn build_steps(app: &Rc<App>, channels: &Rc<ChannelList>) -> gtk::Widget {
 
     // Rows: header column and grid side by side, scrolling together.
     let grid = StepGrid::new(app.clone());
+    let lane = LaneEditor::new(app.clone());
+    let grid_col = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    grid_col.append(&grid);
+    grid_col.append(&lane);
     let hscroll = gtk::ScrolledWindow::new();
     hscroll.set_policy(gtk::PolicyType::Automatic, gtk::PolicyType::Never);
     hscroll.set_hexpand(true);
     hscroll.set_min_content_width(0);
-    hscroll.set_child(Some(&grid));
+    hscroll.set_child(Some(&grid_col));
+    // Under the channel names: the lane selector, level with the lane.
+    let selector = lane_selector(&lane);
+    let left = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    left.append(&channels.widget);
+    left.append(&selector);
     let both = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-    both.append(&channels.widget);
+    both.append(&left);
     both.append(&gtk::Separator::new(gtk::Orientation::Vertical));
     both.append(&hscroll);
     let add_row = gtk::MenuButton::new();
@@ -413,6 +482,65 @@ fn build_steps(app: &Rc<App>, channels: &Rc<ChannelList>) -> gtk::Widget {
     sync();
     app.on_change(sync);
     stack.upcast()
+}
+
+/// The three linked lane buttons (docs/ui-design.md 3.3). Only one lane is
+/// open; pressing the open one closes the lane.
+fn lane_selector(lane: &LaneEditor) -> gtk::Widget {
+    let row = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    row.add_css_class("linked");
+    row.set_valign(gtk::Align::Start);
+    row.set_halign(gtk::Align::Start);
+    row.set_margin_start(6);
+    row.set_margin_top(8);
+    row.set_margin_bottom(6);
+    row.update_property(&[gtk::accessible::Property::Label("Step lanes")]);
+    let buttons: Vec<(Lane, gtk::ToggleButton)> = Lane::ALL
+        .iter()
+        .map(|l| {
+            let b = gtk::ToggleButton::with_label(l.label());
+            b.set_tooltip_text(Some(l.tooltip()));
+            b.add_css_class("caption");
+            row.append(&b);
+            (*l, b)
+        })
+        .collect();
+    let guard = Rc::new(Cell::new(false));
+    for (l, b) in &buttons {
+        let (editor, all, guard, l) = (lane.clone(), buttons.clone(), guard.clone(), *l);
+        b.connect_toggled(move |me| {
+            if guard.get() {
+                return;
+            }
+            guard.set(true);
+            if me.is_active() {
+                for (other, ob) in &all {
+                    if *other != l {
+                        ob.set_active(false);
+                    }
+                }
+                editor.set_lane(Some(l));
+            } else {
+                editor.set_lane(None);
+            }
+            guard.set(false);
+        });
+    }
+    // Screenshot aid: `LIBREDAW_LANE=velocity|pitch|ratchet` opens a lane.
+    if let Ok(want) = std::env::var("LIBREDAW_LANE") {
+        let buttons = buttons.clone();
+        glib::timeout_add_local_once(std::time::Duration::from_millis(900), move || {
+            if let Some((_, b)) = buttons
+                .iter()
+                .find(|(l, _)| l.label().eq_ignore_ascii_case(&want))
+            {
+                b.set_active(true);
+            }
+        });
+    }
+    let scroller = toolbar_scroller(&row);
+    scroller.set_valign(gtk::Align::Start);
+    scroller.upcast()
 }
 
 // ---- notes ----
