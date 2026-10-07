@@ -196,7 +196,7 @@ impl RefDaw {
                 }))
             }
             RequestBody::ProjectList => ok(ReplyBody::Projects { projects: vec![] }),
-            RequestBody::ProjectNew { .. } => {
+            RequestBody::ProjectNew { .. } | RequestBody::ProjectClose => {
                 *self = RefDaw::empty();
                 ok(ReplyBody::Done)
             }
