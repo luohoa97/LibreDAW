@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//! The compact step-grid text used by `beat_grid_set` and `beat_grid_get`
+//! The compact step-grid text used by `beat_grid_set` and `content_get`
 //! (SPEC 18.4).
 //!
 //! # Grammar
@@ -17,7 +17,7 @@
 //! After removing `|` and spaces the number of characters must equal the
 //! content's `length_steps`. A row may also carry `ratchet` (2, 3, 4, 6 or 8),
 //! the ratchet count given to every hit that has no digit of its own, so an
-//! accent can be ratcheted (`X` with row ratchet 2). `beat_grid_get` shows a
+//! accent can be ratcheted (`X` with row ratchet 2). `content_get` shows a
 //! ratcheted hit as its digit even when it is also loud, so an accent that is
 //! ratcheted reads back as a digit.
 //!
@@ -159,7 +159,7 @@ pub fn read_existing(project: &Project, pattern: &Pattern) -> Vec<Option<Existin
     out
 }
 
-/// A row as `beat_grid_get` shows it, plus the velocity of its plain hits.
+/// A row as `content_get` shows it, plus the velocity of its plain hits.
 pub fn existing_to_row(existing: &[Option<Existing>]) -> (Row, u8) {
     let mut counts: Vec<(u8, usize)> = Vec::new();
     let row = existing

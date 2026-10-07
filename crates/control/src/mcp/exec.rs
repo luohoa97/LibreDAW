@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 use protocol::control::{
     BranchInfo, ControlError, JobState, Outcome, ReplyBody, Request, RequestBody,
 };
-use protocol::edit::{Applied, EditError};
+use protocol::edit::{Applied, Edit, EditError};
 use protocol::model::{Project, ticks_per_bar};
 use protocol::validate::ValidationError;
 use serde_json::{Value, json};
@@ -236,7 +236,13 @@ impl Exec {
                     body: ReplyBody::Applied(a),
                 }) => a,
                 Ok(Outcome::Ok { .. }) => return Err(unexpected("the edit")),
-                Ok(Outcome::Err { error }) => return Err(edit_error_out(&error, &built.labels)),
+                Ok(Outcome::Err { error }) => {
+                    if attempt == 0 && wrong_guess(&error, &built.predicted) {
+                        self.learn_counter(&built, rev)?;
+                        continue;
+                    }
+                    return Err(edit_error_out(&error, &built.labels));
+                }
                 Err(e) => return Err(call_error_out(&e)),
             };
             if ids::matches(&built.predicted, &applied.created) {
@@ -252,6 +258,24 @@ impl Exec {
             }
         }
         unreachable!("the loop returns")
+    }
+
+    /// The batch referred to an id the counter had already passed. Applies
+    /// its first creating edit alone, which reveals the counter (`deliver`
+    /// raises the floor from `created`), and takes it back at once.
+    fn learn_counter(&self, built: &Built, rev: u64) -> Out<()> {
+        let Some(i) = built.edits.iter().position(creates) else {
+            return Err(unexpected("the edit"));
+        };
+        let probe = RequestBody::Edit {
+            edits: built.edits[..=i].to_vec(),
+        };
+        match self.body(probe, Some(rev))? {
+            ReplyBody::Applied(_) => {}
+            _ => return Err(unexpected("the edit")),
+        }
+        self.body(RequestBody::Undo, None)?;
+        Ok(())
     }
 
     fn composed_reply(&self, applied: Applied, built: Built) -> ToolOutput {
@@ -903,4 +927,36 @@ pub fn control_error_out(e: &ControlError) -> ToolOutput {
         value: json!({"error": v, "code": code, "message": hint}),
         text: None,
     }
+}
+
+/// Edits that allocate ids.
+fn creates(e: &Edit) -> bool {
+    matches!(
+        e,
+        Edit::AddTrack { .. }
+            | Edit::AddChannel { .. }
+            | Edit::AddClip { .. }
+            | Edit::AddPattern { .. }
+            | Edit::AddInsert { .. }
+            | Edit::AddBuiltinInsert { .. }
+    )
+}
+
+/// The batch failed on an id this server predicted: the guess was low.
+fn wrong_guess(e: &ControlError, predicted: &[u32]) -> bool {
+    let id = match e {
+        ControlError::Edit {
+            error: EditError::NotFound { id, .. },
+            ..
+        }
+        | ControlError::Edit {
+            error:
+                EditError::Invalid {
+                    reason: ValidationError::MissingRef { id, .. },
+                },
+            ..
+        } => *id,
+        _ => return false,
+    };
+    predicted.contains(&id)
 }
