@@ -8,3 +8,15 @@ publish.workspace = true
 
 [lib]
 name = "plugin_host"
+
+[dependencies]
+libredaw-protocol = { path = "../protocol" }
+clap-sys = "0.5"
+libloading = "0.8"
+glib = "0.22"
+x11rb = "0.13"
+
+# Test fixtures: one cdylib holding several small CLAP plugins.
+[[example]]
+name = "test_plugins"
+crate-type = ["cdylib"]
