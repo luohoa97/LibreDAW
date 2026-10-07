@@ -7,7 +7,7 @@ use crate::compiled::{Compiled, InstrumentC};
 use crate::metronome::Click;
 use crate::mixer::{Fader, MuteSolo, SMOOTH_SECONDS, resolve_solo};
 use crate::plugins::{
-    OUT_EVENT_CAP, PluginApi, PluginNote, PluginOutEvent, ProcessArgs, note, out_event_to_engine,
+    OUT_EVENT_CAP, OutEvents, PluginApi, PluginNote, ProcessArgs, note, out_event_to_engine,
 };
 use crate::rt::{RtGuard, enter_rt_fp_mode, restore_fp_mode};
 use crate::sequencer::{BEAT_CAP, Beat, EVENT_CAP, SeqEvent, Sequencer, TraceEvent};
@@ -105,7 +105,7 @@ struct PluginEntry {
 struct PluginState {
     entries: Vec<PluginEntry>,
     api: PluginApi,
-    out_events: Vec<PluginOutEvent>,
+    out_events: OutEvents,
     rt_notes: Vec<PluginNote>,
     /// This sub-block's host-to-plugin events, and the current plugin's share.
     pe: Vec<PluginEvent>,
@@ -133,7 +133,7 @@ impl PluginState {
                 PLUGIN_SLOTS
             ],
             api: PluginApi::real(),
-            out_events: vec![PluginOutEvent::EMPTY; OUT_EVENT_CAP],
+            out_events: OutEvents::new(),
             rt_notes: Vec::with_capacity(EVENT_CAP),
             pe: Vec::with_capacity(PLUGIN_EVENT_RING_CAP),
             pe_slot: Vec::with_capacity(PLUGIN_EVENT_RING_CAP),
@@ -220,7 +220,6 @@ impl PluginState {
                 self.pe_slot.push(*e);
             }
         }
-        let mut n_out = 0usize;
         let mut args = ProcessArgs {
             frames: n,
             steady_time: steady,
@@ -233,11 +232,16 @@ impl PluginState {
         };
         let t0 = Instant::now();
         // SAFETY: attached and started above.
-        let ok = unsafe { (self.api.process)(h, &mut args, &mut self.out_events, &mut n_out) };
+        let ok = unsafe { (self.api.process)(h, &mut args, &mut self.out_events) };
         let us = t0.elapsed().as_micros().min(u32::MAX as u128) as u32;
         status.plugin_last_us[idx].store(us, Relaxed);
         status.plugin_max_us[idx].fetch_max(us, Relaxed);
-        for e in &self.out_events[..n_out.min(OUT_EVENT_CAP)] {
+        if self.out_events.dropped > 0 {
+            status
+                .event_overflows
+                .fetch_add(self.out_events.dropped as u64, Relaxed);
+        }
+        for e in &self.out_events.buf[..self.out_events.len.min(OUT_EVENT_CAP)] {
             push_engine_event(tx, status, out_event_to_engine(ps, e));
         }
         ok

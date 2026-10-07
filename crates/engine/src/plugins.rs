@@ -10,7 +10,31 @@ use protocol::engine::{EngineEvent, PluginEvent, PluginHandle, PluginSlot};
 pub use plugin_host::rt::{RtNote as PluginNote, RtOutEvent as PluginOutEvent};
 
 /// Capacity of the plugin output event scratch per `process()` call.
-pub const OUT_EVENT_CAP: usize = 256;
+pub const OUT_EVENT_CAP: usize = 512;
+
+/// Plugin-originated events of one call (the sink is preallocated).
+pub struct OutEvents {
+    pub buf: Vec<RtOutEvent>,
+    pub len: usize,
+    /// Events the host dropped because the sink was full.
+    pub dropped: u32,
+}
+
+impl OutEvents {
+    pub fn new() -> OutEvents {
+        OutEvents {
+            buf: vec![RtOutEvent::EMPTY; OUT_EVENT_CAP],
+            len: 0,
+            dropped: 0,
+        }
+    }
+}
+
+impl Default for OutEvents {
+    fn default() -> OutEvents {
+        OutEvents::new()
+    }
+}
 
 /// One `process()` call.
 pub struct ProcessArgs<'a> {
@@ -30,7 +54,7 @@ pub struct PluginApi {
     pub start: unsafe fn(PluginHandle) -> bool,
     pub stop: unsafe fn(PluginHandle),
     /// Returns true on success; output events go into `out`.
-    pub process: unsafe fn(PluginHandle, &mut ProcessArgs, &mut [RtOutEvent], &mut usize) -> bool,
+    pub process: unsafe fn(PluginHandle, &mut ProcessArgs, &mut OutEvents) -> bool,
 }
 
 unsafe fn real_start(h: PluginHandle) -> bool {
@@ -41,14 +65,9 @@ unsafe fn real_stop(h: PluginHandle) {
     unsafe { rt::stop_processing(h) }
 }
 
-unsafe fn real_process(
-    h: PluginHandle,
-    a: &mut ProcessArgs,
-    events: &mut [RtOutEvent],
-    n_events: &mut usize,
-) -> bool {
+unsafe fn real_process(h: PluginHandle, a: &mut ProcessArgs, out: &mut OutEvents) -> bool {
     let frames = a.frames;
-    let mut sink = RtEventSink::new(events);
+    let mut sink = RtEventSink::new(&mut out.buf);
     let [ol, or] = [&mut *a.out_l, &mut *a.out_r];
     let mut block = RtBlock {
         frames: frames as u32,
@@ -60,7 +79,8 @@ unsafe fn real_process(
     };
     // SAFETY: the caller guarantees `h` is attached and processing was started.
     let status = unsafe { rt::process(h, &mut block, &mut sink) };
-    *n_events = sink.as_slice().len();
+    out.len = sink.as_slice().len();
+    out.dropped = sink.dropped();
     status == RtStatus::Ok
 }
 
