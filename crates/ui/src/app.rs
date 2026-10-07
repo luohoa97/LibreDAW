@@ -15,8 +15,8 @@ use std::rc::Rc;
 use std::sync::atomic::Ordering;
 
 use protocol::edit::Edit;
-use protocol::engine::{EngineCommand, TransportMode};
-use protocol::ids::{ChannelId, PatternId, TrackId};
+use protocol::engine::EngineCommand;
+use protocol::ids::{ChannelId, ClipId, PatternId, TrackId};
 
 use crate::selection::{self, Selection};
 use crate::session::Session;
@@ -29,8 +29,13 @@ use doc::persist::ViewState;
 pub struct UiState {
     /// Where the project is saved; `None` until the first save.
     pub path: Option<PathBuf>,
+    /// The clip the editor shows, and its content (derived).
+    pub clip: Option<ClipId>,
     pub pattern: Option<PatternId>,
     pub channel: Option<ChannelId>,
+    /// The user cleared the channel selection (Escape, a click on empty
+    /// space): `fix_selection` leaves it empty until they pick one.
+    pub channel_cleared: bool,
     pub track: TrackId,
     /// Transport as the user asked for it.
     pub playing: bool,
@@ -40,9 +45,6 @@ pub struct UiState {
     pub preview_held: Option<(ChannelId, u8)>,
     /// The Play button is suggested until the first play of a new project.
     pub played_once: bool,
-    /// Pattern loops one pattern; Song plays the playlist (15.6).
-    pub mode: TransportMode,
-    pub loop_song: bool,
 }
 
 /// How the window reads and restores its view (`.view.toml`).
@@ -97,6 +99,8 @@ pub enum UiCommand {
     ShowSounds,
     /// Show the notes page of the selected channel and focus the piano roll.
     EditNotes,
+    /// Start renaming a channel in place.
+    RenameChannel(protocol::ids::ChannelId),
     /// Open the inspector on the Agent page.
     ShowAgent,
     /// The agent state changed (banner, indicator, Agent page).
@@ -134,15 +138,15 @@ impl App {
             view_hooks: RefCell::new(None),
             ui: RefCell::new(UiState {
                 path: None,
+                clip: None,
                 pattern: None,
                 channel: None,
+                channel_cleared: false,
                 track: TrackId::MASTER,
                 playing: false,
                 audio_error: None,
                 preview_held: None,
                 played_once: false,
-                mode: TransportMode::Pattern,
-                loop_song: true,
             }),
             listeners: RefCell::new(Vec::new()),
             toaster: RefCell::new(None),
@@ -183,9 +187,12 @@ impl App {
             let s = self.session.borrow();
             let p = &s.document().project;
             let mut ui = self.ui.borrow_mut();
+            // The view file names the content; the first clip that plays
+            // it becomes the selected clip again.
             if let Some(id) = v.pattern.map(PatternId)
-                && p.pattern(id).is_some()
+                && let Some(c) = p.clips.iter().find(|c| c.pattern == id)
             {
+                ui.clip = Some(c.id);
                 ui.pattern = Some(id);
             }
             if let Some(id) = v.channel.map(ChannelId)
@@ -266,14 +273,45 @@ impl App {
 
     /// Keeps the selection pointing at things that exist.
     pub fn fix_selection(&self) {
-        let sel = selection::fix(self.selection(), &self.session.borrow().document().project);
+        let cleared = self.ui.borrow().channel_cleared;
+        let sel = selection::fix_with(
+            self.selection(),
+            &self.session.borrow().document().project,
+            cleared,
+        );
         self.set_selection(sel);
+    }
+
+    /// Clears the channel selection (Escape, a click on empty space). It
+    /// stays clear until the user picks a channel or opens a project.
+    /// Returns whether anything was selected.
+    pub fn deselect_channel(&self) -> bool {
+        let had = {
+            let mut ui = self.ui.borrow_mut();
+            ui.channel_cleared = true;
+            ui.channel.take().is_some()
+        };
+        if had {
+            self.notify();
+        }
+        had
+    }
+
+    /// A new document: forget the selection, and let the first channel be
+    /// picked again.
+    pub fn reset_selection(&self) {
+        let mut ui = self.ui.borrow_mut();
+        ui.clip = None;
+        ui.pattern = None;
+        ui.channel = None;
+        ui.channel_cleared = false;
     }
 
     /// The selection: the one source of truth for what every view shows.
     pub fn selection(&self) -> Selection {
         let ui = self.ui.borrow();
         Selection {
+            clip: ui.clip,
             pattern: ui.pattern,
             channel: ui.channel,
             track: ui.track,
@@ -282,57 +320,65 @@ impl App {
 
     fn set_selection(&self, sel: Selection) {
         let mut ui = self.ui.borrow_mut();
+        ui.clip = sel.clip;
         ui.pattern = sel.pattern;
         ui.channel = sel.channel;
         ui.track = sel.track;
     }
 
-    /// Makes sure the project has a pattern: if it has none, adds
-    /// "Pattern 1" (inside the open undo gesture, if there is one) and
-    /// selects it.
-    pub fn ensure_pattern(&self) -> Option<PatternId> {
-        if let Some(p) = self
-            .session
-            .borrow()
-            .document()
-            .project
-            .patterns
-            .first()
-            .map(|p| p.id)
-        {
-            return Some(p);
-        }
-        let e = vec![Edit::AddPattern {
-            name: "Pattern 1".into(),
-            length_steps: 16,
-        }];
-        let made = if self.session.borrow().editor.gesture_open() {
-            self.gesture_edit(e)
-        } else {
-            self.edit(e)
+    /// "Edit Notes" / open the clip editor: on `channel`'s row (the
+    /// selected row when `None`) the selected clip if it is there, else the
+    /// row's first clip. Every way to ask for it comes here.
+    pub fn edit_notes(&self, channel: Option<ChannelId>) {
+        let clip = {
+            let s = self.session.borrow();
+            selection::clip_to_edit(&s.document().project, &self.selection(), channel)
         };
-        let id = PatternId(made?.created[0]);
-        self.ui.borrow_mut().pattern = Some(id);
-        Some(id)
+        match clip {
+            Some(c) => {
+                self.select_clip(c);
+                self.command(UiCommand::EditNotes);
+            }
+            None => {
+                if let Some(ch) = channel {
+                    self.select_channel(ch);
+                }
+                self.toast("This instrument has no clips yet: click its row on the timeline");
+            }
+        }
     }
 
-    /// "Edit Notes": selects the channel (the selected one when `None`),
-    /// makes sure a pattern exists, and asks the Pattern page to show that
-    /// channel's notes. Every way to ask for it comes here.
-    pub fn edit_notes(&self, channel: Option<ChannelId>) {
-        let plan = {
-            let s = self.session.borrow();
-            selection::plan_edit_notes(&s.document().project, &self.selection(), channel)
-        };
-        let Some(plan) = plan else {
-            self.toast("Add a channel first");
-            return;
-        };
-        if plan.create_pattern {
-            self.ensure_pattern();
+    /// Selects a clip; the editor shows it.
+    pub fn select_clip(&self, id: ClipId) {
+        let sel = selection::select_clip(
+            self.selection(),
+            &self.session.borrow().document().project,
+            id,
+        );
+        if sel.clip == Some(id) {
+            self.ui.borrow_mut().channel_cleared = false;
         }
-        self.select_channel(plan.select);
-        self.command(UiCommand::EditNotes);
+        self.set_selection(sel);
+        self.notify();
+    }
+
+    /// Deselects the clip (the editor closes); the row stays selected.
+    /// Returns whether a clip was selected.
+    pub fn deselect_clip(&self) -> bool {
+        let had = {
+            let mut ui = self.ui.borrow_mut();
+            ui.pattern = None;
+            ui.clip.take().is_some()
+        };
+        if had {
+            self.notify();
+        }
+        had
+    }
+
+    /// The selected clip.
+    pub fn current_clip(&self) -> Option<ClipId> {
+        self.ui.borrow().clip
     }
 
     /// Runs after a document change: fixes the selection, shows messages
@@ -359,16 +405,10 @@ impl App {
             &self.session.borrow().document().project,
             id,
         );
-        self.set_selection(sel);
-        self.notify();
-    }
-
-    pub fn select_pattern(&self, id: PatternId) {
-        self.ui.borrow_mut().pattern = Some(id);
-        let playing = self.ui.borrow().playing;
-        if playing {
-            self.send_pattern();
+        if sel.channel == Some(id) {
+            self.ui.borrow_mut().channel_cleared = false;
         }
+        self.set_selection(sel);
         self.notify();
     }
 
@@ -413,6 +453,11 @@ impl App {
         self.session
             .borrow_mut()
             .begin_gesture(Author::User, description)
+    }
+
+    /// As `gesture_begin`, for a script or an agent.
+    pub fn gesture_begin_as(&self, author: Author, description: &str) -> bool {
+        self.session.borrow_mut().begin_gesture(author, description)
     }
 
     pub fn gesture_edit(&self, edits: Vec<Edit>) -> Option<Applied> {
@@ -491,19 +536,6 @@ impl App {
 
     pub fn is_dirty(&self) -> bool {
         self.session.borrow().editor.is_dirty()
-    }
-
-    // ---- transport ----
-
-    fn send_pattern(&self) {
-        let p = self.ui.borrow().pattern;
-        if let Some(p) = p {
-            let _ = self
-                .session
-                .borrow_mut()
-                .link
-                .command(EngineCommand::SetPlayingPattern { pattern: p });
-        }
     }
 
     // ---- level meters ----
@@ -620,32 +652,7 @@ impl App {
         *self.preview_timer.borrow_mut() = Some(id);
     }
 
-    /// Pattern or Song transport (15.6). Takes effect on the next play.
-    pub fn set_transport_mode(&self, mode: TransportMode, loop_song: bool) {
-        {
-            let mut ui = self.ui.borrow_mut();
-            ui.mode = mode;
-            ui.loop_song = loop_song;
-        }
-        self.send_mode();
-        self.notify();
-    }
-
-    fn send_mode(&self) {
-        let (mode, loop_song) = {
-            let ui = self.ui.borrow();
-            (ui.mode, ui.loop_song)
-        };
-        let _ = self
-            .session
-            .borrow_mut()
-            .link
-            .command(EngineCommand::SetTransportMode { mode, loop_song });
-    }
-
     pub fn play(&self) {
-        self.send_pattern();
-        self.send_mode();
         let r = self.session.borrow_mut().link.command(EngineCommand::Play);
         if r.is_ok() {
             let mut ui = self.ui.borrow_mut();

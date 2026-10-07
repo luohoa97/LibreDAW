@@ -21,8 +21,9 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use control::{ClientInfo, ControlConfig, ControlServer, Incoming, Ticket, UiEvent};
 use protocol::control::{
-    Analysis, BufferSize, ControlError, JobState, Outcome, PluginInfo, ProjectInfo, ReplyBody,
-    Request, RequestBody, Setting, Settings, Theme, Transport, WavFormat, agent_string,
+    Analysis, BufferSize, ControlError, Focus, JobState, MAX_ACTIVITY_CHARS, Outcome, PluginInfo,
+    ProjectInfo, ReplyBody, Request, RequestBody, Setting, Settings, Theme, Transport, WavFormat,
+    agent_string,
 };
 use protocol::edit::{Edit, NewInstrument};
 
@@ -60,6 +61,32 @@ pub struct AgentUi {
     pub wants_control: bool,
     /// The ticket of an approval that timed out last (for the toast).
     pub timed_out: bool,
+    /// What the agent says it is doing now (18.2), if anything.
+    pub activity: Option<AgentActivity>,
+}
+
+/// An agent's declared activity (SPEC 18.2).
+#[derive(Clone, Debug, PartialEq)]
+pub struct AgentActivity {
+    /// Untrusted text, control characters removed, at most
+    /// `MAX_ACTIVITY_CHARS` characters.
+    pub text: String,
+    pub focus: Option<Focus>,
+    /// The author tag of the agent that set it.
+    pub author: String,
+    pub client: u64,
+}
+
+/// Cleans an activity text: no control characters, at most
+/// `MAX_ACTIVITY_CHARS` characters, trimmed. `None` when nothing is left.
+pub fn activity_text(s: &str) -> Option<String> {
+    let t: String = s
+        .chars()
+        .filter(|c| !c.is_control())
+        .take(MAX_ACTIVITY_CHARS)
+        .collect();
+    let t = t.trim().to_string();
+    (!t.is_empty()).then_some(t)
 }
 
 struct Job {
@@ -93,6 +120,15 @@ fn bad(reason: &str) -> Outcome {
     err(ControlError::BadRequest {
         reason: reason.into(),
     })
+}
+
+/// What a script hears in the Flatpak build.
+pub const SCRIPTS_OFF_IN_FLATPAK: &str =
+    "Scripting is not available in the Flatpak version of Oto. Agents still work.";
+
+/// Whether LibreDAW runs inside a Flatpak sandbox.
+pub fn in_flatpak() -> bool {
+    std::path::Path::new("/.flatpak-info").exists()
 }
 
 /// The author a client's commits carry.
@@ -329,6 +365,12 @@ fn reply(app: &App, ticket: Ticket, outcome: Outcome) {
 
 /// First look at a request: PRIVILEGED ones wait for the human.
 fn handle(app: &Rc<App>, inc: Incoming) {
+    // Scripts do not run in the Flatpak build (SPEC 19.3); they get a
+    // clear answer instead of a silent failure.
+    if inc.client.transport == Transport::Script && in_flatpak() {
+        reply(app, inc.ticket, bad(SCRIPTS_OFF_IN_FLATPAK));
+        return;
+    }
     let dirty = app.is_dirty();
     let summary = if inc.request.body.privileged(dirty) {
         Some(
@@ -558,6 +600,121 @@ fn note_activity(app: &App, author: &Author, edits: &[Edit]) {
     }
 }
 
+/// An agent declares (or ends, with `None` text) what it is doing (18.2).
+pub fn set_activity(app: &App, author: &Author, text: Option<&str>, focus: Option<Focus>) {
+    let client = match author {
+        Author::Agent(tag) => tag
+            .rsplit('-')
+            .next()
+            .and_then(|n| n.parse().ok())
+            .unwrap_or(0),
+        _ => 0,
+    };
+    let new = text.and_then(activity_text).map(|text| AgentActivity {
+        text,
+        focus,
+        author: author.tag(),
+        client,
+    });
+    let mut log = None;
+    if let Some(b) = app.bridge.borrow_mut().as_mut() {
+        if let Some(a) = &new
+            && b.ui.activity.as_ref().map(|o| &o.text) != Some(&a.text)
+        {
+            log = Some(a.text.clone());
+        }
+        b.ui.activity = new;
+    }
+    if let Some(text) = log {
+        push_activity(app, author, text);
+    }
+}
+
+fn push_activity(app: &App, author: &Author, text: String) {
+    if let Some(b) = app.bridge.borrow_mut().as_mut() {
+        b.ui.recent.insert(
+            0,
+            Activity {
+                text,
+                author: author.tag(),
+                unix_s: SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0),
+            },
+        );
+        b.ui.recent.truncate(30);
+    }
+}
+
+/// The sound library (installed packs and the user's folders).
+fn library(app: &App) -> Vec<crate::soundlib::Kit> {
+    crate::samples_ui::library(app)
+}
+
+/// `KitAdd`: imports the kit's files off the GTK thread, then adds one
+/// sampler channel per piece in one undo group by the agent.
+fn kit_add(
+    app: &Rc<App>,
+    ticket: Ticket,
+    author: &Author,
+    pack: &str,
+    kit: &str,
+    track: Option<protocol::ids::TrackId>,
+) -> Option<Outcome> {
+    let kits = library(app);
+    let Some(kit) = crate::sound_search::find_kit(&kits, pack, kit).cloned() else {
+        return Some(err(ControlError::NotFound { what: "kit".into() }));
+    };
+    if let Some(t) = track
+        && app.session.borrow().document().project.track(t).is_none()
+    {
+        return Some(err(ControlError::NotFound {
+            what: "track".into(),
+        }));
+    }
+    let server = app.bridge.borrow().as_ref()?.server.clone();
+    let items = kit
+        .pieces
+        .iter()
+        .map(|p| crate::samples_ui::ImportItem::piece(p, kit.source))
+        .collect();
+    let (a, author) = (app.clone(), author.clone());
+    crate::samples_ui::import(app, items, move |results| {
+        let mut setups = Vec::new();
+        for (p, r) in kit.pieces.iter().zip(results) {
+            match r {
+                Ok(s) => setups.push(crate::samples_ui::piece_setup(p, s)),
+                Err(reason) => {
+                    server.reply(ticket, err(ControlError::Internal { reason }));
+                    return;
+                }
+            }
+        }
+        let target = match track {
+            Some(t) => crate::channels::KitTrack::Existing(t),
+            None => crate::channels::KitTrack::New(format!("{} Kit", kit.title)),
+        };
+        let o = match crate::channels::add_kit_as(&a, author.clone(), target, setups) {
+            Some(ids) => {
+                push_activity(
+                    &a,
+                    &author,
+                    agent_string(&format!("Added the {} kit", kit.title)),
+                );
+                ok(ReplyBody::Applied(protocol::edit::Applied {
+                    revision: revision(&a),
+                    created: ids.iter().map(|c| c.0).collect(),
+                }))
+            }
+            None => err(ControlError::Busy),
+        };
+        server.reply(ticket, o);
+        changed(&a);
+    });
+    None
+}
+
 /// Runs one request. Returns the outcome now, or `None` when the answer
 /// comes later (a queued batch, a job step, a save).
 fn execute(app: &Rc<App>, ticket: Ticket, author: &Author, req: Request) -> Option<Outcome> {
@@ -635,16 +792,27 @@ fn execute(app: &Rc<App>, ticket: Ticket, author: &Author, req: Request) -> Opti
                 Err(f) => err(map_failure(f)),
             }
         }
-        RequestBody::NotesList { pattern, channel } => {
+        // Closing returns to Home, which comes with the next build.
+        RequestBody::ProjectClose => bad("closing a project is not available in this build yet"),
+        // The change tree and versions (15.11, 15.12) follow BRIDGE.md in
+        // the next build; until then they answer plainly.
+        RequestBody::HistoryTree { .. }
+        | RequestBody::HistoryDiff { .. }
+        | RequestBody::VersionSave { .. }
+        | RequestBody::BranchCreate { .. }
+        | RequestBody::BranchSwitch { .. }
+        | RequestBody::BranchList
+        | RequestBody::BranchRename { .. }
+        | RequestBody::BranchArchive { .. }
+        | RequestBody::VersionRestore { .. } => bad("versions are not available in this build yet"),
+        RequestBody::NotesList { pattern } => {
             let s = app.session.borrow();
             match s.document().project.pattern(pattern) {
-                Some(p) if s.document().project.channel(channel).is_some() => {
-                    ok(ReplyBody::Notes {
-                        notes: p.notes_of(channel).to_vec(),
-                    })
-                }
-                _ => err(ControlError::NotFound {
-                    what: "pattern or channel".into(),
+                Some(p) => ok(ReplyBody::Notes {
+                    notes: p.notes.clone(),
+                }),
+                None => err(ControlError::NotFound {
+                    what: "clip content".into(),
                 }),
             }
         }
@@ -656,29 +824,13 @@ fn execute(app: &Rc<App>, ticket: Ticket, author: &Author, req: Request) -> Opti
             app.stop();
             ok(ReplyBody::Done)
         }
-        RequestBody::SetPlayingPattern { pattern } => {
-            if app
-                .session
-                .borrow()
-                .document()
-                .project
-                .pattern(pattern)
-                .is_none()
-            {
-                return Some(err(ControlError::NotFound {
-                    what: "pattern".into(),
-                }));
-            }
-            app.select_pattern(pattern);
-            ok(ReplyBody::Done)
-        }
         RequestBody::TransportState => {
             let s = app.session.borrow();
             ok(ReplyBody::Transport {
                 playing: app.ui.borrow().playing,
                 tick: app.playhead_tick(),
                 tempo_bpm: s.document().project.tempo_bpm,
-                pattern: app.current_pattern(),
+                loop_region: s.document().project.loop_region,
             })
         }
         RequestBody::Undo => undo_redo(app, author, true),
@@ -687,35 +839,29 @@ fn execute(app: &Rc<App>, ticket: Ticket, author: &Author, req: Request) -> Opti
             entries: app.session.borrow().editor.history().infos(),
         }),
         RequestBody::ExportWav {
-            pattern,
-            loops,
             format,
-        } => {
-            return Some(start_job(
-                app,
-                JobTarget::Pattern { pattern, loops },
-                Some(format),
-            ));
-        }
-        RequestBody::ExportSongWav {
-            format,
+            start,
+            end,
             tail_seconds,
         } => {
             return Some(start_job(
                 app,
-                JobTarget::Song { tail: tail_seconds },
+                JobTarget {
+                    range: range_of(start, end),
+                    tail: tail_seconds,
+                },
                 Some(format),
             ));
         }
-        RequestBody::AnalyzeSong => {
-            return Some(start_job(app, JobTarget::Song { tail: 2.0 }, None));
-        }
-        RequestBody::SetTransportMode { mode, loop_song } => {
-            app.set_transport_mode(mode, loop_song);
-            ok(ReplyBody::Done)
-        }
-        RequestBody::Analyze { pattern, loops } => {
-            return Some(start_job(app, JobTarget::Pattern { pattern, loops }, None));
+        RequestBody::Analyze { start, end } => {
+            return Some(start_job(
+                app,
+                JobTarget {
+                    range: range_of(start, end),
+                    tail: 2.0,
+                },
+                None,
+            ));
         }
         RequestBody::JobStatus { job } => {
             let guard = app.bridge.borrow();
@@ -755,6 +901,31 @@ fn execute(app: &Rc<App>, ticket: Ticket, author: &Author, req: Request) -> Opti
                 }
                 None => err(ControlError::NotFound { what: "job".into() }),
             }
+        }
+        RequestBody::SetActivity { text, focus } => {
+            set_activity(app, author, text.as_deref(), focus);
+            ok(ReplyBody::Done)
+        }
+        RequestBody::SoundSearch {
+            role,
+            genre,
+            tags,
+            limit,
+        } => ok(ReplyBody::Sounds {
+            sounds: crate::sound_search::search(
+                &library(app),
+                role.as_deref(),
+                genre.as_deref(),
+                &tags,
+                limit.min(crate::sound_search::MAX_RESULTS),
+            ),
+        }),
+        RequestBody::KitAdd { pack, kit, track } => {
+            let current = revision(app);
+            if is_stale(base_revision, current) {
+                return Some(err(ControlError::Stale { current }));
+            }
+            return kit_add(app, ticket, author, &pack, &kit, track);
         }
         RequestBody::SettingsGet => ok(ReplyBody::Settings(settings(app))),
         RequestBody::SettingsSet { setting } => set_setting(app, setting, author),
@@ -822,47 +993,44 @@ pub fn on_done(app: &Rc<App>, done: Vec<Done>) {
     }
 }
 
-/// What an export or analysis job renders.
+/// What an export or analysis job renders: a range of the timeline
+/// (`None`: the loop region when it is on, else the whole arrangement)
+/// plus a tail in seconds (SPEC 20).
 #[derive(Clone, Copy)]
-enum JobTarget {
-    Pattern {
-        pattern: protocol::ids::PatternId,
-        loops: u32,
-    },
-    /// The whole playlist plus a tail in seconds (15.6).
-    Song { tail: f64 },
+struct JobTarget {
+    range: Option<(u32, u32)>,
+    tail: f64,
+}
+
+/// A range from optional ends: both or neither.
+fn range_of(start: Option<u32>, end: Option<u32>) -> Option<(u32, u32)> {
+    match (start, end) {
+        (Some(s), Some(e)) => Some((s, e)),
+        (Some(s), None) => Some((s, u32::MAX)),
+        (None, Some(e)) => Some((0, e)),
+        (None, None) => None,
+    }
 }
 
 fn start_job(app: &Rc<App>, target: JobTarget, fmt: Option<WavFormat>) -> Outcome {
-    let (pattern, loops, song_tail) = match target {
-        JobTarget::Pattern { pattern, loops } => {
-            if !(1..=64).contains(&loops) {
-                return bad("loops must be between 1 and 64");
-            }
-            (pattern, loops, None)
-        }
-        JobTarget::Song { tail } => {
-            if !(0.0..=30.0).contains(&tail) {
-                return bad("tail_seconds must be between 0 and 30");
-            }
-            (protocol::ids::PatternId(0), 1, Some(tail))
-        }
-    };
-    let (project, slots, rate, rev, store) = {
+    if !(0.0..=30.0).contains(&target.tail) {
+        return bad("tail_seconds must be between 0 and 30");
+    }
+    let (project, slots, rate, rev, store, range) = {
         let s = app.session.borrow();
-        if song_tail.is_none() && s.document().project.pattern(pattern).is_none() {
-            return err(ControlError::NotFound {
-                what: "pattern".into(),
-            });
-        }
-        if song_tail.is_some()
-            && s.document()
-                .project
-                .playlist
-                .iter()
-                .all(|t| t.clips.is_empty())
+        let p = &s.document().project;
+        let song_end = p.clips.iter().map(|c| c.end()).max().unwrap_or(0);
+        let range = target.range.map(|(a, b)| (a, b.min(song_end.max(a + 1))));
+        if let Some((a, b)) = range
+            && a >= b
         {
-            return bad("the song has no clips");
+            return bad("the range is empty");
+        }
+        if range.is_none()
+            && !(p.loop_region.enabled && p.loop_region.end > p.loop_region.start)
+            && song_end == 0
+        {
+            return bad("the timeline has no clips");
         }
         (
             s.document().project.clone(),
@@ -870,6 +1038,7 @@ fn start_job(app: &Rc<App>, target: JobTarget, fmt: Option<WavFormat>) -> Outcom
             s.link.sample_rate().round() as u32,
             s.document().revision,
             s.store.clone(),
+            range,
         )
     };
     let exports = app.dirs.projects().join("exports");
@@ -904,10 +1073,9 @@ fn start_job(app: &Rc<App>, target: JobTarget, fmt: Option<WavFormat>) -> Outcom
             let frames = engine_adapter::render(
                 RenderJob {
                     project,
-                    pattern,
-                    loops,
+                    range,
+                    tail_seconds: target.tail,
                     sample_rate: rate,
-                    song_tail,
                     store: Some(store),
                 },
                 &slots,
@@ -1172,6 +1340,80 @@ mod tests {
                 .author
                 .starts_with("agent:test-")
         );
+    }
+
+    #[test]
+    fn an_agent_declares_and_ends_its_activity() {
+        let rig = rig("activity");
+        let long = "x".repeat(200);
+        let out = talk(
+            &rig,
+            "agent",
+            vec![
+                r#"{"id":1,"body":{"op":"set_activity","text":"Writing the hats\u0007","focus":{"kind":"instrument","id":4}}}"#.into(),
+            ],
+        );
+        assert!(out[1].contains("\"status\":\"ok\""), "{}", out[1]);
+        {
+            let b = rig.app.bridge.borrow();
+            let a = b.as_ref().unwrap().ui.activity.clone().expect("activity");
+            assert_eq!(a.text, "Writing the hats", "control characters removed");
+            assert_eq!(a.focus, Some(Focus::Channel(protocol::ids::ChannelId(4))));
+            assert!(a.author.starts_with("agent:test-"));
+            assert_eq!(b.as_ref().unwrap().ui.recent[0].text, "Writing the hats");
+        }
+        let req = format!(r#"{{"id":2,"body":{{"op":"set_activity","text":"{long}"}}}}"#);
+        talk(&rig, "agent", vec![req]);
+        let len = rig
+            .app
+            .bridge
+            .borrow()
+            .as_ref()
+            .unwrap()
+            .ui
+            .activity
+            .as_ref()
+            .map(|a| a.text.chars().count());
+        assert_eq!(len, Some(MAX_ACTIVITY_CHARS));
+        talk(
+            &rig,
+            "agent",
+            vec![r#"{"id":3,"body":{"op":"set_activity","text":null}}"#.into()],
+        );
+        assert!(
+            rig.app
+                .bridge
+                .borrow()
+                .as_ref()
+                .unwrap()
+                .ui
+                .activity
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn activity_text_is_cleaned() {
+        assert_eq!(activity_text("  hi\n "), Some("hi".into()));
+        assert_eq!(activity_text("\u{7}\u{8}"), None);
+        assert_eq!(activity_text(&"é".repeat(99)).unwrap().chars().count(), 80);
+    }
+
+    #[test]
+    fn an_unknown_kit_is_not_found() {
+        let rig = rig("kit");
+        let out = talk(
+            &rig,
+            "agent",
+            vec![
+                r#"{"id":1,"body":{"op":"kit_add","pack":"nope","kit":"nope","track":null}}"#
+                    .into(),
+                r#"{"id":2,"body":{"op":"sound_search","role":"kick","genre":null,"tags":[],"limit":5}}"#
+                    .into(),
+            ],
+        );
+        assert!(out[1].contains("not_found"), "{}", out[1]);
+        assert!(out[2].contains("\"status\":\"ok\""), "{}", out[2]);
     }
 
     #[test]

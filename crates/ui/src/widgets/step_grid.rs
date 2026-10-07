@@ -21,7 +21,7 @@ use std::rc::Rc;
 use gtk::glib;
 use gtk::prelude::*;
 use gtk::subclass::prelude::*;
-use gtk::{gdk, graphene};
+use gtk::{gdk, graphene, gsk};
 
 use protocol::edit::Edit;
 use protocol::ids::{ChannelId, PatternId};
@@ -59,6 +59,7 @@ mod imp {
         /// painted.
         pub stroke: RefCell<Option<Stroke>>,
         pub drag_start: Cell<(f64, f64)>,
+        pub repeat: Cell<crate::keys::RepeatFilter<(usize, u32)>>,
         pub last_playhead: Cell<u64>,
         pub cache: RefCell<LayerCache<StaticKey>>,
         pub text: RefCell<LayoutCache>,
@@ -74,6 +75,7 @@ mod imp {
                 hover: Cell::new(None),
                 stroke: RefCell::new(None),
                 drag_start: Cell::new((0.0, 0.0)),
+                repeat: Cell::new(crate::keys::RepeatFilter::new()),
                 last_playhead: Cell::new(0),
                 cache: RefCell::new(LayerCache::new("step-grid static")),
                 text: RefCell::new(LayoutCache::default()),
@@ -107,7 +109,7 @@ mod imp {
             obj.set_can_focus(true);
             obj.set_halign(gtk::Align::Fill);
             obj.set_hexpand(true);
-            obj.update_property(&[gtk::accessible::Property::Label("Steps")]);
+            obj.update_property(&[gtk::accessible::Property::Label("Grid")]);
 
             let drag = gtk::GestureDrag::new();
             drag.set_button(gdk::BUTTON_PRIMARY);
@@ -149,8 +151,10 @@ mod imp {
 
             let keys = gtk::EventControllerKey::new();
             let w = obj.downgrade();
-            keys.connect_key_pressed(move |_, key, _, _| match w.upgrade() {
-                Some(o) if o.key(key) => glib::Propagation::Stop,
+            keys.connect_key_pressed(move |_, key, _, state| match w.upgrade() {
+                // Only plain keys are ours; Ctrl+Return and the rest are
+                // window shortcuts.
+                Some(o) if crate::keys::plain(state) && o.key(key) => glib::Propagation::Stop,
                 _ => glib::Propagation::Proceed,
             });
             obj.add_controller(keys);
@@ -216,14 +220,14 @@ impl StepGrid {
         self.imp().app.borrow().clone().expect("app set")
     }
 
-    /// Row height and cell size follow the size class.
+    /// Cells are 32 px high (44 for touch) with 8 px of air in the row.
     fn apply_size_class(&self) {
         let c = self.app().size_class();
         let touch = c.touch();
         self.imp().touch.set(touch);
         self.imp()
             .layout
-            .set(StepLayout::cells_only(c.step_row_h() as f64, touch));
+            .set(StepLayout::cells_only(logic::row_h(touch), touch));
         self.queue_resize();
         self.queue_draw();
     }
@@ -242,17 +246,16 @@ impl StepGrid {
         self.imp().layout.get().row_h
     }
 
-    /// Rows and steps of what is shown now.
+    /// Rows and steps of what is shown now: the selected clip's content,
+    /// one row (its instrument), or nothing.
     fn dims(&self) -> (usize, u32) {
         let app = self.app();
         let s = app.session.borrow();
         let p = &s.document().project;
-        let steps = app
-            .current_pattern()
-            .and_then(|id| p.pattern(id))
-            .map(|pt| pt.length_steps as u32)
-            .unwrap_or(0);
-        (p.channels.len(), steps)
+        match app.current_pattern().and_then(|id| p.pattern(id)) {
+            Some(pt) => (1, pt.length_steps as u32),
+            None => (0, 0),
+        }
     }
 
     fn content_size(&self) -> (f64, f64) {
@@ -260,42 +263,42 @@ impl StepGrid {
         self.imp().layout.get().content_size(rows, steps)
     }
 
+    /// The instrument of the content (the only row).
     fn channel_at(&self, row: usize) -> Option<ChannelId> {
         let app = self.app();
         let s = app.session.borrow();
-        s.document().project.channels.get(row).map(|c| c.id)
+        let p = &s.document().project;
+        (row == 0)
+            .then(|| app.current_pattern().and_then(|id| p.pattern(id)))
+            .flatten()
+            .map(|pt| pt.instrument)
     }
 
     fn pattern_id(&self) -> Option<PatternId> {
         self.app().current_pattern()
     }
 
-    fn is_read_only(&self, row: usize) -> bool {
+    fn row_view(&self) -> Option<logic::RowView> {
         let app = self.app();
         let s = app.session.borrow();
         let p = &s.document().project;
-        let (Some(pid), Some(ch)) = (app.current_pattern(), p.channels.get(row)) else {
-            return false;
-        };
-        p.pattern(pid)
-            .map(|pat| logic::row_view(pat, ch).piano_roll_data)
-            .unwrap_or(false)
+        let pat = app.current_pattern().and_then(|id| p.pattern(id))?;
+        let ch = p.channel(pat.instrument)?;
+        Some(logic::row_view(pat, ch))
     }
 
-    fn cell_state(&self, row: usize, step: u32) -> StepCell {
-        let app = self.app();
-        let s = app.session.borrow();
-        let p = &s.document().project;
-        let (Some(pid), Some(ch)) = (app.current_pattern(), p.channels.get(row)) else {
-            return StepCell::Off;
-        };
-        p.pattern(pid)
-            .and_then(|pat| logic::row_view(pat, ch).cells.get(step as usize).copied())
+    fn is_read_only(&self, _row: usize) -> bool {
+        self.row_view().is_some_and(|r| r.piano_roll_data)
+    }
+
+    fn cell_state(&self, _row: usize, step: u32) -> StepCell {
+        self.row_view()
+            .and_then(|r| r.cells.get(step as usize).copied())
             .unwrap_or(StepCell::Off)
     }
 
     fn set_step(&self, row: usize, step: u32, on: bool, in_gesture: bool) {
-        let (Some(pattern), Some(channel)) = (self.pattern_id(), self.channel_at(row)) else {
+        let (Some(pattern), Some(_)) = (self.pattern_id(), self.channel_at(row)) else {
             return;
         };
         if matches!(self.cell_state(row, step), StepCell::On { .. }) == on {
@@ -303,7 +306,6 @@ impl StepGrid {
         }
         let e = vec![Edit::SetStep {
             pattern,
-            channel,
             step: step as u8,
             on,
             vel: None,
@@ -350,14 +352,33 @@ impl StepGrid {
         self.imp().drag_start.set((x, y));
         let (rows, steps) = self.dims();
         let layout = self.layout();
-        if let Hit::Cell { row, step } = layout.hit(x, y, rows, steps) {
+        let hit = layout.hit(x, y, rows, steps);
+        let below = y >= layout.header_h + rows as f64 * layout.row_h;
+        let after = x >= layout.cell_x(steps);
+        if !matches!(hit, Hit::Cell { .. }) && (below || after) {
+            // A press beside the cells clears the channel selection.
+            self.app().deselect_channel();
+        }
+        if let Hit::Cell { row, step } = hit {
             self.imp().cursor.set((row, step));
             if let Some(c) = self.channel_at(row) {
                 self.app().select_channel(c);
             }
+            // The second press of a double-click does not toggle back.
+            let mut filter = self.imp().repeat.get();
+            let double_ms = gtk::Settings::default()
+                .map(|s| s.gtk_double_click_time() as i64)
+                .unwrap_or(400);
+            let repeat = filter.is_repeat((row, step), glib::monotonic_time() / 1000, double_ms);
+            self.imp().repeat.set(filter);
+            if repeat {
+                self.update_label();
+                self.queue_draw();
+                return;
+            }
             if self.is_read_only(row) {
                 self.app()
-                    .toast("This row has piano roll notes. Edit it in the piano roll.");
+                    .toast("This clip has notes that are not on the grid. Change them in Piano.");
                 return;
             }
             let on = !matches!(self.cell_state(row, step), StepCell::On { .. });
@@ -425,8 +446,9 @@ impl StepGrid {
             gdk::Key::Return | gdk::Key::KP_Enter => {
                 let (row, step) = logic::move_cursor(cur, 0, 0, rows, steps);
                 if self.is_read_only(row) {
-                    self.app()
-                        .toast("This row has piano roll notes. Edit it in the piano roll.");
+                    self.app().toast(
+                        "This clip has notes that are not on the grid. Change them in Piano.",
+                    );
                 } else {
                     let on = !matches!(self.cell_state(row, step), StepCell::On { .. });
                     self.set_step(row, step, on, false);
@@ -465,7 +487,7 @@ impl StepGrid {
     fn update_label(&self) {
         let (rows, steps) = self.dims();
         if rows == 0 || steps == 0 {
-            self.update_property(&[gtk::accessible::Property::Label("Steps, no channels")]);
+            self.update_property(&[gtk::accessible::Property::Label("Grid, no clip chosen")]);
             return;
         }
         let (row, step) = logic::move_cursor(self.imp().cursor.get(), 0, 0, rows, steps);
@@ -528,7 +550,16 @@ impl StepGrid {
         self.draw_dynamic(s);
     }
 
-    /// The layer that only changes with data, selection, size, and style.
+    /// Off cells: the foreground at about 7 percent (12 in high contrast,
+    /// with a 1 px border only there). Filled, rounded, no outlines.
+    fn off_color(&self, pal: &Palette, hc: bool) -> gtk::gdk::RGBA {
+        mix(&pal.fg, &pal.bg, if hc { 0.12 } else { 0.07 })
+    }
+
+    /// The layer that only changes with data, size, and style (owner visual
+    /// spec): beat numbers over the beats, cells as flat rounded fills, the
+    /// step's velocity as the filled height, accent dots, ratchet slices
+    /// and pitch offsets inside the cell.
     fn draw_static(&self, s: &gtk::Snapshot) {
         let pal = Palette::current();
         let colors = palette::colors();
@@ -541,236 +572,171 @@ impl StepGrid {
         let Some(pat) = app.current_pattern().and_then(|id| proj.pattern(id)) else {
             return;
         };
+        let Some(ch) = proj.channel(pat.instrument) else {
+            return;
+        };
         let steps = pat.length_steps as u32;
-        let selected = app.current_channel();
         let mut text = self.imp().text.borrow_mut();
         let ch_h = layout.cell_h();
         let pad_y = (layout.row_h - ch_h) / 2.0;
         let hc = colors.high_contrast;
-        let off_edge = mix(&pal.fg, &pal.bg, if hc { 0.6 } else { 0.22 });
+        let off = self.off_color(&pal, hc);
+        let radius = 6.0;
 
-        // Ruler: bar numbers at the first step of each bar, beat ticks.
+        // Ruler: a dimmed number over each beat: "1" to "4" in a one-bar
+        // clip, "2.1" style once the clip is longer than a bar.
         let bar_steps = self.steps_per_bar();
+        let beat_steps = layout.group.max(1);
+        let long = steps > bar_steps;
+        for st in (0..steps).step_by(beat_steps as usize) {
+            let beat = (st % bar_steps) / beat_steps + 1;
+            let label = if long {
+                format!("{}.{beat}", st / bar_steps + 1)
+            } else {
+                format!("{beat}")
+            };
+            let l = text.get(self, &label, false);
+            draw::layout_at(s, &l, &pal.text_dim, layout.cell_x(st) + 2.0, 4.0);
+        }
+
+        let y = layout.row_y(0);
+        let rv = logic::row_view(pat, ch);
+        let mut body = colors.channel_color_in(proj, ch.id);
+        if ch.mix.mute {
+            body = mix(&body, &pal.bg, 0.45);
+        }
         for st in 0..steps {
             let x = layout.cell_x(st);
-            if st % bar_steps == 0 {
-                let l = text.get(self, &format!("{}", st / bar_steps + 1), true);
-                draw::layout_at(s, &l, &pal.text, x, 3.0);
-            } else if st % layout.group == 0 {
-                draw::fill(s, &pal.line_beat, x, layout.header_h - 7.0, 1.0, 5.0);
+            let cy = y + pad_y;
+            let cw = layout.cell_w;
+            draw::rounded(s, &off, x, cy, cw, ch_h, radius);
+            if hc {
+                draw::outline(s, &colors.get(Role::WindowFg), x, cy, cw, ch_h, 1.0);
+            }
+            let Some(StepCell::On {
+                vel,
+                off: pitch,
+                repeat,
+            }) = rv.cells.get(st as usize).copied()
+            else {
+                continue;
+            };
+            // Velocity is the filled height, from the bottom.
+            let fh = (ch_h * logic::vel_fill(vel)).round();
+            s.push_rounded_clip(&gsk::RoundedRect::from_rect(
+                draw::rect(x, cy, cw, ch_h),
+                radius as f32,
+            ));
+            draw::fill(s, &body, x, cy + ch_h - fh, cw, fh);
+            // Ratchets: thin slices where the repeats start.
+            for i in 1..repeat {
+                let (o, _) = engine_adapter::ratchet_part(pat.step_ticks, repeat, i);
+                let tx = x + o as f64 / pat.step_ticks.max(1) as f64 * cw;
+                draw::fill(s, &pal.bg, tx - 1.0, cy, 2.0, ch_h);
+            }
+            s.pop();
+            if logic::is_accent(vel) {
+                let dot = palette::readable_on(&body);
+                draw::rounded(s, &dot, x + cw - 8.0, cy + 4.0, 4.0, 4.0, 2.0);
+            }
+            if pitch != 0 && cw >= 24.0 {
+                let l = text.get(self, &format!("{pitch:+}"), false);
+                let (tw, th) = l.pixel_size();
+                let tc = palette::readable_on(&body);
+                draw::layout_at(
+                    s,
+                    &l,
+                    &tc,
+                    x + (cw - tw as f64) / 2.0,
+                    cy + ch_h - th as f64 - 3.0,
+                );
             }
         }
-        draw::hline(s, &pal.line_beat, layout.header_h - 1.0, 0.0, w);
-
-        // Beat groups: every second group is a little darker.
-        let rows_h = layout.row_y(proj.channels.len()) - layout.header_h;
-        for g in (0..steps.div_ceil(layout.group)).filter(|g| g % 2 == 1) {
-            let x0 = layout.cell_x(g * layout.group) - layout.cell_gap;
-            let last = ((g + 1) * layout.group).min(steps) - 1;
-            let x1 = layout.cell_x(last) + layout.cell_w + layout.cell_gap;
-            let mut c = pal.fg;
-            c.set_alpha(0.045);
-            draw::fill(s, &c, x0, layout.header_h, x1 - x0, rows_h);
-        }
-
-        for (row, ch) in proj.channels.iter().enumerate() {
-            let y = layout.row_y(row);
-            let rv = logic::row_view(pat, ch);
-            let muted = ch.mix.mute;
-            if selected == Some(ch.id) {
-                let mut c = pal.accent;
-                c.set_alpha(0.14);
-                let band_w = layout.content_size(proj.channels.len(), steps).0.min(w);
-                draw::fill(s, &c, 0.0, y, band_w, layout.row_h);
+        if rv.piano_roll_data {
+            // Diagonal hatch marks the row as read-only here (notes that
+            // are not steps belong to the Notes view).
+            let x0 = layout.cell_x(0);
+            let x1 = layout.cell_x(steps.saturating_sub(1)) + layout.cell_w;
+            let cy = y + pad_y;
+            s.push_clip(&draw::rect(x0, cy, x1 - x0, ch_h));
+            let mut hx = x0 - ch_h;
+            while hx < x1 {
+                s.save();
+                s.translate(&graphene::Point::new(hx as f32, (cy + ch_h) as f32));
+                s.rotate(-45.0);
+                s.append_color(&pal.hatch, &draw::rect(0.0, 0.0, 1.5, ch_h * 1.5));
+                s.restore();
+                hx += 7.0;
             }
-            let body = colors.channel_color(ch.id.0);
-            if row > 0 {
-                draw::hline(s, &pal.line_sub, y, 0.0, w);
-            }
-            for st in 0..steps {
-                let x = layout.cell_x(st);
-                let cy = y + pad_y;
-                let on = rv.cells.get(st as usize).copied();
-                match on {
-                    Some(StepCell::On { vel, off, repeat }) => {
-                        // Swing delays odd steps: the cell starts when the
-                        // note does (the same function the compiler calls)
-                        // and keeps its right edge, so neighbors never
-                        // overlap. A ghost outline marks the column.
-                        let start = st * pat.step_ticks;
-                        let delay = engine_adapter::swung_start(start, pat.step_ticks, pat.swing)
-                            .saturating_sub(start);
-                        let shift = if pat.step_ticks > 0 {
-                            delay as f64 / pat.step_ticks as f64 * (layout.cell_w + layout.cell_gap)
-                        } else {
-                            0.0
-                        }
-                        .min((layout.cell_w - 8.0).max(0.0));
-                        let (cx, cw) = (x + shift, layout.cell_w - shift);
-                        if shift > 0.5 {
-                            draw::rounded(s, &off_edge, x, cy, layout.cell_w, ch_h, 4.0);
-                            draw::rounded(
-                                s,
-                                &pal.bg,
-                                x + 1.0,
-                                cy + 1.0,
-                                layout.cell_w - 2.0,
-                                ch_h - 2.0,
-                                3.0,
-                            );
-                        }
-                        // Louder steps are more opaque; the bar under the
-                        // cell carries the same level for anyone who cannot
-                        // tell opacity apart.
-                        let t = 0.45 + 0.55 * (vel as f32 / 127.0);
-                        let mut c = mix(&body, &pal.bg, t);
-                        if muted {
-                            c = mix(&c, &pal.bg, 0.4);
-                        }
-                        draw::rounded(s, &c, cx, cy, cw, ch_h, 4.0);
-                        if cw >= 20.0 {
-                            let bw = (cw - 8.0) * (vel as f64 / 127.0);
-                            let mut bc = colors.get(Role::ViewBg);
-                            bc.set_alpha(0.55);
-                            draw::fill(s, &bc, cx + 4.0, cy + ch_h - 5.0, bw, 2.0);
-                        }
-                        // Ratchets: a gap before each repeat, at the
-                        // positions the compiler plays them.
-                        for i in 1..repeat {
-                            let (o, _) = engine_adapter::ratchet_part(pat.step_ticks, repeat, i);
-                            let tx = cx + o as f64 / pat.step_ticks.max(1) as f64 * cw;
-                            draw::fill(s, &pal.bg, tx - 1.0, cy + 2.0, 2.0, ch_h - 4.0);
-                        }
-                        if off != 0 && cw >= 24.0 {
-                            let l = text.get(self, &format!("{off:+}"), false);
-                            let (tw, th) = l.pixel_size();
-                            let tc = palette::readable_on(&c);
-                            draw::layout_at(
-                                s,
-                                &l,
-                                &tc,
-                                cx + (cw - tw as f64) / 2.0,
-                                cy + (ch_h - th as f64) / 2.0 - 3.0,
-                            );
-                        }
-                    }
-                    _ => {
-                        draw::rounded(s, &off_edge, x, cy, layout.cell_w, ch_h, 4.0);
-                        draw::rounded(
-                            s,
-                            &pal.bg,
-                            x + 1.0,
-                            cy + 1.0,
-                            layout.cell_w - 2.0,
-                            ch_h - 2.0,
-                            3.0,
-                        );
-                    }
-                }
-                if rv.piano_roll_data {
-                    // Diagonal hatch marks the row as read-only here.
-                    let mut hx = x - ch_h;
-                    s.push_clip(&draw::rect(x, cy, layout.cell_w, ch_h));
-                    while hx < x + layout.cell_w {
-                        s.save();
-                        s.translate(&graphene::Point::new(hx as f32, (cy + ch_h) as f32));
-                        s.rotate(-45.0);
-                        s.append_color(&pal.hatch, &draw::rect(0.0, 0.0, 1.5, ch_h * 1.5));
-                        s.restore();
-                        hx += 7.0;
-                    }
-                    s.pop();
-                }
-            }
+            s.pop();
         }
     }
 
-    /// Playhead, hover, and keyboard cursor: a few rectangles per frame.
+    /// Hover, keyboard focus ring and playhead column: a few fills per
+    /// frame.
     fn draw_dynamic(&self, s: &gtk::Snapshot) {
         let imp = self.imp();
         let layout = self.layout();
         let app = self.app();
         let pal = Palette::current();
+        let colors = palette::colors();
         let sess = app.session.borrow();
         let proj = &sess.document().project;
         let Some(pat) = app.current_pattern().and_then(|id| proj.pattern(id)) else {
             return;
         };
-        let rows = proj.channels.len();
+        let steps = pat.length_steps as u32;
         let ch_h = layout.cell_h();
-        let pad_y = (layout.row_h - ch_h) / 2.0;
+        let y = layout.row_y(0) + (layout.row_h - ch_h) / 2.0;
+        let radius = 6.0;
 
-        if let Some((row, step)) = imp.hover.get()
-            && row < rows
+        // The playing step: a soft accent over its column, step by step.
+        if app.ui.borrow().playing
+            && let Some(pos) = logic::content_pos(
+                &proj.clips,
+                pat.id,
+                pat.length_ticks(),
+                imp.last_playhead.get(),
+            )
+        {
+            let st = pos / pat.step_ticks.max(1);
+            if st < steps {
+                let mut c = colors.get(Role::Accent);
+                c.set_alpha(0.15);
+                draw::rounded(
+                    s,
+                    &c,
+                    layout.cell_x(st) - 2.0,
+                    layout.header_h - 2.0,
+                    layout.cell_w + 4.0,
+                    layout.row_h + 4.0,
+                    radius + 2.0,
+                );
+            }
+        }
+        if let Some((_, step)) = imp.hover.get()
+            && step < steps
         {
             let mut c = pal.fg;
-            c.set_alpha(0.12);
-            draw::rounded(
-                s,
-                &c,
-                layout.cell_x(step),
-                layout.row_y(row) + pad_y,
-                layout.cell_w,
-                ch_h,
-                4.0,
-            );
+            c.set_alpha(0.05);
+            draw::rounded(s, &c, layout.cell_x(step), y, layout.cell_w, ch_h, radius);
         }
-        if self.has_focus() && self.is_focus_visible_now() && rows > 0 {
-            let (row, step) =
-                logic::move_cursor(imp.cursor.get(), 0, 0, rows, pat.length_steps as u32);
-            let (x, y) = (layout.cell_x(step) - 1.0, layout.row_y(row) + pad_y - 1.0);
-            let colors = palette::colors();
+        if self.has_focus() && self.is_focus_visible_now() && steps > 0 {
+            let (_, step) = logic::move_cursor(imp.cursor.get(), 0, 0, 1, steps);
             let ring = if colors.high_contrast {
                 colors.get(Role::WindowFg)
             } else {
                 colors.get(Role::Accent)
             };
-            draw::outline(s, &ring, x, y, layout.cell_w + 2.0, ch_h + 2.0, 2.0);
-            if colors.high_contrast {
-                draw::outline(
-                    s,
-                    &colors.get(Role::WindowBg),
-                    x + 2.0,
-                    y + 2.0,
-                    layout.cell_w - 2.0,
-                    ch_h - 2.0,
-                    1.0,
-                );
-            }
-        }
-        if app.ui.borrow().playing {
-            let tick = imp.last_playhead.get();
-            let len = pat.length_ticks() as u64;
-            if len > 0 && pat.step_ticks > 0 {
-                let t = (tick % len) as f64 / pat.step_ticks as f64;
-                let x = layout.step_pos_x(t);
-                let colors = palette::colors();
-                draw::fill(
-                    s,
-                    &colors.get(Role::Accent),
-                    x,
-                    layout.header_h,
-                    2.0,
-                    layout.row_y(rows) - layout.header_h,
-                );
-                // A small triangle in the ruler: a 5 px stem and a cap.
-                draw::fill(
-                    s,
-                    &colors.get(Role::Accent),
-                    x - 3.0,
-                    layout.header_h - 6.0,
-                    8.0,
-                    3.0,
-                );
-                draw::fill(
-                    s,
-                    &colors.get(Role::Accent),
-                    x - 1.0,
-                    layout.header_h - 3.0,
-                    4.0,
-                    2.0,
-                );
-            }
+            draw::outline(
+                s,
+                &ring,
+                layout.cell_x(step) - 3.0,
+                y - 3.0,
+                layout.cell_w + 6.0,
+                ch_h + 6.0,
+                2.0,
+            );
         }
     }
 

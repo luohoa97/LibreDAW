@@ -234,7 +234,7 @@ impl LaneEditor {
     fn apply_size_class(&self) {
         let c = self.app().size_class();
         self.imp().touch.set(c.touch());
-        self.imp().row_h.set(c.step_row_h() as f64);
+        self.imp().row_h.set(logic::row_h(c.touch()));
         self.queue_resize();
         self.queue_draw();
     }
@@ -276,7 +276,7 @@ impl LaneEditor {
         let s = app.session.borrow();
         let p = &s.document().project;
         let pat = p.pattern(app.current_pattern()?)?;
-        let ch = p.channel(app.current_channel()?)?;
+        let ch = p.channel(pat.instrument)?;
         let rv = logic::row_view(pat, ch);
         Some(Data {
             pattern: pat.id,
@@ -305,7 +305,6 @@ impl LaneEditor {
         };
         Edit::SetStepLanes {
             pattern: d.pattern,
-            channel: d.channel,
             step: step as u8,
             vel,
             off,
@@ -371,7 +370,7 @@ impl LaneEditor {
                 let choices = lanes::ratchet_choices(d.step_ticks);
                 let next = lanes::cycle_ratchet(repeat, !shift, &choices);
                 if next != repeat {
-                    self.app().gesture_begin("Ratchet");
+                    self.app().gesture_begin("Repeats");
                     self.set_lanes(&d, step, lane, next as i32, true);
                     self.app().gesture_end();
                 }
@@ -460,8 +459,13 @@ impl LaneEditor {
         if steps == 0 || self.lane().is_none() {
             return false;
         }
+        // Plain keys, and Ctrl+Up/Down for big steps; everything else is a
+        // window shortcut.
+        let big = crate::keys::only(state, gdk::ModifierType::CONTROL_MASK);
+        if !(crate::keys::plain(state) || (big && matches!(key, gdk::Key::Up | gdk::Key::Down))) {
+            return false;
+        }
         let cur = self.imp().cursor.get().min(steps - 1);
-        let big = state.contains(gdk::ModifierType::CONTROL_MASK);
         let go = |to: u32| {
             self.imp().cursor.set(to.min(steps - 1));
             self.update_label();
@@ -557,7 +561,11 @@ impl LaneEditor {
         let steps = d.cells.len() as u32;
         let hc = colors.high_contrast;
         draw::fill(s, &pal.bg, 0.0, 0.0, w, self.height() as f64);
-        let body = colors.channel_color(d.channel.0);
+        let body = {
+            let app = self.app();
+            let s = app.session.borrow();
+            colors.channel_color_in(&s.document().project, d.channel)
+        };
 
         // Beat groups, shaded like the grid above.
         for g in (0..steps.div_ceil(l.group)).filter(|g| g % 2 == 1) {

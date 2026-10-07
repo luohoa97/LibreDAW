@@ -105,7 +105,8 @@ pub fn needs_compile(old: &Project, new: &Project) -> bool {
         || old.patterns.len() != new.patterns.len()
         || old.channels.len() != new.channels.len()
         || old.tracks.len() != new.tracks.len()
-        || old.playlist != new.playlist
+        || old.clips != new.clips
+        || old.loop_region != new.loop_region
     {
         return true;
     }
@@ -222,6 +223,7 @@ mod tests {
                     track: TrackId::MASTER,
                 },
                 Edit::AddPattern {
+                    instrument: ChannelId(1),
                     name: "p".into(),
                     length_steps: 16,
                 },
@@ -286,7 +288,6 @@ mod tests {
             &d,
             Edit::SetStep {
                 pattern: p,
-                channel: c,
                 step: 0,
                 on: true,
                 vel: None
@@ -296,7 +297,6 @@ mod tests {
             &d,
             Edit::AddNotes {
                 pattern: p,
-                channel: c,
                 notes: vec![NewNote {
                     start: 0,
                     len: 5,

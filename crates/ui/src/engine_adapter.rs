@@ -18,7 +18,6 @@ use protocol::engine::{
     ControlTable, EngineCommand, EngineEvent, EngineStatus, ParamTable, PluginEvent, PluginHandle,
     PluginSlot,
 };
-use protocol::ids::PatternId;
 use protocol::model::Project;
 
 use crate::compiler::CompileJob;
@@ -57,16 +56,14 @@ pub fn devices(host: Host) -> Vec<String> {
     engine::Engine::devices(host)
 }
 
-/// What to render: a pinned project, a pattern (or the whole song), loops,
-/// and a rate.
+/// What to render: a pinned project, a range of the timeline (`None`: the
+/// loop region when it is on, else the whole arrangement), a tail and a
+/// rate (SPEC 20).
 pub struct RenderJob {
     pub project: Arc<Project>,
-    pub pattern: PatternId,
-    pub loops: u32,
+    pub range: Option<(u32, u32)>,
+    pub tail_seconds: f64,
     pub sample_rate: u32,
-    /// `Some(tail)` renders the whole playlist plus `tail` seconds instead
-    /// of `pattern` (15.6).
-    pub song_tail: Option<f64>,
     /// Decoded samples for samplers.
     pub store: Option<Arc<SampleStore>>,
 }
@@ -80,24 +77,14 @@ pub fn render(
     progress: &AtomicU32,
     cancel: &AtomicBool,
 ) -> Result<Rendered, EngineError> {
-    if let Some(tail) = job.song_tail {
-        let req = engine::SongRequest {
-            project: job.project,
-            tail_seconds: tail,
-            store: job.store,
-            sample_rate: job.sample_rate,
-        };
-        return engine::render_song(&req, &slots.inner, plugins, progress, cancel);
-    }
-    let req = engine::RenderRequest {
+    let req = engine::RangeRequest {
         project: job.project,
-        pattern: job.pattern,
-        loops: job.loops,
-        tail_seconds: 2.0,
-        store: job.store,
+        range: job.range,
+        tail_seconds: job.tail_seconds,
         sample_rate: job.sample_rate,
+        store: job.store,
     };
-    engine::render_offline(&req, &slots.inner, plugins, progress, cancel)
+    engine::render_range(&req, &slots.inner, plugins, progress, cancel)
 }
 
 pub fn write_wav(
@@ -204,6 +191,8 @@ impl EngineLink {
     }
 
     /// Command ring. `Err` means full.
+    // A full ring hands the command back so the caller can retry it.
+    #[allow(clippy::result_large_err)]
     pub fn command(&mut self, c: EngineCommand) -> Result<(), EngineCommand> {
         if let Some(e) = &mut self.live {
             return e.command(c);

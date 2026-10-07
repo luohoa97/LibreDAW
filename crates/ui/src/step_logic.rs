@@ -13,9 +13,13 @@ pub struct StepLayout {
     pub row_h: f64,
     pub cell_w: f64,
     pub cell_gap: f64,
-    /// Extra space after every group of `group` steps.
+    /// Extra space after every group of `group` steps (a beat).
     pub group_gap: f64,
     pub group: u32,
+    /// Extra space after every `bar` steps (on top of the beat gap); 0 for
+    /// none.
+    pub bar_gap: f64,
+    pub bar: u32,
 }
 
 impl Default for StepLayout {
@@ -29,14 +33,17 @@ impl Default for StepLayout {
             cell_gap: 3.0,
             group_gap: 8.0,
             group: 4,
+            bar_gap: 0.0,
+            bar: 16,
         }
     }
 }
 
 impl StepLayout {
-    /// The layout of the grid next to a separate channel header column
-    /// (docs/ui-design.md 3.3): no name area, cells 28 x 32 (36 x 44 for
-    /// touch), 24 px ruler, rows `row_h` high.
+    /// The clip editor's Steps view (owner visual spec): no name area,
+    /// cells 32 high (44 for touch) and at least 28 wide (36 for touch),
+    /// 4 px between cells, 10 px between beats and 16 px between bars, a
+    /// ruler for the beat numbers. Spacing groups beats; no lines.
     pub fn cells_only(row_h: f64, touch: bool) -> StepLayout {
         StepLayout {
             name_w: 0.0,
@@ -44,9 +51,11 @@ impl StepLayout {
             header_h: RULER_H,
             row_h,
             cell_w: if touch { 36.0 } else { 28.0 },
-            cell_gap: 2.0,
-            group_gap: 8.0,
+            cell_gap: 4.0,
+            group_gap: 6.0,
             group: 4,
+            bar_gap: 6.0,
+            bar: 16,
         }
     }
 
@@ -57,7 +66,13 @@ impl StepLayout {
             return *self;
         }
         let groups = (steps - 1) / self.group.max(1);
-        let avail = width - self.name_w - self.left_pad - 8.0 - groups as f64 * self.group_gap;
+        let bars = (steps - 1).checked_div(self.bar).unwrap_or(0);
+        let avail = width
+            - self.name_w
+            - self.left_pad
+            - 8.0
+            - groups as f64 * self.group_gap
+            - bars as f64 * self.bar_gap;
         let cw = (avail - (steps - 1) as f64 * self.cell_gap) / steps as f64;
         StepLayout {
             cell_w: cw.clamp(self.cell_w, MAX_CELL_W.max(self.cell_w)),
@@ -65,7 +80,7 @@ impl StepLayout {
         }
     }
 
-    /// Height of a cell inside a row.
+    /// Height of a cell inside a row: the row less 8 px of air.
     pub fn cell_h(&self) -> f64 {
         (self.row_h - 8.0).max(8.0)
     }
@@ -77,11 +92,47 @@ pub fn grid_layout(row_h: f64, touch: bool, width: f64, steps: u32) -> StepLayou
     StepLayout::cells_only(row_h, touch).fitted(width, steps)
 }
 
+/// Row height of the Steps view: 32 px cells (44 for touch) and 8 px of
+/// air.
+pub fn row_h(touch: bool) -> f64 {
+    if touch { 52.0 } else { 40.0 }
+}
+
+/// Where in a clip content of `len` ticks the playhead is: the first clip
+/// that plays `pattern` and covers `tick` gives the position (its start
+/// and offset). `None` when no such clip is playing there.
+pub fn content_pos(
+    clips: &[protocol::model::Clip],
+    pattern: protocol::ids::PatternId,
+    len: u32,
+    tick: u64,
+) -> Option<u32> {
+    if len == 0 {
+        return None;
+    }
+    clips
+        .iter()
+        .find(|c| c.pattern == pattern && (c.start as u64) <= tick && tick < c.end() as u64)
+        .map(|c| ((tick - c.start as u64 + c.offset as u64) % len as u64) as u32)
+}
+
+/// How a step cell is filled (owner visual spec): the part of the cell
+/// height filled with the instrument color, from the bottom: the whole
+/// cell at velocity 127, about a third at 1.
+pub fn vel_fill(vel: u8) -> f64 {
+    0.35 + 0.65 * (vel.clamp(1, 127) as f64 - 1.0) / 126.0
+}
+
+/// An accent dot marks loud steps.
+pub fn is_accent(vel: u8) -> bool {
+    vel >= 120
+}
+
 /// Height of the step ruler (and of the spacer above the header column).
 pub const RULER_H: f64 = 24.0;
 
-/// Widest a step cell grows when the grid has room (docs/ui-design.md 4.2).
-pub const MAX_CELL_W: f64 = 72.0;
+/// Widest a step cell grows when the editor has room (owner visual spec).
+pub const MAX_CELL_W: f64 = 44.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Hit {
@@ -98,10 +149,12 @@ impl StepLayout {
     /// Left edge of a step's cell.
     pub fn cell_x(&self, step: u32) -> f64 {
         let groups = (step / self.group.max(1)) as f64;
+        let bars = step.checked_div(self.bar).unwrap_or(0) as f64;
         self.name_w
             + self.left_pad
             + step as f64 * (self.cell_w + self.cell_gap)
             + groups * self.group_gap
+            + bars * self.bar_gap
     }
 
     /// X position of a fractional step (for the playhead).
@@ -200,11 +253,21 @@ pub struct RowView {
     pub piano_roll_data: bool,
 }
 
+/// The notes `channel` has in `pattern`: all of them when the content is
+/// that instrument's (SPEC 20.2), none otherwise.
+pub fn notes_for(pattern: &Pattern, channel: protocol::ids::ChannelId) -> &[Note] {
+    if pattern.instrument == channel {
+        &pattern.notes
+    } else {
+        &[]
+    }
+}
+
 /// Builds the row of `channel` in `pattern` from the document's notes.
 pub fn row_view(pattern: &Pattern, channel: &Channel) -> RowView {
     let mut cells = vec![Cell::Off; pattern.length_steps as usize];
     let mut foreign = false;
-    for n in pattern.notes_of(channel.id) {
+    for n in notes_for(pattern, channel.id) {
         if n.is_step_note(channel.root_key, pattern) {
             let i = (n.start / pattern.step_ticks) as usize;
             if let Some(c) = cells.get_mut(i) {
@@ -236,22 +299,22 @@ pub fn cell_label(channel_name: &str, step: u32, cell: Cell, read_only: bool) ->
     let state = match cell {
         Cell::Off => "off".to_string(),
         Cell::On { vel, off, repeat } => {
-            let mut s = format!("on, velocity {vel}");
+            let mut s = format!("on, volume {vel}");
             if off != 0 {
                 s.push_str(&format!(", pitch {off:+} semitones"));
             }
             if repeat > 1 {
-                s.push_str(&format!(", ratchet {repeat}"));
+                s.push_str(&format!(", repeats {repeat}"));
             }
             s
         }
     };
     let ro = if read_only {
-        ", read only, piano roll data"
+        ", read only, notes from Piano"
     } else {
         ""
     };
-    format!("{channel_name}, step {}, {state}{ro}", step + 1)
+    format!("{channel_name}, square {}, {state}{ro}", step + 1)
 }
 
 /// Moves a cursor by arrow keys, staying inside the grid.
@@ -272,14 +335,14 @@ pub fn move_cursor(
 
 /// Notes of a channel in a pattern, as a slice (shared helper).
 pub fn channel_notes(pattern: &Pattern, channel: &Channel) -> Vec<Note> {
-    pattern.notes_of(channel.id).to_vec()
+    notes_for(pattern, channel.id).to_vec()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use protocol::ids::{ChannelId, NoteId, PatternId, TrackId};
-    use protocol::model::{ChannelNotes, Instrument, Mix, SynthParams};
+    use protocol::model::{Instrument, Mix, SynthParams};
 
     fn chan(root: u8) -> Channel {
         Channel {
@@ -294,11 +357,8 @@ mod tests {
     }
 
     fn pat(notes: Vec<Note>) -> Pattern {
-        let mut p = Pattern::new(PatternId(2), "A".into());
-        p.notes = vec![ChannelNotes {
-            channel: ChannelId(1),
-            notes,
-        }];
+        let mut p = Pattern::new(PatternId(2), "A".into(), ChannelId(1));
+        p.notes = notes;
         p
     }
 
@@ -453,6 +513,7 @@ mod tests {
         let (mut d, ids) = apply(
             &d,
             &Edit::AddPattern {
+                instrument: ch,
                 name: "p".into(),
                 length_steps: 16,
             },
@@ -464,7 +525,6 @@ mod tests {
                 &d,
                 &Edit::SetStep {
                     pattern: pat_id,
-                    channel: ch,
                     step: s,
                     on: true,
                     vel: None,
@@ -524,6 +584,7 @@ mod tests {
                     track: TrackId::MASTER,
                 },
                 Edit::AddPattern {
+                    instrument: ChannelId(1),
                     name: "p".into(),
                     length_steps: 16,
                 },
@@ -536,14 +597,12 @@ mod tests {
             &[
                 Edit::SetStep {
                     pattern: pat,
-                    channel: ch,
                     step: 2,
                     on: true,
                     vel: Some(90),
                 },
                 Edit::SetStepLanes {
                     pattern: pat,
-                    channel: ch,
                     step: 2,
                     vel: Some(64),
                     off: Some(-5),
@@ -567,7 +626,7 @@ mod tests {
         assert!(!r.piano_roll_data, "a pitched step is still a step note");
         assert_eq!(
             cell_label("c", 2, r.cells[2], false),
-            "c, step 3, on, velocity 64, pitch -5 semitones, ratchet 4"
+            "c, square 3, on, volume 64, pitch -5 semitones, repeats 4"
         );
     }
 
@@ -583,11 +642,11 @@ mod tests {
     fn accessible_label_text() {
         assert_eq!(
             cell_label("Kick", 4, Cell::on(100), false),
-            "Kick, step 5, on, velocity 100"
+            "Kick, square 5, on, volume 100"
         );
         assert_eq!(
             cell_label("Kick", 0, Cell::Off, true),
-            "Kick, step 1, off, read only, piano roll data"
+            "Kick, square 1, off, read only, notes from Piano"
         );
     }
 }

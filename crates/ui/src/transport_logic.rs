@@ -41,7 +41,7 @@ pub fn format_position(tick: u64, beats_per_bar: u8, bpm: f64, fmt: PositionForm
     }
 }
 
-/// The accessible value text: "Bar 12, beat 3, step 2".
+/// The accessible value text: "Bar 12, beat 3, sixteenth 2".
 pub fn spoken_position(tick: u64, beats_per_bar: u8) -> String {
     let t = format_position(tick, beats_per_bar, 120.0, PositionFormat::Bars);
     let mut it = t.split(':').map(|p| p.trim_start_matches('0'));
@@ -49,7 +49,7 @@ pub fn spoken_position(tick: u64, beats_per_bar: u8) -> String {
     let beat = it.next().unwrap_or("1");
     let step = it.next().unwrap_or("1");
     format!(
-        "Bar {}, beat {beat}, step {step}",
+        "Bar {}, beat {beat}, sixteenth {step}",
         if bar.is_empty() { "0" } else { bar }
     )
 }
@@ -91,7 +91,9 @@ impl TapTempo {
 /// Parses what the user typed in the tempo box. `None` if it is not a
 /// number in the allowed range (the box then reverts and shows a toast).
 pub fn parse_tempo(text: &str, min: f64, max: f64) -> Option<f64> {
-    let v: f64 = text.trim().parse().ok()?;
+    let t = text.trim();
+    let t = t.strip_suffix("BPM").unwrap_or(t).trim();
+    let v: f64 = t.parse().ok()?;
     (v.is_finite() && (min..=max).contains(&v)).then_some(v)
 }
 
@@ -132,9 +134,9 @@ mod tests {
     fn spoken() {
         assert_eq!(
             spoken_position(11 * 3840 + 2 * 960 + 240, 4),
-            "Bar 12, beat 3, step 2"
+            "Bar 12, beat 3, sixteenth 2"
         );
-        assert_eq!(spoken_position(0, 4), "Bar 1, beat 1, step 1");
+        assert_eq!(spoken_position(0, 4), "Bar 1, beat 1, sixteenth 1");
     }
 
     #[test]

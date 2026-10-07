@@ -23,10 +23,10 @@ use crate::files;
 use crate::help;
 use crate::mixer::Mixer;
 use crate::palette;
-use crate::pattern_page::{self, PatternPage};
 use crate::prefs;
 use crate::shortcuts::{self, SHORTCUTS};
 use crate::size_class::{self, SizeClass};
+use crate::timeline_page::{self, TimelinePage};
 use crate::transport::Transport;
 use crate::{browser, export, inspector};
 use doc::bundle::{AutosaveDebounce, AutosaveWorker};
@@ -75,7 +75,8 @@ struct Ui {
     redo: gtk::Button,
     narrow_title: adw::WindowTitle,
     transport: Rc<Transport>,
-    pattern: PatternPage,
+    timeline: TimelinePage,
+    mixer: Rc<Mixer>,
 }
 
 fn flat_toggle(icon: &str, label: &str) -> gtk::ToggleButton {
@@ -94,28 +95,6 @@ fn flat_button(icon: &str, label: &str, action: &str) -> gtk::Button {
     b
 }
 
-fn main_menu() -> gio::Menu {
-    let menu = gio::Menu::new();
-    let project = gio::Menu::new();
-    project.append(Some("_New Project"), Some("win.new"));
-    project.append(Some("_Open Project…"), Some("win.open"));
-    project.append(Some("_Save"), Some("win.save"));
-    project.append(Some("Save _As…"), Some("win.save-as"));
-    menu.append_section(None, &project);
-    let output = gio::Menu::new();
-    output.append(Some("_Export Audio…"), Some("win.export"));
-    menu.append_section(None, &output);
-    let plugins = gio::Menu::new();
-    plugins.append(Some("Add _Plugin…"), Some("win.add-plugin"));
-    menu.append_section(None, &plugins);
-    let end = gio::Menu::new();
-    end.append(Some("_Preferences"), Some("app.preferences"));
-    end.append(Some("_Keyboard Shortcuts"), Some("win.show-help-overlay"));
-    end.append(Some("_About LibreDAW"), Some("app.about"));
-    menu.append_section(None, &end);
-    menu
-}
-
 pub fn build(gapp: &adw::Application, app: Rc<App>) -> adw::ApplicationWindow {
     load_css();
     prefs::apply_color_scheme(app.settings.borrow().color_scheme);
@@ -126,7 +105,7 @@ pub fn build(gapp: &adw::Application, app: Rc<App>) -> adw::ApplicationWindow {
         .default_height(h)
         .width_request(360)
         .height_request(294)
-        .title("LibreDAW")
+        .title("Oto")
         .build();
 
     // ---- header bar ----
@@ -138,7 +117,7 @@ pub fn build(gapp: &adw::Application, app: Rc<App>) -> adw::ApplicationWindow {
     let inspector_toggle = flat_toggle("sidebar-show-right-symbolic", "Inspector");
     let menu_button = gtk::MenuButton::new();
     menu_button.set_icon_name("open-menu-symbolic");
-    menu_button.set_menu_model(Some(&main_menu()));
+    menu_button.set_menu_model(Some(&crate::menus::main_menu()));
     menu_button.set_primary(true);
     menu_button.add_css_class("flat");
     menu_button.set_tooltip_text(Some("Main Menu"));
@@ -155,6 +134,11 @@ pub fn build(gapp: &adw::Application, app: Rc<App>) -> adw::ApplicationWindow {
     title_box.append(&switcher);
     title_box.append(&narrow_title);
 
+    // ---- the content: header, transport, banners, pages ----
+    // Each pane has its own toolbar view and header bar, as in GNOME's own
+    // split-view apps; the panes' headers line up with the content header
+    // by construction, and libadwaita shows the window buttons only on the
+    // outermost headers.
     let header = adw::HeaderBar::new();
     header.set_title_widget(Some(&title_box));
     header.pack_start(&sounds_toggle);
@@ -169,20 +153,14 @@ pub fn build(gapp: &adw::Application, app: Rc<App>) -> adw::ApplicationWindow {
     header.pack_end(&inspector_toggle);
     header.pack_end(&agent_btn);
 
-    // ---- pages ----
-    let pattern = pattern_page::build(&window, &app);
+    let timeline = timeline_page::build(&app);
     let mixer = Mixer::new(app.clone());
-    let song = adw::StatusPage::new();
-    song.set_icon_name(Some("view-continuous-symbolic"));
-    song.set_title("Song Arrangement");
-    song.set_description(Some("Arranging patterns into a song is coming next."));
     stack.add_titled_with_icon(
-        &pattern.widget,
-        Some("pattern"),
-        "Pattern",
-        "view-list-symbolic",
+        &timeline.widget,
+        Some("timeline"),
+        "Timeline",
+        "view-continuous-symbolic",
     );
-    stack.add_titled_with_icon(&song, Some("song"), "Song", "view-continuous-symbolic");
     stack.add_titled_with_icon(
         &mixer.widget(),
         Some("mixer"),
@@ -190,63 +168,91 @@ pub fn build(gapp: &adw::Application, app: Rc<App>) -> adw::ApplicationWindow {
         "audio-volume-high-symbolic",
     );
 
+    let transport = Transport::new(&app);
+    let banner = adw::Banner::new("");
+    banner.set_button_label(Some("Review"));
+    banner.set_revealed(false);
+    // Audio that could not start stays visible until it works.
+    let audio_banner = adw::Banner::new("");
+    audio_banner.set_button_label(Some("Retry"));
+    audio_banner.set_revealed(false);
+    // Toasts sit over the pages, above the bottom view switcher.
+    let toasts = adw::ToastOverlay::new();
+    toasts.set_child(Some(&stack));
     let switcher_bar = adw::ViewSwitcherBar::new();
     switcher_bar.set_stack(Some(&stack));
     let center = adw::ToolbarView::new();
-    center.set_content(Some(&stack));
+    center.add_top_bar(&header);
+    center.add_top_bar(&transport.bar);
+    center.add_top_bar(&audio_banner);
+    center.add_top_bar(&banner);
+    center.set_content(Some(&toasts));
     center.add_bottom_bar(&switcher_bar);
 
     // ---- side panes ----
+    // Pinned beside the content while there is room, over it when the
+    // window is narrow; `pin-sidebar` keeps the user's open or closed
+    // choice when that changes.
     let inspector = inspector::build(&app);
     let inspector_split = adw::OverlaySplitView::builder()
         .sidebar_position(gtk::PackType::End)
-        .min_sidebar_width(300.0)
-        .max_sidebar_width(420.0)
-        .sidebar_width_fraction(0.28)
+        .min_sidebar_width(280.0)
+        .max_sidebar_width(360.0)
+        .sidebar_width_unit(adw::LengthUnit::Sp)
+        .sidebar_width_fraction(0.25)
+        .pin_sidebar(true)
         .show_sidebar(false)
         .build();
     inspector_split.set_sidebar(Some(&inspector.widget));
     inspector_split.set_content(Some(&center));
+    let sounds = adw::ToolbarView::new();
+    let sounds_header = adw::HeaderBar::new();
+    sounds_header.set_title_widget(Some(&adw::WindowTitle::new("Sounds", "")));
+    sounds.add_top_bar(&sounds_header);
+    sounds.set_content(Some(&browser::build(&app)));
     let browser_split = adw::OverlaySplitView::builder()
         .sidebar_position(gtk::PackType::Start)
         .min_sidebar_width(260.0)
-        .max_sidebar_width(360.0)
-        .sidebar_width_fraction(0.2)
+        .max_sidebar_width(340.0)
+        .sidebar_width_unit(adw::LengthUnit::Sp)
+        .sidebar_width_fraction(0.22)
+        .pin_sidebar(true)
         .show_sidebar(false)
         .build();
-    browser_split.set_sidebar(Some(&browser::build(&app)));
+    browser_split.set_sidebar(Some(&sounds));
     browser_split.set_content(Some(&inspector_split));
 
-    // ---- transport and the toolbar view ----
-    let transport = Transport::new(&app);
-    let view = adw::ToolbarView::new();
-    let banner = adw::Banner::new("");
-    banner.set_button_label(Some("Review"));
-    banner.set_revealed(false);
-    view.add_top_bar(&header);
-    view.add_top_bar(&transport.bar);
-    view.add_top_bar(&banner);
-    view.set_content(Some(&browser_split));
-
     let overlay = gtk::Overlay::new();
-    overlay.set_child(Some(&view));
+    overlay.set_child(Some(&browser_split));
     overlay.add_overlay(&palette::install());
-    let toasts = adw::ToastOverlay::new();
-    toasts.set_child(Some(&overlay));
-    window.set_content(Some(&toasts));
+    window.set_content(Some(&overlay));
     {
-        let t = toasts.clone();
-        app.set_toaster(move |m| {
-            t.add_toast(adw::Toast::new(m));
+        // One toast per message: a repeat of a toast that is showing is
+        // dropped instead of queued behind it; different ones queue.
+        let shown: Rc<RefCell<Vec<String>>> = Rc::default();
+        let (t, s) = (toasts.clone(), shown.clone());
+        let add = Rc::new(move |toast: adw::Toast| {
+            // Messages are plain text (names can hold "&" or "<").
+            toast.set_use_markup(false);
+            let title = toast.title().map(|t| t.to_string()).unwrap_or_default();
+            if s.borrow().contains(&title) {
+                return;
+            }
+            s.borrow_mut().push(title.clone());
+            let s2 = s.clone();
+            toast.connect_dismissed(move |_| s2.borrow_mut().retain(|x| x != &title));
+            t.add_toast(toast);
         });
-        let t = toasts.clone();
+        let a2 = add.clone();
+        app.set_toaster(move |m| a2(adw::Toast::new(m)));
         app.set_action_toaster(move |m, label, cb| {
             let toast = adw::Toast::new(m);
             toast.set_button_label(Some(label));
             toast.connect_button_clicked(move |_| cb());
-            t.add_toast(toast);
+            add(toast);
         });
     }
+    install_audio_banner(&audio_banner, &app);
 
     let ui = Rc::new(Ui {
         window: window.clone(),
@@ -259,7 +265,8 @@ pub fn build(gapp: &adw::Application, app: Rc<App>) -> adw::ApplicationWindow {
         redo,
         narrow_title: narrow_title.clone(),
         transport: transport.clone(),
-        pattern,
+        timeline,
+        mixer: mixer.clone(),
         banner: banner.clone(),
         agent_btn: agent_btn.clone(),
     });
@@ -292,6 +299,7 @@ pub fn build(gapp: &adw::Application, app: Rc<App>) -> adw::ApplicationWindow {
             }
             UiCommand::AgentChanged => update_agent_ui(&u, &a2),
             UiCommand::EditNotes => {}
+            UiCommand::RenameChannel(id) => u.timeline.channels.rename(id),
         });
     }
     {
@@ -312,12 +320,25 @@ pub fn build(gapp: &adw::Application, app: Rc<App>) -> adw::ApplicationWindow {
         app.on_change(move || sync_header(&u, &a));
     }
     sync_header(&ui, &app);
+    // The keyboard starts in the content (the step grid), not nowhere.
+    {
+        let u = ui.clone();
+        window.connect_map(move |_| {
+            let u = u.clone();
+            glib::idle_add_local_once(move || {
+                if gtk::prelude::GtkWindowExt::focus(&u.window).is_none() {
+                    u.timeline.timeline.grab_focus();
+                }
+            });
+        });
+    }
     install_debug_shot(gapp, &ui, &app);
+    crate::debug_shot::install(ui.window.upcast_ref());
     window
 }
 
 /// Debug aids for screenshots without a screenshot tool:
-/// `LIBREDAW_PAGE=pattern|song|mixer` picks the page,
+/// `LIBREDAW_PAGE=timeline|mixer` picks the page,
 /// `LIBREDAW_THEME=light|dark` the color scheme, and
 /// `LIBREDAW_SHOT=/path.png` writes the window to a PNG a moment after it
 /// is shown and quits. `LIBREDAW_SIZE=360x640` sets the size, and
@@ -474,14 +495,26 @@ fn install_breakpoints(
 
     let regular = adw::Breakpoint::new(max_w(size_class::REGULAR_MAX_SP));
     let compact = adw::Breakpoint::new(max_w(size_class::COMPACT_MAX_SP));
+    // Both panes overlay below 1100 sp: the content would get less than
+    // about 600 sp beside the sounds pane. Only setters, no size class.
+    let medium = adw::Breakpoint::new(max_w(1100));
+    medium.add_setter(&ui.browser_split, "collapsed", Some(&true.to_value()));
+    medium.add_setter(&ui.inspector_split, "collapsed", Some(&true.to_value()));
     let narrow = adw::Breakpoint::new(max_w(size_class::NARROW_MAX_SP));
     let landscape = adw::Breakpoint::new(Cond::new_and(
         max_w(size_class::NARROW_MAX_SP),
         max_h(size_class::LANDSCAPE_MAX_PX),
     ));
+    // The panes sit beside the content while it keeps about 600 sp; below
+    // that they overlay it. Only whether they overlap changes, never
+    // whether they are open.
+    // Below 1400 sp the inspector overlays (both panes would leave the
+    // content less than about 600 sp); below 900 sp the sounds pane too.
     for bp in [&regular, &compact, &narrow, &landscape] {
-        bp.add_setter(&ui.browser_split, "collapsed", Some(&on));
         bp.add_setter(&ui.inspector_split, "collapsed", Some(&on));
+    }
+    for bp in [&compact, &narrow, &landscape] {
+        bp.add_setter(&ui.browser_split, "collapsed", Some(&on));
     }
     for bp in [&compact, &narrow, &landscape] {
         transport.add_compact_setters(bp);
@@ -544,6 +577,10 @@ fn install_breakpoints(
             p();
         });
         ui.window.add_breakpoint(bp.clone());
+        if i == 0 {
+            // Between regular and compact (the last matching breakpoint wins).
+            ui.window.add_breakpoint(medium.clone());
+        }
     }
 
     // The short class follows the window height.
@@ -561,6 +598,47 @@ fn install_breakpoints(
         });
     }
     publish();
+}
+
+/// "Audio is off: <reason>" with Retry, shown while there is no audio
+/// stream (a toast would be gone before the user read it).
+fn install_audio_banner(banner: &adw::Banner, app: &Rc<App>) {
+    banner.set_use_markup(false);
+    let sync = {
+        let (b, a) = (banner.clone(), app.clone());
+        move || {
+            let err = a.ui.borrow().audio_error.clone();
+            match err {
+                Some(e) => {
+                    let title = format!("Audio is off: {e}");
+                    if b.title() != title {
+                        b.set_title(&title);
+                    }
+                    b.set_revealed(true);
+                }
+                None => b.set_revealed(false),
+            }
+        }
+    };
+    sync();
+    app.on_change(sync.clone());
+    let a = app.clone();
+    banner.connect_button_clicked(move |_| {
+        let configs = crate::run::audio_configs(&a.settings.borrow());
+        let r = a.session.borrow_mut().start_audio(&configs);
+        match r {
+            Ok(()) => {
+                a.ui.borrow_mut().audio_error = None;
+                a.toast("Audio is on");
+            }
+            Err(e) => {
+                a.ui.borrow_mut().audio_error = Some(e);
+                a.toast("Audio is still off");
+            }
+        }
+        a.notify();
+        sync();
+    });
 }
 
 /// The approval banner and the agent indicator follow the control state.
@@ -586,7 +664,7 @@ fn page_name(ui: &Ui) -> String {
     ui.stack
         .visible_child_name()
         .map(|s| s.to_string())
-        .unwrap_or_else(|| "pattern".into())
+        .unwrap_or_else(|| "timeline".into())
 }
 
 fn sync_header(ui: &Ui, app: &App) {
@@ -614,7 +692,7 @@ fn sync_header(ui: &Ui, app: &App) {
         name.clone()
     };
     ui.narrow_title.set_title(&shown);
-    ui.window.set_title(Some(&format!("{shown} - LibreDAW")));
+    ui.window.set_title(Some(&format!("{shown} - Oto")));
     let sub = match app.ui.borrow().audio_error.clone() {
         Some(_) => "Audio is off".to_string(),
         None => String::new(),
@@ -624,7 +702,26 @@ fn sync_header(ui: &Ui, app: &App) {
 }
 
 fn go_to_page(ui: &Ui, page: &str) {
+    // Older view files name the "pattern" page: the timeline replaced it.
+    let page = if ui.stack.child_by_name(page).is_some() {
+        page
+    } else {
+        "timeline"
+    };
     ui.stack.set_visible_child_name(page);
+}
+
+/// Ctrl++ / Ctrl+- / Ctrl+0: the piano roll when it has the keyboard,
+/// else the timeline. `factor == 0` resets.
+fn zoom(ui: &Ui, factor: f64) {
+    let roll = &ui.timeline.editor.roll;
+    let in_roll = roll.has_focus();
+    match (in_roll, factor == 0.0) {
+        (true, true) => roll.reset_zoom(),
+        (true, false) => roll.zoom_x(factor),
+        (false, true) => ui.timeline.timeline.reset_zoom(),
+        (false, false) => ui.timeline.timeline.zoom_x(factor),
+    }
 }
 
 /// `win.*` and `app.*` actions.
@@ -700,23 +797,16 @@ fn install_actions(gapp: &adw::Application, ui: &Rc<Ui>, app: &Rc<App>) {
             }
         }),
     );
-    for (name, page) in [
-        ("view-pattern", "pattern"),
-        ("view-song", "song"),
-        ("view-mixer", "mixer"),
-    ] {
+    for (name, page) in [("view-timeline", "timeline"), ("view-mixer", "mixer")] {
         let u = ui.clone();
         add(name, Box::new(move || go_to_page(&u, page)));
     }
     let u = ui.clone();
-    add("zoom-in", Box::new(move || u.pattern.roll.zoom_x(1.3)));
+    add("zoom-in", Box::new(move || zoom(&u, 1.3)));
     let u = ui.clone();
-    add(
-        "zoom-out",
-        Box::new(move || u.pattern.roll.zoom_x(1.0 / 1.3)),
-    );
+    add("zoom-out", Box::new(move || zoom(&u, 1.0 / 1.3)));
     let u = ui.clone();
-    add("zoom-reset", Box::new(move || u.pattern.roll.reset_zoom()));
+    add("zoom-reset", Box::new(move || zoom(&u, 0.0)));
     let a = app.clone();
     add("edit-notes", Box::new(move || a.edit_notes(None)));
 
@@ -724,7 +814,14 @@ fn install_actions(gapp: &adw::Application, ui: &Rc<Ui>, app: &Rc<App>) {
     let u = ui.clone();
     add(
         "rename",
-        Box::new(move || u.pattern.channels.rename_selected()),
+        Box::new(move || {
+            // F2 renames what the page in front has selected.
+            if page_name(&u) == "mixer" {
+                u.mixer.rename_selected();
+            } else {
+                u.timeline.channels.rename_selected();
+            }
+        }),
     );
     let a = app.clone();
     let preset = gio::SimpleAction::new("add-preset", Some(glib::VariantTy::STRING));
@@ -914,7 +1011,8 @@ fn install_view_hooks(ui: &Rc<Ui>, app: &Rc<App>) {
     let (u1, u2) = (ui.clone(), ui.clone());
     app.set_view_hooks(
         move || {
-            let (px_per_tick, row_h, scroll_x, scroll_y, snap) = u1.pattern.roll.view_params();
+            let (px_per_tick, row_h, scroll_x, scroll_y, snap) =
+                u1.timeline.editor.roll.view_params();
             ViewState {
                 px_per_tick,
                 row_h,
@@ -928,16 +1026,17 @@ fn install_view_hooks(ui: &Rc<Ui>, app: &Rc<App>) {
             }
         },
         move |v| {
-            u2.pattern.roll.set_view_params(
+            u2.timeline.editor.roll.set_view_params(
                 v.px_per_tick,
                 v.row_h,
                 v.scroll_x,
                 v.scroll_y,
                 v.snap as usize,
             );
-            u2.pattern
+            u2.timeline
+                .editor
                 .snap
-                .set_selected(u2.pattern.roll.snap_index() as u32);
+                .set_selected(u2.timeline.editor.roll.snap_index() as u32);
             go_to_page(&u2, &v.page);
             u2.sounds_toggle.set_active(v.sounds_open);
             u2.inspector_toggle.set_active(v.inspector_open);

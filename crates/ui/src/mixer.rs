@@ -23,8 +23,10 @@ use protocol::model::Project;
 
 use crate::app::{App, MeterUser};
 use crate::dialogs::{self, PluginKind};
+use crate::menus::{self, STRIP_ACTIONS};
 use crate::widgets::color_bar::ColorBar;
 use crate::widgets::meter::{Meter, db_text, peak_to_db};
+use crate::widgets::rename_label::RenameLabel;
 
 /// Fader range shown. The bottom of the range means silence.
 const SLIDER_MIN_DB: f64 = -60.0;
@@ -79,6 +81,7 @@ struct Strip {
     silent: gtk::Label,
     meter: Meter,
     peak: gtk::Label,
+    name: Option<Rc<RenameLabel>>,
 }
 
 pub struct Mixer {
@@ -111,7 +114,7 @@ impl Mixer {
         let empty = adw::StatusPage::new();
         empty.set_icon_name(Some("audio-volume-high-symbolic"));
         empty.set_title("No Tracks Yet");
-        empty.set_description(Some("Tracks appear here when you add channels."));
+        empty.set_description(Some("Tracks appear here when you add instruments."));
         empty.add_css_class("compact");
         let stack = gtk::Stack::new();
         stack.add_named(&scroller, Some("strips"));
@@ -160,12 +163,27 @@ impl Mixer {
         self.root.clone().upcast()
     }
 
+    /// F2 on the Mixer page: renames the selected track (not Master).
+    pub fn rename_selected(&self) {
+        let track = self.app.ui.borrow().track;
+        let label = self
+            .strips
+            .borrow()
+            .iter()
+            .find(|s| s.track == track)
+            .and_then(|s| s.name.clone());
+        if let Some(l) = label {
+            l.start_editing();
+        }
+    }
+
     fn signature(p: &Project) -> String {
         let mut s = String::new();
         for t in &p.tracks {
             s.push_str(&format!("t{}:{}", t.id, t.name));
-            for r in t.inserts.iter().filter_map(crate::change::clap_of) {
-                s.push_str(&format!(",{}={}", r.instance, r.plugin_id));
+            // Every effect, built-in or plugin, changes the strip.
+            for i in &t.inserts {
+                s.push_str(&format!(",{}", i.instance()));
             }
             s.push(';');
         }
@@ -245,7 +263,14 @@ impl Mixer {
             "Mixer strip: {name}"
         ))]);
 
-        let bar = ColorBar::new(id.0);
+        // The color of the first channel playing through this track.
+        let slot = proj
+            .channels
+            .iter()
+            .position(|c| c.track == id)
+            .map(|i| i as u32)
+            .unwrap_or(id.0);
+        let bar = ColorBar::new(slot);
         bar.set_horizontal(true);
         bar.set_height_request(4);
         bar.set_margin_start(6);
@@ -260,36 +285,41 @@ impl Mixer {
         strip.append(&inner);
 
         // Name.
+        let mut name_label: Option<Rc<RenameLabel>> = None;
         if is_master {
-            let l = gtk::Label::new(Some("Master"));
+            let l = gtk::Label::new(Some("Main Output"));
             l.add_css_class("heading");
             inner.append(&l);
         } else {
-            let l = gtk::EditableLabel::new(&name);
-            l.set_alignment(0.5);
-            l.set_width_chars(6);
-            l.set_max_width_chars(10);
-            l.add_css_class("heading");
-            l.set_tooltip_text(Some("Double-click to rename"));
-            l.update_property(&[gtk::accessible::Property::Label(&format!(
-                "Name of track {name}"
-            ))]);
-            let (m, orig) = (self.clone(), name.clone());
-            l.connect_editing_notify(move |w| {
-                if w.is_editing() {
-                    m.editing.set(m.editing.get() + 1);
-                } else {
-                    m.editing.set(m.editing.get().saturating_sub(1));
-                    let new = w.text().trim().to_string();
-                    if !new.is_empty() && new != orig {
-                        m.app.edit(vec![Edit::RenameTrack {
-                            track: id,
-                            name: new,
-                        }]);
+            // Renamed with F2 or the strip menu, never by a click.
+            let l = RenameLabel::new(&name);
+            l.label().set_xalign(0.5);
+            l.label().set_width_chars(6);
+            l.label().set_max_width_chars(10);
+            l.label().add_css_class("heading");
+            l.widget
+                .set_tooltip_text(Some("Track name (F2 or the menu renames)"));
+            {
+                let m = self.clone();
+                l.connect_editing(move |on| {
+                    if on {
+                        m.editing.set(m.editing.get() + 1);
+                    } else {
+                        m.editing.set(m.editing.get().saturating_sub(1));
+                        let m2 = m.clone();
+                        glib::idle_add_local_once(move || m2.sync());
                     }
-                }
-            });
-            inner.append(&l);
+                });
+                let m = self.clone();
+                l.connect_commit(move |new| {
+                    m.app.edit(vec![Edit::RenameTrack {
+                        track: id,
+                        name: new.to_string(),
+                    }]);
+                });
+            }
+            inner.append(&l.widget);
+            name_label = Some(l);
             // Which channels play through this track.
             let names: Vec<&str> = proj
                 .channels
@@ -303,7 +333,7 @@ impl Mixer {
             cap.set_ellipsize(gtk::pango::EllipsizeMode::End);
             cap.set_max_width_chars(10);
             cap.set_tooltip_text(Some(&format!(
-                "Channels on this track: {}",
+                "Instruments on this track: {}",
                 names.join(", ")
             )));
             inner.append(&cap);
@@ -319,32 +349,65 @@ impl Mixer {
         fx_label.add_css_class("caption-heading");
         fx_label.set_xalign(0.0);
         inner.append(&fx_label);
-        for r in track.inserts.iter().filter_map(crate::change::clap_of) {
-            inner.append(&self.insert_row(id, r.instance, &r.plugin_id));
+        // Every effect on the track, built-in or plugin, in signal order.
+        for ins in &track.inserts {
+            let row = match ins {
+                protocol::model::Insert::Clap(r) => self.insert_row(id, r.instance, &r.plugin_id),
+                protocol::model::Insert::Builtin { instance, fx } => {
+                    self.builtin_row(id, *instance, fx.kind())
+                }
+            };
+            inner.append(&row);
         }
-        let add = gtk::Button::from_icon_name("list-add-symbolic");
+        // One "add effect" menu: the built-in effects, then a plugin.
+        let add_tip = "Add an effect that changes how this track sounds";
+        let add = gtk::MenuButton::new();
+        add.set_icon_name("list-add-symbolic");
         add.add_css_class("flat");
-        add.set_tooltip_text(Some("Add Effect"));
-        add.update_property(&[gtk::accessible::Property::Label(&format!(
-            "Add effect to {name}"
-        ))]);
-        let m = self.clone();
-        add.connect_clicked(move |b| m.add_effect(b.upcast_ref(), id));
+        add.set_tooltip_text(Some(add_tip));
+        add.update_property(&[gtk::accessible::Property::Label(add_tip)]);
+        add.set_menu_model(Some(&menus::effects_menu()));
+        let fx = gio::SimpleActionGroup::new();
+        for n in menus::FX_ACTIONS {
+            let action = if *n == "add" {
+                gio::SimpleAction::new(n, Some(glib::VariantTy::STRING))
+            } else {
+                gio::SimpleAction::new(n, None)
+            };
+            let (m, b, n) = (self.clone(), add.clone(), *n);
+            action.connect_activate(move |_, v| match n {
+                "add" => {
+                    let want = v.and_then(|v| v.get::<String>());
+                    if let Some(kind) = menus::EFFECTS
+                        .iter()
+                        .find(|e| Some(e.1) == want.as_deref())
+                        .map(|e| e.0)
+                    {
+                        m.add_builtin(id, kind);
+                    }
+                }
+                "plugin" => m.add_effect(b.upcast_ref(), id),
+                _ => {}
+            });
+            fx.add_action(&action);
+        }
+        add.insert_action_group("fx", Some(&fx));
         inner.append(&add);
 
-        // Sends arrive with effect returns (Milestone B).
-        let sends = gtk::Button::with_label("Sends");
-        sends.add_css_class("flat");
-        sends.set_sensitive(false);
-        sends.set_tooltip_text(Some("Sends arrive with effect returns"));
-        inner.append(&sends);
-
-        // Pan.
+        // Pan, with its name.
+        let pan_label = gtk::Label::new(Some("Left/Right"));
+        pan_label.add_css_class("caption-heading");
+        pan_label.set_xalign(0.0);
+        inner.append(&pan_label);
         let pan = gtk::Scale::with_range(gtk::Orientation::Horizontal, -1.0, 1.0, 0.01);
         pan.set_draw_value(false);
         pan.add_mark(0.0, gtk::PositionType::Bottom, None);
-        pan.set_tooltip_text(Some("Pan. Double-click centers."));
-        pan.update_property(&[gtk::accessible::Property::Label(&format!("Pan of {name}"))]);
+        pan.set_tooltip_text(Some(
+            "Moves the sound toward the left or right speaker; double-click to center it",
+        ));
+        pan.update_property(&[gtk::accessible::Property::Label(&format!(
+            "Left/Right of {name}"
+        ))]);
         {
             let m = self.clone();
             pan.connect_value_changed(move |s| {
@@ -380,7 +443,9 @@ impl Mixer {
         fader.set_draw_value(false);
         fader.set_vexpand(true);
         fader.set_height_request(120);
-        fader.set_tooltip_text(Some("Volume in dB. Double-click resets to 0."));
+        fader.set_tooltip_text(Some(
+            "How loud this track is; double-click to set it back to 0 dB",
+        ));
         fader.add_mark(0.0, gtk::PositionType::Right, None);
         fader.adjustment().set_page_increment(3.0);
         fader.update_property(&[gtk::accessible::Property::Label(&format!(
@@ -411,7 +476,8 @@ impl Mixer {
             // focused fader so scrolling the mixer never moves one.
             let keys = gtk::EventControllerKey::new();
             let f = fader.clone();
-            keys.connect_key_pressed(move |_, key, _, _| match key {
+            keys.connect_key_pressed(move |_, key, _, st| match key {
+                _ if !crate::keys::plain(st) => glib::Propagation::Proceed,
                 gdk::Key::Home => {
                     f.set_value(0.0);
                     glib::Propagation::Stop
@@ -439,7 +505,7 @@ impl Mixer {
         let meter = Meter::new();
         meter.set_label(&format!("Level of {name}"));
         meter.set_vexpand(true);
-        let peak = gtk::Label::new(Some("-inf"));
+        let peak = gtk::Label::new(Some("Silent"));
         peak.add_css_class("numeric");
         peak.add_css_class("caption");
         peak.add_css_class("dim-label");
@@ -450,17 +516,17 @@ impl Mixer {
         mrow.set_vexpand(true);
         inner.append(&mrow);
         inner.append(&peak);
-        readout.set_tooltip_text(Some("Volume"));
+        readout.set_tooltip_text(Some("How loud this track is, in decibels"));
         inner.append(&readout);
 
         // Mute and Solo, with their full names.
         let mute = gtk::ToggleButton::with_label("Mute");
         mute.add_css_class("caption");
-        mute.set_tooltip_text(Some("Mute (M)"));
+        mute.set_tooltip_text(Some("Silence this track (M)"));
         mute.update_property(&[gtk::accessible::Property::Label(&format!("Mute {name}"))]);
         let solo = gtk::ToggleButton::with_label("Solo");
         solo.add_css_class("caption");
-        solo.set_tooltip_text(Some("Solo (S)"));
+        solo.set_tooltip_text(Some("Hear only this track (S)"));
         solo.update_property(&[gtk::accessible::Property::Label(&format!("Solo {name}"))]);
         for (b, is_mute) in [(&mute, true), (&solo, false)] {
             let m = self.clone();
@@ -519,48 +585,41 @@ impl Mixer {
         }
 
         // Right click: Rename, Remove Track, Reset Fader.
-        if !is_master {
-            let menu = gio::Menu::new();
-            menu.append(Some("_Rename"), Some("strip.rename"));
-            menu.append(Some("Reset _Fader"), Some("strip.reset"));
-            menu.append(Some("Remove _Track"), Some("strip.remove"));
+        if let Some(label) = name_label.clone() {
             let group = gio::SimpleActionGroup::new();
-            let f = fader.clone();
-            let reset = gio::SimpleAction::new("reset", None);
-            reset.connect_activate(move |_, _| f.set_value(0.0));
-            group.add_action(&reset);
-            let m = self.clone();
-            let remove = gio::SimpleAction::new("remove", None);
-            remove.connect_activate(move |_, _| {
-                m.app.edit(vec![Edit::RemoveTrack { track: id }]);
-                let a = m.app.clone();
-                m.app
-                    .toast_action("Track removed", "Undo", move || a.undo());
+            for n in STRIP_ACTIONS {
+                let a = gio::SimpleAction::new(n, None);
+                let (m, f, l, n) = (self.clone(), fader.clone(), label.clone(), *n);
+                a.connect_activate(move |_, _| match n {
+                    "rename" => l.start_editing(),
+                    "reset" => f.set_value(0.0),
+                    "remove" => {
+                        m.app.edit(vec![Edit::RemoveTrack { track: id }]);
+                        let a = m.app.clone();
+                        m.app
+                            .toast_action("Track removed", "Undo", move || a.undo());
+                    }
+                    _ => {}
+                });
+                group.add_action(&a);
+            }
+            strip.insert_action_group("strip", Some(&group));
+            let a = self.app.clone();
+            crate::context_menu::attach(&strip, &menus::strip_menu(), move |_| {
+                a.select_track(id);
+                true
             });
-            group.add_action(&remove);
-            let rename = gio::SimpleAction::new("rename", None);
-            let first = inner.first_child();
-            rename.connect_activate(move |_, _| {
-                if let Some(l) = first
-                    .as_ref()
-                    .and_then(|w| w.downcast_ref::<gtk::EditableLabel>())
-                {
-                    l.start_editing();
+            // F2 on a focused strip renames it.
+            let keys = gtk::EventControllerKey::new();
+            keys.connect_key_pressed(move |_, key, _, st| {
+                if key == gdk::Key::F2 && crate::keys::plain(st) {
+                    label.start_editing();
+                    glib::Propagation::Stop
+                } else {
+                    glib::Propagation::Proceed
                 }
             });
-            group.add_action(&rename);
-            strip.insert_action_group("strip", Some(&group));
-            let pop = gtk::PopoverMenu::from_model(Some(&menu));
-            pop.set_parent(&strip);
-            pop.set_has_arrow(false);
-            let click = gtk::GestureClick::new();
-            click.set_button(gdk::BUTTON_SECONDARY);
-            let p = pop.clone();
-            click.connect_pressed(move |_, _, x, y| {
-                p.set_pointing_to(Some(&gdk::Rectangle::new(x as i32, y as i32, 1, 1)));
-                p.popup();
-            });
-            strip.add_controller(click);
+            strip.add_controller(keys);
         }
 
         if crate::perf::enabled() && std::env::var_os("LIBREDAW_MIN_DEBUG").is_some() {
@@ -585,6 +644,7 @@ impl Mixer {
             silent,
             meter,
             peak,
+            name: name_label,
         });
         strip.upcast()
     }
@@ -629,6 +689,58 @@ impl Mixer {
         });
         row.append(&del);
         row.upcast()
+    }
+
+    /// A built-in effect on the strip: its plain name (the explanation in
+    /// the tooltip) and a Remove button.
+    fn builtin_row(
+        self: &Rc<Mixer>,
+        track: TrackId,
+        inst: InstanceId,
+        kind: protocol::beats::BuiltinFxKind,
+    ) -> gtk::Widget {
+        let (name, what) = menus::effect_name(kind);
+        let row = gtk::Box::new(gtk::Orientation::Horizontal, 2);
+        let label = gtk::Label::new(Some(name));
+        label.set_xalign(0.0);
+        label.set_hexpand(true);
+        label.set_ellipsize(gtk::pango::EllipsizeMode::End);
+        label.set_margin_start(6);
+        label.set_tooltip_text(Some(what));
+        row.append(&label);
+        let del = gtk::Button::from_icon_name("window-close-symbolic");
+        del.add_css_class("flat");
+        del.add_css_class("circular");
+        let tip = format!("Remove {name}");
+        del.set_tooltip_text(Some(&tip));
+        del.update_property(&[gtk::accessible::Property::Label(&tip)]);
+        let m = self.clone();
+        del.connect_clicked(move |_| {
+            m.app.edit(vec![Edit::RemoveInsert {
+                track,
+                instance: inst,
+            }]);
+        });
+        row.append(&del);
+        row.upcast()
+    }
+
+    /// Adds a built-in effect at the end of the track's effects.
+    fn add_builtin(&self, track: TrackId, fx: protocol::beats::BuiltinFxKind) {
+        let n = self
+            .app
+            .session
+            .borrow()
+            .document()
+            .project
+            .track(track)
+            .map(|t| t.inserts.len())
+            .unwrap_or(0);
+        self.app.edit(vec![Edit::AddBuiltinInsert {
+            track,
+            index: n.min(255) as u8,
+            fx,
+        }]);
     }
 
     fn show_gui(&self, inst: InstanceId, title: &str) {
@@ -713,7 +825,10 @@ impl Mixer {
         for st in self.strips.borrow().iter() {
             let p = self.app.take_peaks(st.track, MeterUser::Mixer);
             st.meter.update([peak_to_db(p[0]), peak_to_db(p[1])]);
-            let text = db_text(st.meter.peak_db());
+            let text = match db_text(st.meter.peak_db()) {
+                t if t == "-inf" => "Silent".to_string(),
+                t => t,
+            };
             if st.peak.text() != text {
                 st.peak.set_text(&text);
             }

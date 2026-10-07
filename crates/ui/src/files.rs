@@ -52,13 +52,16 @@ pub fn display_name(path: &Option<PathBuf>) -> String {
     }
 }
 
-/// Makes sure a chosen path ends in `.ldaw`.
+/// Makes sure a chosen path ends in `.oto` (an older `.ldaw` name is kept).
+/// The extension of new projects.
+pub const EXTENSION: &str = "oto";
+
 pub fn with_extension(p: &Path) -> PathBuf {
-    if p.extension().is_some_and(|e| e == "ldaw") {
+    if p.extension().is_some_and(|e| e == EXTENSION || e == "ldaw") {
         p.to_path_buf()
     } else {
         let mut s = p.as_os_str().to_os_string();
-        s.push(".ldaw");
+        s.push(".oto");
         PathBuf::from(s)
     }
 }
@@ -181,10 +184,13 @@ fn after_saved(app: &Rc<App>, path: &Path, was_untitled: bool) {
 /// Ctrl+S: save in place, or ask where for a new project.
 pub fn save(parent: &impl IsA<gtk::Widget>, app: &Rc<App>) {
     if app.ui.borrow().path.is_some() {
-        save_current(app, |r| {
-            let _ = r;
+        // "Saved" only once it is on disk (a failure has its own toast).
+        let a = app.clone();
+        save_current(app, move |r| {
+            if r.is_ok() {
+                a.toast("Saved");
+            }
         });
-        app.toast("Saved");
     } else {
         save_as(parent, app);
     }
@@ -193,7 +199,7 @@ pub fn save(parent: &impl IsA<gtk::Widget>, app: &Rc<App>) {
 pub fn save_as(parent: &impl IsA<gtk::Widget>, app: &Rc<App>) {
     let dialog = gtk::FileDialog::builder()
         .title("Save project")
-        .initial_name(format!("{}.ldaw", display_name(&app.ui.borrow().path)))
+        .initial_name(format!("{}.oto", display_name(&app.ui.borrow().path)))
         .build();
     let app = app.clone();
     dialog.save(
@@ -266,6 +272,7 @@ pub fn fresh_project(a: &Rc<App>) {
         ui.path = None;
         ui.pattern = None;
         ui.channel = None;
+        ui.channel_cleared = false;
     }
     // A starter beat: one pattern and four channels, ready to play.
     crate::channels::add_starter_beat(a);
@@ -296,6 +303,7 @@ pub fn open_path(app: &Rc<App>, path: PathBuf) {
                     ui.path = Some(path.clone());
                     ui.pattern = None;
                     ui.channel = None;
+                    ui.channel_cleared = false;
                 }
                 if let Some(v) = ViewState::read(&path) {
                     a.apply_view(&v);
@@ -304,12 +312,7 @@ pub fn open_path(app: &Rc<App>, path: PathBuf) {
                 if let Some(rec) = o.recovered {
                     a.session.borrow_mut().apply_recovered(&rec.loaded.doc);
                     a.notify();
-                    a.toast(&persist::recovered_message(&time_text(rec.modified)));
-                }
-                // A project always has a pattern: an old one without any
-                // gets "Pattern 1" as one undoable edit.
-                if a.ensure_pattern().is_some() {
-                    a.notify();
+                    recovered_toast(&a, rec.modified);
                 }
                 let _ = LastSession {
                     path: Some(path),
@@ -350,16 +353,26 @@ pub fn open_recovery_bundle(app: &Rc<App>, bundle_dir: PathBuf, modified: System
                 a.session.borrow_mut().apply_recovered(&l.doc);
                 a.ui.borrow_mut().path = None;
                 a.ui.borrow_mut().pattern = None;
-                a.ui.borrow_mut().channel = None;
+                a.reset_selection();
                 a.notify();
-                a.ensure_pattern();
-                a.toast(&persist::recovered_message(&time_text(modified)));
+                recovered_toast(&a, modified);
                 // The old recovery bundle goes away once this session has
                 // written its own.
                 *a.stale_recovery.borrow_mut() = Some(bundle_dir);
             }
             Err(e) => a.toast(&format!("Could not recover the autosaved project: {e}")),
         },
+    );
+}
+
+/// "Restored your unsaved changes from 15:54" with Undo (the recovery is
+/// one undoable step back to the last save).
+fn recovered_toast(app: &Rc<App>, modified: SystemTime) {
+    let a = app.clone();
+    app.toast_action(
+        &format!("Restored your unsaved changes from {}", time_text(modified)),
+        "Undo",
+        move || a.undo(),
     );
 }
 
@@ -435,7 +448,7 @@ mod tests {
     fn extension_is_added_once() {
         assert_eq!(
             with_extension(Path::new("/a/Song")),
-            PathBuf::from("/a/Song.ldaw")
+            PathBuf::from("/a/Song.oto")
         );
         assert_eq!(
             with_extension(Path::new("/a/Song.ldaw")),
@@ -443,7 +456,7 @@ mod tests {
         );
         assert_eq!(
             with_extension(Path::new("/a/Song.v2")),
-            PathBuf::from("/a/Song.v2.ldaw")
+            PathBuf::from("/a/Song.v2.oto")
         );
     }
 
