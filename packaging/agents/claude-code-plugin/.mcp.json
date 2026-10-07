@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "libredaw": {
+      "command": "libredaw-mcp",
+      "args": []
+    }
+  }
+}
