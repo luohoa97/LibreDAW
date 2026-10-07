@@ -57,6 +57,9 @@ type Toaster = Rc<dyn Fn(&str)>;
 type CommandListener = Rc<dyn Fn(UiCommand)>;
 type ActionToaster = Rc<dyn Fn(&str, &str, Box<dyn Fn()>)>;
 
+/// Swaps Home and the project; the argument is whether Home shows.
+type HomeHook = Rc<dyn Fn(bool)>;
+
 pub struct App {
     pub session: RefCell<Session>,
     pub ui: RefCell<UiState>,
@@ -70,6 +73,9 @@ pub struct App {
     listeners: RefCell<Vec<Rc<dyn Fn()>>>,
     toaster: RefCell<Option<Toaster>>,
     action_toaster: RefCell<Option<ActionToaster>>,
+    /// Whether Home is showing instead of the project (SPEC 19.1).
+    at_home: Cell<bool>,
+    home_hook: RefCell<Option<HomeHook>>,
     notifying: Cell<bool>,
     pub settings: RefCell<Settings>,
     /// The control socket, when it started.
@@ -151,6 +157,8 @@ impl App {
             listeners: RefCell::new(Vec::new()),
             toaster: RefCell::new(None),
             action_toaster: RefCell::new(None),
+            at_home: Cell::new(true),
+            home_hook: RefCell::new(None),
             notifying: Cell::new(false),
         });
         app.fix_selection();
@@ -248,6 +256,34 @@ impl App {
 
     pub fn set_toaster(&self, f: impl Fn(&str) + 'static) {
         *self.toaster.borrow_mut() = Some(Rc::new(f));
+    }
+
+    pub fn at_home(&self) -> bool {
+        self.at_home.get()
+    }
+
+    /// The window registers how Home and the project swap places.
+    pub fn set_home_hook(&self, f: impl Fn(bool) + 'static) {
+        *self.home_hook.borrow_mut() = Some(Rc::new(f));
+    }
+
+    /// Shows Home. Playback stops; the project stays open underneath.
+    pub fn show_home(&self) {
+        self.stop();
+        self.switch_page(true);
+    }
+
+    /// Shows the project (after New, Open or Restore).
+    pub fn show_project(&self) {
+        self.switch_page(false);
+    }
+
+    fn switch_page(&self, home: bool) {
+        self.at_home.set(home);
+        let h = self.home_hook.borrow().clone();
+        if let Some(h) = h {
+            h(home);
+        }
     }
 
     pub fn set_action_toaster(&self, f: impl Fn(&str, &str, Box<dyn Fn()>) + 'static) {
