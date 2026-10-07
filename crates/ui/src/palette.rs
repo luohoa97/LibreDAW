@@ -264,7 +264,28 @@ pub fn colors() -> Colors {
         c.high_contrast = sm.is_high_contrast();
         Some(c)
     });
-    let c = read.unwrap_or_else(Colors::fallback);
+    // A theme without libadwaita's named colors (a plain GTK theme through
+    // GTK_THEME) leaves every probe the same color: use the fallback so the
+    // custom widgets stay readable.
+    let usable = |c: &Colors| c.get(Role::ViewBg) != c.get(Role::ViewFg);
+    let c = match read {
+        Some(c) if usable(&c) => c,
+        _ => {
+            let dark = adw::StyleManager::default().is_dark();
+            let mut f = Colors::fallback();
+            if dark {
+                let w = gdk::RGBA::new(1.0, 1.0, 1.0, 1.0);
+                let g = gdk::RGBA::new(0.12, 0.12, 0.12, 1.0);
+                f.roles[Role::ViewBg as usize] = g;
+                f.roles[Role::ViewFg as usize] = w;
+                f.roles[Role::WindowBg as usize] = g;
+                f.roles[Role::WindowFg as usize] = w;
+                f.roles[Role::CardBg as usize] = g;
+                f.dark = true;
+            }
+            f
+        }
+    };
     CACHE.with(|cache| cache.set(Some((gen_now, c))));
     c
 }

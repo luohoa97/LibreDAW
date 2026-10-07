@@ -340,11 +340,22 @@ fn install_debug_shot(gapp: &adw::Application, ui: &Rc<Ui>) {
         Ok("light") => adw::StyleManager::default().set_color_scheme(adw::ColorScheme::ForceLight),
         _ => {}
     }
+    // LIBREDAW_PLAY=1 starts playback after a second (drawing numbers).
+    if std::env::var_os("LIBREDAW_PLAY").is_some() {
+        let a = ui.window.clone();
+        glib::timeout_add_local_once(Duration::from_millis(1000), move || {
+            gtk::prelude::ActionGroupExt::activate_action(&a, "play-pause", None);
+        });
+    }
     let Ok(path) = std::env::var("LIBREDAW_SHOT") else {
         return;
     };
+    let delay = std::env::var("LIBREDAW_SHOT_DELAY_MS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(2500);
     let (gapp, window) = (gapp.clone(), ui.window.clone());
-    glib::timeout_add_local_once(Duration::from_millis(2500), move || {
+    glib::timeout_add_local_once(Duration::from_millis(delay), move || {
         let (w, h) = (window.width(), window.height());
         let paintable = gtk::WidgetPaintable::new(Some(&window));
         let snap = gtk::Snapshot::new();
