@@ -47,3 +47,11 @@ allow-git = []
 [advisories]
 version = 2
 yanked = "deny"
+# All three come only through tract-onnx (build dependency liquid, used by tract-linalg
+# to generate assembly; paste as a macro helper). No runtime parsing of untrusted
+# input. Revisit when tract or the toolchain moves on.
+ignore = [
+    { id = "RUSTSEC-2026-0319", reason = "anymap2 unmaintained; build-time only, via tract-linalg build dependency liquid-core" },
+    { id = "RUSTSEC-2024-0436", reason = "paste unmaintained; proc-macro helper used by tract-core, no runtime effect" },
+    { id = "RUSTSEC-2026-0009", reason = "time RFC 2822 stack exhaustion; time is a build-time dependency of liquid-core and never parses input; tract-linalg 0.21 pins time below 0.3.42, the fix is in 0.3.47" },
+]

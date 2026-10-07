@@ -141,6 +141,9 @@ pub fn build(gapp: &adw::Application, app: Rc<App>) -> adw::ApplicationWindow {
     // outermost headers.
     let header = adw::HeaderBar::new();
     header.set_title_widget(Some(&title_box));
+    let home_btn = flat_button("go-home-symbolic", "Home", "win.home");
+    home_btn.set_tooltip_text(Some(&shortcuts::tooltip("Home", "win.home")));
+    header.pack_start(&home_btn);
     header.pack_start(&sounds_toggle);
     header.pack_start(&undo);
     header.pack_start(&redo);
@@ -186,7 +189,10 @@ pub fn build(gapp: &adw::Application, app: Rc<App>) -> adw::ApplicationWindow {
     center.add_top_bar(&transport.bar);
     center.add_top_bar(&audio_banner);
     center.add_top_bar(&banner);
-    center.set_content(Some(&toasts));
+    // The pill sits over the pages, below the header.
+    let content_overlay = gtk::Overlay::new();
+    content_overlay.set_child(Some(&toasts));
+    center.set_content(Some(&content_overlay));
     center.add_bottom_bar(&switcher_bar);
 
     // ---- side panes ----
@@ -222,15 +228,34 @@ pub fn build(gapp: &adw::Application, app: Rc<App>) -> adw::ApplicationWindow {
     browser_split.set_sidebar(Some(&sounds));
     browser_split.set_content(Some(&inspector_split));
 
+    // Launch shows Home; a project replaces it (SPEC 19.1).
+    let home = crate::home::build(&app);
+    let root = gtk::Stack::new();
+    root.set_transition_type(gtk::StackTransitionType::Crossfade);
+    root.add_named(&home.widget, Some("home"));
+    root.add_named(&browser_split, Some("project"));
+    root.set_visible_child_name("home");
+    {
+        let (r, refresh) = (root.clone(), home.refresh.clone());
+        app.set_home_hook(move |at_home| {
+            r.set_visible_child_name(if at_home { "home" } else { "project" });
+            if at_home {
+                refresh();
+            }
+        });
+        (home.refresh)();
+    }
     let overlay = gtk::Overlay::new();
-    overlay.set_child(Some(&browser_split));
+    overlay.set_child(Some(&root));
     overlay.add_overlay(&palette::install());
+    crate::presence_ui::install(&app, &window, &overlay, &content_overlay);
     window.set_content(Some(&overlay));
     {
         // One toast per message: a repeat of a toast that is showing is
         // dropped instead of queued behind it; different ones queue.
         let shown: Rc<RefCell<Vec<String>>> = Rc::default();
         let (t, s) = (toasts.clone(), shown.clone());
+        let (home_toasts, root2) = (home.toasts.clone(), root.clone());
         let add = Rc::new(move |toast: adw::Toast| {
             // Messages are plain text (names can hold "&" or "<").
             toast.set_use_markup(false);
@@ -241,7 +266,12 @@ pub fn build(gapp: &adw::Application, app: Rc<App>) -> adw::ApplicationWindow {
             s.borrow_mut().push(title.clone());
             let s2 = s.clone();
             toast.connect_dismissed(move |_| s2.borrow_mut().retain(|x| x != &title));
-            t.add_toast(toast);
+            let at_home = root2.visible_child_name().as_deref() == Some("home");
+            if at_home {
+                home_toasts.add_toast(toast);
+            } else {
+                t.add_toast(toast);
+            }
         });
         let a2 = add.clone();
         app.set_toaster(move |m| a2(adw::Toast::new(m)));
@@ -449,8 +479,12 @@ fn install_toggles(ui: &Rc<Ui>) {
         let update = {
             let (t, name, action) = (toggle.clone(), name, action);
             move || {
-                let verb = if t.is_active() { "Hide" } else { "Show" };
-                t.set_tooltip_text(Some(&shortcuts::tooltip(&format!("{verb} {name}"), action)));
+                let text = match (t.is_active(), name) {
+                    (true, n) => format!("Hide {n}"),
+                    (false, "Sounds") => "Show Sounds – pick a sound to add an instrument".into(),
+                    (false, n) => format!("Show {n}"),
+                };
+                t.set_tooltip_text(Some(&shortcuts::tooltip(&text, action)));
             }
         };
         update();
@@ -771,6 +805,8 @@ fn install_actions(gapp: &adw::Application, ui: &Rc<Ui>, app: &Rc<App>) {
     add("open", Box::new(move || files::open(&w, &a)));
     let a = app.clone();
     add("new", Box::new(move || files::new_project(&a)));
+    let a = app.clone();
+    add("home", Box::new(move || files::go_home(&a, |_| {})));
     let (a, w) = (app.clone(), window.clone());
     add("export", Box::new(move || export::show(&w, &a)));
     let w = window.clone();
@@ -1109,6 +1145,7 @@ fn install_tick(app: &Rc<App>) {
     let worker = Rc::new(AutosaveWorker::spawn());
     let debounce = Rc::new(RefCell::new(AutosaveDebounce::standard()));
     let seen_revision = Rc::new(Cell::new(app.session.borrow().document().revision));
+    let play_sync = RefCell::new(crate::transport_logic::PlayingSync::default());
     let a = app.clone();
     glib::timeout_add_local(Duration::from_millis(10), move || {
         let now = Instant::now();
@@ -1160,8 +1197,11 @@ fn install_tick(app: &Rc<App>) {
             .status
             .playing
             .load(std::sync::atomic::Ordering::Relaxed);
-        if a.session.borrow().link.is_live() && a.ui.borrow().playing != playing {
-            a.ui.borrow_mut().playing = playing;
+        let shown = a.ui.borrow().playing;
+        if a.session.borrow().link.is_live()
+            && let Some(now_playing) = play_sync.borrow_mut().step(shown, playing, now)
+        {
+            a.ui.borrow_mut().playing = now_playing;
             a.notify();
         }
         glib::ControlFlow::Continue

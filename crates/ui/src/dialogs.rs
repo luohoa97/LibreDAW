@@ -75,7 +75,24 @@ pub fn choose_plugin(
                     .build();
                 list.append(&row);
             }
-            for d in shown {
+            // Plugins with sounds in our list come first; the rest sit behind
+            // "Other Plugins", out of the way of beginners.
+            let (main, other): (Vec<_>, Vec<_>) = shown.into_iter().partition(|d| {
+                plugin_host::sounds::plugins()
+                    .iter()
+                    .any(|p| p.clap_id == d.id)
+            });
+            let other_rows = adw::ExpanderRow::builder()
+                .title("Other Plugins")
+                .subtitle("For advanced users")
+                .build();
+            let have_main = !main.is_empty();
+            let any_other = !other.is_empty();
+            for (is_main, d) in main
+                .into_iter()
+                .map(|d| (true, d))
+                .chain(other.into_iter().map(|d| (false, d)))
+            {
                 let row = adw::ActionRow::builder()
                     .title(glib_escape(&d.name))
                     .subtitle(glib_escape(&format!(
@@ -91,7 +108,15 @@ pub fn choose_plugin(
                     dialog.close();
                     on_pick(d.clone());
                 });
-                list.append(&row);
+                if is_main {
+                    list.append(&row);
+                } else {
+                    other_rows.add_row(&row);
+                }
+            }
+            if any_other {
+                other_rows.set_expanded(!have_main);
+                list.append(&other_rows);
             }
         })
     };

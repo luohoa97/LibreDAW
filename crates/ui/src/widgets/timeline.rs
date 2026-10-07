@@ -305,6 +305,7 @@ impl Timeline {
                 o.apply_size_class();
             }
         });
+        crate::presence_ui::watch_redraw(&o);
         *o.imp().app.borrow_mut() = Some(app);
         o.apply_size_class();
         o.install_menu();
@@ -1099,6 +1100,7 @@ impl Timeline {
         let accent = colors.get(Role::Accent);
         let rows = self.rows();
         let clips = self.project_clips();
+        self.draw_agent_glow(s, &rows, &clips);
         match imp.drag.borrow().as_ref() {
             Some(Drag::Move { ids, dt, copy, .. }) if *dt != 0 => {
                 let ok = *copy || tl::fits_move(&clips, ids, *dt);
@@ -1164,5 +1166,55 @@ impl Timeline {
             draw::fill(s, &accent, x - 1.0, tl::RULER_H - tl::LOOP_H, 2.0, v.height);
             draw::rounded(s, &accent, x - 5.0, 0.0, 10.0, 6.0, 3.0);
         }
+    }
+}
+
+impl Timeline {
+    /// A soft orange outline on the clips an agent is working on, and a
+    /// faint wash on the row of an instrument it is working on (18.1).
+    fn draw_agent_glow(&self, s: &gtk::Snapshot, rows: &[ChannelId], clips: &[Clip]) {
+        let v = self.imp().view.get();
+        let base = crate::presence::glow_color();
+        for (row, id) in rows.iter().enumerate() {
+            let k = crate::presence::channel_glow(*id);
+            if k <= 0.0 {
+                continue;
+            }
+            let mut c = base;
+            c.set_alpha(0.10 * k);
+            draw::rounded(s, &c, 0.0, v.row_y(row) + 2.0, v.width, v.row_h - 4.0, 8.0);
+        }
+        s.push_clip(&draw::rect(
+            0.0,
+            tl::RULER_H,
+            v.width,
+            (v.height - tl::RULER_H).max(0.0),
+        ));
+        for cl in clips {
+            let k = crate::presence::clip_glow(cl);
+            if k <= 0.0 {
+                continue;
+            }
+            let Some(row) = rows.iter().position(|r| *r == cl.instrument) else {
+                continue;
+            };
+            let x0 = v.tick_to_x(cl.start as f64);
+            let x1 = v.tick_to_x(cl.end() as f64);
+            let rr = gsk::RoundedRect::from_rect(
+                draw::rect(
+                    x0 + 1.0,
+                    v.row_y(row) + 3.0,
+                    (x1 - x0 - 2.0).max(2.0),
+                    v.row_h - 6.0,
+                ),
+                6.0,
+            );
+            let mut c = base;
+            c.set_alpha(0.6 * k);
+            s.append_outset_shadow(&rr, &c, 0.0, 0.0, 1.0, 8.0);
+            c.set_alpha(0.95 * k);
+            s.append_border(&rr, &[2.0; 4], &[c; 4]);
+        }
+        s.pop();
     }
 }

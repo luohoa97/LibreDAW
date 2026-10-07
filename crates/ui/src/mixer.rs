@@ -256,6 +256,7 @@ impl Mixer {
         let strip = gtk::Box::new(gtk::Orientation::Vertical, 6);
         strip.add_css_class("card");
         strip.add_css_class("ldaw-strip");
+        crate::presence_ui::tag(&strip, protocol::control::Focus::Track(id));
         strip.set_valign(gtk::Align::Fill);
         strip.set_hexpand(false);
         strip.set_accessible_role(gtk::AccessibleRole::Group);

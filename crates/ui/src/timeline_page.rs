@@ -30,28 +30,6 @@ fn flat_button(icon: &str, tip: &str) -> gtk::Button {
     b
 }
 
-/// Opens the Sounds pane, the one place to choose a sound.
-fn add_instrument_button(pill: bool) -> gtk::Button {
-    let b = gtk::Button::new();
-    b.set_action_name(Some("win.add-sound"));
-    b.set_tooltip_text(Some("Pick a Sound for a New Instrument"));
-    if pill {
-        b.set_label("Add Instrument");
-        b.add_css_class("suggested-action");
-        b.add_css_class("pill");
-        b.set_halign(gtk::Align::Center);
-    } else {
-        b.set_child(Some(
-            &adw::ButtonContent::builder()
-                .icon_name("list-add-symbolic")
-                .label("Add Instrument")
-                .build(),
-        ));
-        b.add_css_class("flat");
-    }
-    b
-}
-
 pub fn build(app: &Rc<App>) -> TimelinePage {
     let timeline = Timeline::new(app.clone());
     let channels = ChannelList::new(app, &timeline.vadj());
@@ -70,7 +48,6 @@ pub fn build(app: &Rc<App>) -> TimelinePage {
         "zoom-in-symbolic",
         &shortcuts::tooltip("Zoom In", "win.zoom-in"),
     );
-    bar.append(&add_instrument_button(false));
     bar.append(&spacer);
     bar.append(&zoom_out);
     bar.append(&zoom_in);
@@ -109,11 +86,8 @@ pub fn build(app: &Rc<App>) -> TimelinePage {
     let empty = adw::StatusPage::new();
     empty.set_icon_name(Some("audio-x-generic-symbolic"));
     empty.set_title("No Instruments Yet");
-    empty.set_description(Some(
-        "Add an instrument, then click its row to add a clip. You can also drag a sound in from the sounds list.",
-    ));
+    empty.set_description(Some("Pick a sound on the left to add an instrument"));
     empty.add_css_class("compact");
-    empty.set_child(Some(&add_instrument_button(true)));
     let stack = gtk::Stack::new();
     stack.add_named(&body, Some("lanes"));
     stack.add_named(&empty, Some("empty"));
@@ -155,7 +129,13 @@ pub fn build(app: &Rc<App>) -> TimelinePage {
                     a.current_clip().is_some(),
                 )
             };
+            let entering = !instruments && st.visible_child_name().as_deref() != Some("empty");
             st.set_visible_child_name(if instruments { "lanes" } else { "empty" });
+            if entering {
+                // The empty state points at the Sounds pane, so open it.
+                let a2 = a.clone();
+                glib::idle_add_local_once(move || a2.command(crate::app::UiCommand::ShowSounds));
+            }
             let no_clips = a.session.borrow().document().project.clips.is_empty();
             first_hint.set_visible(instruments && no_clips);
             if ed.widget.is_visible() != clip {

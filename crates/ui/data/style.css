@@ -78,3 +78,24 @@ knob:focus-visible {
   outline-offset: 2px;
   border-radius: 50%;
 }
+
+/* Agent presence (SPEC 18.1): one warm orange that does not follow the
+   accent color, lighter on dark. Rows and strips fade the outline out
+   slowly and in quickly. */
+@define-color ldaw_agent_glow @orange_4;
+@define-color ldaw_agent_glow_dark @orange_2;
+.ldaw-agent-edge { color: @ldaw_agent_glow; }
+.ldaw-agent-edge.dark { color: @ldaw_agent_glow_dark; }
+.ldaw-channel-row, .ldaw-strip {
+  box-shadow: 0 0 0 0 alpha(@ldaw_agent_glow, 0);
+  transition: box-shadow 1500ms ease-out;
+}
+.ldaw-channel-row.ldaw-agent-glow, .ldaw-strip.ldaw-agent-glow {
+  box-shadow: 0 0 12px 2px alpha(@ldaw_agent_glow, 0.7);
+  transition: box-shadow 150ms ease-out;
+}
+.ldaw-channel-row.ldaw-agent-glow.dark, .ldaw-strip.ldaw-agent-glow.dark {
+  box-shadow: 0 0 12px 2px alpha(@ldaw_agent_glow_dark, 0.7);
+}
+.ldaw-agent-pill { border-radius: 999px; padding: 4px 6px 4px 14px; }
+.ldaw-agent-pill button.ldaw-agent-stop { border-radius: 999px; min-height: 24px; padding: 0 12px; }

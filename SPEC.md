@@ -1853,6 +1853,22 @@ clips and the mixer (20.4). It adds no parallel concept.
 - **Import:** drop an audio file on the timeline or on a row, or use
   Import Audio. WAV, FLAC, Ogg Vorbis and MP3 are supported. The file is
   decoded off the GTK thread and resampled to the project rate once.
+- **Drag and drop audio (Amendment 28).** Dragging any sound from the
+  Sounds pane (FL Studio, folders, effects) or a file from Files onto the
+  timeline creates an audio clip where it is dropped:
+  - On an Audio row, it goes on that row.
+  - On the empty area below the rows, it goes on a new Audio row named
+    after the sound.
+  - The clip shows its waveform (peak summaries, 23.3).
+  - Dragging a clip's left or right edge trims it to the exact part
+    wanted. The start is trimmed through the clip offset, the audio is
+    not stretched, and the edge snaps to the grid unless Shift is held.
+  - Corner handles set the fade in and fade out.
+  - Move, copy, split (S), mute and delete work as for note clips.
+  - Dragging onto an instrument row instead loads the sound into that
+    row's sampler (the current "+" behaviour).
+  - Audio clips and drag and drop are the first part of the Voice wave,
+    ahead of recording.
 - **Takes:** each recording pass over the same range adds a take to the
   clip. The clip plays one chosen take. The other takes stay in the
   project until the user deletes them. Full comping (splicing parts of
@@ -1973,6 +1989,34 @@ bridge operation as the matching UI action.
 
 ---
 
+### 21.8 Asking an agent for vocals (Amendment 26)
+
+Owner: "ask Claude for vocals; it gives you options like using a local
+vocal or recording one with an MCP tool; the entire window glows orange
+with an indicator that your vocals are being recorded; recording is a
+feature in the app UI too."
+
+- **Options.** When asked for vocals, an agent offers:
+  - **Use a vocal you have:** it searches the sound catalogue (FL Studio
+    Vocals, the user's folders) through `sound_search`, or imports a
+    file with `audio_import` from a folder the user picked. The vocal
+    lands as an audio clip on an Audio row.
+  - **Record one now:** `record_prepare` arms a row, sets the range and
+    count-in, shows the lyrics, and asks the user to press Record.
+- **While an agent-prepared recording runs:**
+  - The whole window glows orange (18.1).
+  - The pill turns into a recording indicator: a red dot, "Recording
+    vocals", the time, and Stop.
+  - The microphone is still opened only by the human's press (21.2).
+- **Recording without an agent.** A Record button (R) in the transport
+  bar records into the selected Audio row with the same count-in. It
+  shows a red recording indicator in the pill area and no orange glow.
+- **After a take.** The tool returns the take's clip id and length, so
+  the agent can place, trim and mix it. Pitch correction and alignment
+  are later (21.4).
+- **Model.** This needs audio clips (21.1, format v4). It is built in the
+  Voice wave after hum to notes, reusing the hum capture path (the engine
+  input ring), with the take written to disk by the worker thread.
 ## 22. Provenance export (Amendment 22)
 
 Owner direction: one click gives a log of which parts the artist made and
@@ -2102,6 +2146,125 @@ the starter project open, on GNOME 50, Wayland, with PipeWire:
 
 ---
 
+## 24. FL Studio feature map for hard-hitting beats (Amendment 27)
+
+Owner: "We need to be able to make professional hard-hitting phonks. Pull
+up the entire list of things FL Studio can do, select the best and adapt
+it into our easy model." Every adopted feature lives on rows, clips or
+the mixer (20.2). Presets come first, knobs sit behind More, and every
+feature is an MCP tool (Amendment 19).
+
+### 24.1 What FL Studio does, by area, and our decision
+
+| FL Studio feature | Oto decision |
+|---|---|
+| Channel rack step sequencer, swing | Have (Grid, Swing) |
+| Step graph: velocity, pitch, fine pitch, pan, release, filter cutoff and resonance, shift | Have Volume, Pitch, Repeats. **Add Pan and Filter lanes** (24.2-6) |
+| Step slides | **Adopt** as Slide (24.2-3) |
+| Piano roll: draw, slice, glue, quantize, velocity lane | Have |
+| Piano roll: slide and portamento notes (808 glide) | **Adopt** (24.2-3) |
+| Piano roll: scale highlight and snap, chord stamps | **Adopt** (24.3) |
+| Piano roll: arpeggiate, strum, flam, randomize, LFO tool, limit, legato, chop | **Adopt** the first four as one-click Note Tools (24.3). Chop, LFO and limit come later |
+| Ghost notes from other clips | **Adopt** (24.3) |
+| Riff Machine | Covered by agent Suggest (18.5) |
+| Playlist: pattern, audio and automation clips, markers, slice tool, track groups | Have pattern clips. Audio clips come with Voice (21). **Add Shapes (24.2-1)**. Markers come later |
+| Automation clips: single curve, double curve, hold, stairs, pulse, wave, smooth; LFO | **Adopt** as Shapes with these curve types (24.2-1) |
+| Mixer: inserts, sends, routing, volume, pan, mute, solo, stereo separation | Have inserts. Add the sends UI; stereo width comes later |
+| Sidechain via Fruity Limiter or compressor | **Adopt** as one toggle, Duck to Kick (24.2-2) |
+| Fruity Peak Controller, Envelope Controller, Formula Controller | Covered by Duck to Kick and Shapes. Formula is skipped |
+| Parametric EQ 2 | Have (built-in EQ) |
+| Soundgoodizer, Maximus (multiband loudness) | **Adopt** as Loudness on Main Output (24.2-4) |
+| Fast Dist, Distructor, Hardcore, Waveshaper (distortion) | **Adopt** as Drive presets on the Saturator (24.2-5) |
+| Clipper (Fruity Limiter clip mode) | **Adopt** inside Loudness and Drive (24.2-4, 24.2-5) |
+| Gross Beat (stutter, half-time, tape stop, volume gates) | **Adopt** as Time FX on clips (24.2-7) |
+| Sampler channel: ADSR, reverse, time stretch, pitch envelope, cut groups, choke, declick | Have choke and pitch. **Add Reverse, Fade and Pitch Drop** (24.2-8) |
+| Slicex and Fruity Slicer (chop samples to pads) | Comes after audio clips (21). **Adopt** as Chop to Grid (24.4) |
+| Edison audio editor | Skipped. Trim, fade and reverse on clips cover the common needs |
+| Pitcher and NewTone (pitch correction) | Comes later (21.4) |
+| Vocodex | Skipped |
+| Patcher, ZGameEditor, video | Skipped |
+| Browser: tags, favourites, preview | Have search and preview. **Add Favourites** (24.3) |
+| Templates | **Adopt** Phonk, Drift Phonk, Trap and Lo-fi starters (24.3) |
+| Tap tempo, metronome, count-in, recording | Have. Recording comes with Voice (21) |
+| Song and pattern mode | Replaced by Timeline and Loop (20) |
+| Performance mode, score log, MIDI recording | Later (20.4) |
+| Export WAV and MP3, stems, freeze or consolidate | Have WAV. Stems and freeze come later |
+| Undo history | Have, as the change tree and Versions |
+
+### 24.2 Build first: the phonk set
+
+1. **Shapes.** These are curves for Volume, Filter, Pitch and Pan.
+   - A curve lives under a row, or on a clip (moving with it).
+   - Points can be dragged. The curve types are smooth, single curve,
+     hold, stairs, pulse and wave.
+   - One-click presets: Fade In, Fade Out, Swell, Drop, Pump, Wobble and
+     Tape Stop.
+   - Stored as clip-like envelopes on the timeline model (20.4).
+   - Sample-accurate in the engine. The values are read per sub-block,
+     with no allocation.
+2. **Duck to Kick.** One toggle on any row or mixer track: "Duck to
+   Kick", with an amount. It uses the built-in compressor's sidechain
+   from the chosen row, which defaults to the row named Kick or the drum
+   kit's kick.
+3. **Slide (808 glide).**
+   - A per-note Slide in Piano, and a per-step Slide in Grid. The note
+     glides in pitch from the previous note over a Glide Time.
+   - Mono legato for 808 rows: one voice, so a new note retriggers
+     without a gap.
+   - Works for Surge XT through CLAP note expressions and pitch bend,
+     and for the sampler natively.
+4. **Loudness on Main Output.**
+   - One control from 0 to 10 with the label "Loudness". It drives a
+     gentle multiband compressor, then a soft clipper, then a limiter at
+     -0.3 dBTP.
+   - Presets: Clean, Punchy, Hard (Phonk).
+   - A meter shows the integrated LUFS.
+5. **Drive.** Saturator presets for any row: Warm, Crunch, Phonk 808,
+   Phonk Cowbell and Hard Clip. Each preset sets drive, tone and a
+   built-in clipper with output gain matched.
+6. **Grid lanes.** Pan and Filter (cutoff) per hit join Volume, Pitch and
+   Repeats, behind More. Repeats gains roll presets: 1/16, 1/32 and 1/24
+   (triplet).
+7. **Time FX.** Per-clip effects, applied to that clip's audio on its
+   row's mixer track while the clip plays: Stutter (1/8, 1/16), Half-Time
+   and Tape Stop. These are FL Gross Beat moments in one click. An engine
+   effect reads the transport position, with no lookahead beyond one
+   block.
+8. **Sample shaping.** On sampler rows: Reverse, Fade In and Fade Out,
+   and Pitch Drop (a pitch envelope going down, for 808 and cowbell
+   drops).
+
+### 24.3 Build next
+
+- **Piano tools:** scale highlight and Snap to Scale, Chords (stamp a
+  chord on one click), Arpeggiate, Strum, Humanize (randomize timing and
+  volume), and Ghost Notes from other rows.
+- **Favourites** in the Sounds pane.
+- **Templates on Home:** Phonk, Drift Phonk, Trap and Lo-fi. Each sets
+  tempo, kit, rows, Loudness and Duck to Kick, and is built from Surge XT
+  and FL sounds when they are available.
+
+### 24.4 After audio clips (21)
+
+- Chop to Grid: slice an audio clip at its hits into a sampler kit, in
+  the style of Slicex.
+- Stems export. Freeze.
+
+### 24.5 Acceptance
+
+- A phonk reference project must render at -8 to -6 LUFS integrated
+  without audible clipping artifacts. It contains:
+  - Grid drums with a Drive Hard Clip on the kick
+  - an 808 with Slide
+  - a cowbell melody with the Phonk Cowbell Drive
+  - Duck to Kick on the 808
+  - Loudness set to Hard
+  - a Tape Stop at the end
+- Every 24.2 feature is reachable in one or two clicks from the row,
+  clip or mixer it affects. Every visible label passes 20.6.
+- An agent builds the same project through MCP alone.
+---
+
 ## Owner decisions (approved 2026-10-07)
 
 1. Approved: the futex syscall exception for sandboxed plugins (risk 3, 9.4).
@@ -2113,6 +2276,27 @@ the starter project open, on GNOME 50, Wayland, with PipeWire:
 ---
 
 ## Changelog
+
+### Amendment 28 (2026-10-07, owner)
+
+- 21.1: dragging any sound or file onto the timeline makes an audio clip
+  that can be trimmed by its edges, faded, moved and split. This is the
+  first part of the Voice wave.
+
+### Amendment 27 (2026-10-07, owner)
+
+- Added section 24: the FL Studio feature map, each feature marked have,
+  adopt or skip. The phonk set is built first: Shapes, Duck to Kick,
+  Slide and mono 808, Loudness, Drive presets, Pan and Filter lanes,
+  Time FX, and sample shaping. Acceptance is a phonk reference project
+  at -8 to -6 LUFS that an agent can also build.
+
+### Amendment 26 (2026-10-07, owner)
+
+- Added 21.8: an agent offers vocals (use one you have, or record one
+  now). An agent-prepared recording glows the window orange with a
+  "Recording vocals" indicator. A Record button (R) records without an
+  agent. The human always starts the microphone.
 
 ### Amendment 25 (2026-10-07, owner)
 

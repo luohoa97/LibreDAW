@@ -1448,8 +1448,19 @@ impl PianoRoll {
         }
 
         // Playhead.
-        if self.app().ui.borrow().playing && v.len_ticks > 0 {
-            let tick = imp.last_playhead.get() % v.len_ticks as u64;
+        let pos = if self.app().ui.borrow().playing {
+            let app = self.app();
+            let s = app.session.borrow();
+            crate::step_logic::content_pos(
+                &s.document().project.clips,
+                v.pattern,
+                v.len_ticks,
+                imp.last_playhead.get(),
+            )
+        } else {
+            None
+        };
+        if let Some(tick) = pos {
             let x = vp.tick_to_x(tick as f64);
             if x >= vp.key_w && x < w {
                 draw::fill(s, &accent, x, 0.0, 2.0, vp.height);
