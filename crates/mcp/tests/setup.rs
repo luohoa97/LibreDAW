@@ -45,8 +45,11 @@ impl Sandbox {
     /// A fake client program that appends its arguments and HOME to the log.
     fn fake(&self, name: &str, exit: i32) {
         let p = self.root.join("bin").join(name);
+        // Write under a temporary name, close it, then rename into place so no
+        // concurrent fork can hold a write fd on the executable (ETXTBSY).
+        let tmp = self.root.join("bin").join(format!(".{name}.tmp"));
         fs::write(
-            &p,
+            &tmp,
             format!(
                 "#!/bin/sh\necho \"{name} $*\" >> '{}'\necho \"HOME=$HOME\" >> '{}'\nexit {exit}\n",
                 self.log.display(),
@@ -54,7 +57,8 @@ impl Sandbox {
             ),
         )
         .unwrap();
-        fs::set_permissions(&p, fs::Permissions::from_mode(0o755)).unwrap();
+        fs::set_permissions(&tmp, fs::Permissions::from_mode(0o755)).unwrap();
+        fs::rename(&tmp, &p).unwrap();
     }
 
     fn calls(&self) -> Vec<String> {
@@ -83,14 +87,25 @@ impl Sandbox {
     fn run(&self, args: &[&str], stdin: &str) -> (i32, String) {
         let args: Vec<String> = args.iter().map(|s| (*s).to_string()).collect();
         let opts: Options = parse_args(&args).unwrap();
-        let mut out = Vec::new();
-        let code = run(
-            &self.env,
-            &opts,
-            &mut Cursor::new(stdin.to_string()),
-            &mut out,
-        );
-        (code, String::from_utf8(out).unwrap())
+        // A fork in a parallel test thread can briefly leave the script open
+        // for writing; retry the whole run on ETXTBSY (errno 26).
+        let mut attempt = 0;
+        loop {
+            let mut out = Vec::new();
+            let code = run(
+                &self.env,
+                &opts,
+                &mut Cursor::new(stdin.to_string()),
+                &mut out,
+            );
+            let text = String::from_utf8(out).unwrap();
+            attempt += 1;
+            if attempt < 10 && text.contains("Text file busy") {
+                std::thread::sleep(std::time::Duration::from_millis(20));
+                continue;
+            }
+            return (code, text);
+        }
     }
 }
 
