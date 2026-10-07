@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 use protocol::control::{
     BranchInfo, ControlError, JobState, Outcome, ReplyBody, Request, RequestBody,
 };
-use protocol::edit::{Applied, Edit, EditError};
+use protocol::edit::{Applied, EditError};
 use protocol::model::{Project, ticks_per_bar};
 use protocol::validate::ValidationError;
 use serde_json::{Value, json};
