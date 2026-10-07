@@ -8,10 +8,15 @@ CI fails if this file is out of date.
 
 | Crate | Version | License | Why |
 |---|---|---|---|
+| clap-sys | 0.5.0 | MIT/Apache-2.0 | raw CLAP C ABI bindings for plugin hosting, SPEC 9.1 (plugin-host) |
 | cpal | 0.18.2 | Apache-2.0 | audio I/O (fixed stack); its `pipewire` feature adds the native PipeWire host (pipewire, libspa, and bindgen at build time), its `realtime-dbus` feature promotes the PipeWire callback thread to SCHED_RR through rtkit (audio_thread_priority, dbus), and its `jack` feature the JACK backend |
+| glib | 0.22.10 | MIT | timer, fd, and X11 event sources on the GTK main context for plugins (plugin-host; also ui through gtk4) |
+| libloading | 0.7.4 | ISC | dlopen of .clap plugin files (plugin-host) |
+| libloading | 0.8.9 | ISC | dlopen of .clap plugin files (plugin-host) |
 | serde | 1.0.229 | MIT OR Apache-2.0 | derive (de)serialization for the project file and the control API (protocol) |
 | serde_json | 1.0.151 | MIT OR Apache-2.0 | JSON for the control API used by scripts and agents (protocol tests now; ui, script, mcp later) |
 | toml | 1.1.6+spec-1.1.0 | MIT OR Apache-2.0 | parse the project file, SPEC 7.2 (protocol); saving uses our own emitter |
+| x11rb | 0.13.2 | MIT OR Apache-2.0 | X11 top-level window for plugin GUIs that need a parent, SPEC 9.2 (plugin-host) |
 
 ## All crates in the dependency graph (x86_64-unknown-linux-gnu)
 
@@ -31,6 +36,7 @@ CI fails if this file is out of date.
 | cfg-expr | 0.20.10 | MIT OR Apache-2.0 |
 | cfg-if | 1.0.5 | MIT OR Apache-2.0 |
 | clang-sys | 1.9.1 | Apache-2.0 |
+| clap-sys | 0.5.0 | MIT/Apache-2.0 |
 | cookie-factory | 0.3.3 | MIT |
 | cpal | 0.18.2 | Apache-2.0 |
 | dasp_sample | 0.11.0 | MIT OR Apache-2.0 |
@@ -39,7 +45,19 @@ CI fails if this file is out of date.
 | equivalent | 1.0.2 | Apache-2.0 OR MIT |
 | errno | 0.3.14 | MIT OR Apache-2.0 |
 | find-msvc-tools | 0.1.14 | MIT OR Apache-2.0 |
+| futures-channel | 0.3.34 | MIT OR Apache-2.0 |
+| futures-core | 0.3.34 | MIT OR Apache-2.0 |
+| futures-executor | 0.3.34 | MIT OR Apache-2.0 |
+| futures-macro | 0.3.34 | MIT OR Apache-2.0 |
+| futures-task | 0.3.34 | MIT OR Apache-2.0 |
+| futures-util | 0.3.34 | MIT OR Apache-2.0 |
+| gethostname | 1.1.0 | Apache-2.0 |
+| gio-sys | 0.22.9 | MIT |
+| glib | 0.22.10 | MIT |
+| glib-macros | 0.22.9 | MIT |
+| glib-sys | 0.22.9 | MIT |
 | glob | 0.3.4 | MIT OR Apache-2.0 |
+| gobject-sys | 0.22.9 | MIT |
 | hashbrown | 0.17.1 | MIT OR Apache-2.0 |
 | heck | 0.5.0 | MIT OR Apache-2.0 |
 | indexmap | 2.14.2 | Apache-2.0 OR MIT |
@@ -60,6 +78,7 @@ CI fails if this file is out of date.
 | minimal-lexical | 0.2.1 | MIT/Apache-2.0 |
 | nom | 7.1.3 | MIT |
 | nom | 8.0.0 | MIT |
+| pin-project-lite | 0.2.17 | Apache-2.0 OR MIT |
 | pipewire | 0.10.1 | MIT |
 | pipewire-sys | 0.10.1 | MIT |
 | pkg-config | 0.3.34 | MIT OR Apache-2.0 |
@@ -77,10 +96,12 @@ CI fails if this file is out of date.
 | serde_spanned | 1.1.1 | MIT OR Apache-2.0 |
 | shlex | 1.3.0 | MIT OR Apache-2.0 |
 | shlex | 2.0.1 | MIT OR Apache-2.0 |
+| slab | 0.4.12 | MIT |
 | smallvec | 1.16.2 | MIT OR Apache-2.0 |
 | syn | 2.0.119 | MIT OR Apache-2.0 |
 | syn | 3.0.6 | MIT OR Apache-2.0 |
 | system-deps | 7.0.8 | MIT OR Apache-2.0 |
+| system-deps | 9.0.0 | MIT OR Apache-2.0 |
 | target-lexicon | 0.13.5 | Apache-2.0 WITH LLVM-exception |
 | toml | 1.1.6+spec-1.1.0 | MIT OR Apache-2.0 |
 | toml_datetime | 1.1.1+spec-1.1.0 | MIT OR Apache-2.0 |
@@ -90,6 +111,8 @@ CI fails if this file is out of date.
 | unicode-width | 0.2.2 | MIT OR Apache-2.0 |
 | version-compare | 0.2.1 | MIT |
 | winnow | 1.0.4 | MIT |
+| x11rb | 0.13.2 | MIT OR Apache-2.0 |
+| x11rb-protocol | 0.13.2 | MIT OR Apache-2.0 |
 | zmij | 1.0.23 | MIT |
 
 ## System libraries (hand-maintained)

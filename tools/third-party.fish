@@ -19,6 +19,14 @@ function justification
     switch $argv[1]
         case cpal
             echo "audio I/O (fixed stack); its `pipewire` feature adds the native PipeWire host (pipewire, libspa, and bindgen at build time), its `realtime-dbus` feature promotes the PipeWire callback thread to SCHED_RR through rtkit (audio_thread_priority, dbus), and its `jack` feature the JACK backend"
+        case clap-sys
+            echo "raw CLAP C ABI bindings for plugin hosting, SPEC 9.1 (plugin-host)"
+        case libloading
+            echo "dlopen of .clap plugin files (plugin-host)"
+        case glib
+            echo "timer, fd, and X11 event sources on the GTK main context for plugins (plugin-host; also ui through gtk4)"
+        case x11rb
+            echo "X11 top-level window for plugin GUIs that need a parent, SPEC 9.2 (plugin-host)"
         case serde
             echo "derive (de)serialization for the project file and the control API (protocol)"
         case toml
