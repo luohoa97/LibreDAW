@@ -28,6 +28,9 @@ pub enum ClientError {
     Timeout,
     /// The peer sent something that is not the protocol.
     Protocol(String),
+    /// The DAW refused the hello: `agents_disabled`, `not_allowed`,
+    /// `bad_hello`, or `busy_owner` (docs/phase2-interfaces.md).
+    Refused(String),
     /// The connection is closed or was marked broken by an earlier error.
     Closed,
 }
@@ -39,6 +42,7 @@ impl std::fmt::Display for ClientError {
             ClientError::Io(e) => write!(f, "control socket I/O error: {e}"),
             ClientError::Timeout => write!(f, "LibreDAW did not answer in time"),
             ClientError::Protocol(s) => write!(f, "control protocol error: {s}"),
+            ClientError::Refused(r) => write!(f, "LibreDAW refused the connection: {r}"),
             ClientError::Closed => write!(f, "control connection closed"),
         }
     }
@@ -88,6 +92,9 @@ impl Client {
         let line = c.read_line(Instant::now() + timeout)?;
         let v: Value = serde_json::from_str(&line)
             .map_err(|_| ClientError::Protocol(truncate_for_error(&line)))?;
+        if let Some(r) = v.pointer("/hello_err/reason").and_then(Value::as_str) {
+            return Err(ClientError::Refused(truncate_for_error(r)));
+        }
         match v.pointer("/hello_ok/protocol").and_then(Value::as_u64) {
             Some(CONTROL_PROTOCOL) => Ok(c),
             Some(other) => Err(ClientError::Protocol(format!(
