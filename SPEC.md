@@ -430,13 +430,37 @@ Each capture with different bytes from the previous one gets a new
 generation. A missing plugin on load becomes a placeholder that keeps its
 blob and re-saves it unchanged.
 
-### 7.6 Autosave
+### 7.6 Autosave (Amendment 10)
 
-Every 2 minutes, if dirty: the GTK thread captures plugin state (7.5 (c)),
-clones the `Document` (cheap `Arc` clone), and hands it to a worker thread,
-which writes it to `Name.ldaw/.autosave/` with the same procedure as 7.4.
-State capture is a main-thread call; for typical plugins it takes under a
-few milliseconds. Phase 2 measures it with the test plugins.
+Goal: a crash, a SIGKILL from the OOM killer or systemd-oomd, or a power
+loss loses at most a few seconds of work. SIGKILL cannot be caught, so the
+only defence is having already written the work.
+
+- Document autosave: 3 seconds after the last edit, and at least every 15
+  seconds while edits keep coming, the GTK thread clones the `Document`
+  (cheap `Arc` clone) and hands it to the autosave worker, which writes it
+  to `Name.ldaw/.autosave/` with the 7.4 procedure. The text emitter is
+  fast (a typical project is a few hundred KB of TOML); the write happens
+  off the GTK thread. Never-saved projects autosave to
+  `~/.local/share/libredaw/recovery/<id>.ldaw/`.
+- Plugin state: captured (7.5 (c)) every 60 seconds if any plugin reported
+  a change (`take_dirty`), and on every document autosave that follows a
+  plugin parameter gesture. State capture is a main-thread call; Phase 2
+  measures its cost with the test plugins.
+- Catchable termination: SIGTERM, SIGHUP, and SIGINT are handled (through
+  a GLib Unix signal source, not a raw handler) exactly like closing the
+  window: save, then exit (11).
+- Recovery on launch: if `.autosave/` (or a recovery bundle) is newer than
+  the saved project, LibreDAW opens the autosaved version as the current
+  document, keeps the saved one untouched, and shows a toast: "Recovered
+  unsaved work from <time>. Undo to go back to the last save." Recovery is
+  one undoable step.
+- When the persisted history of 15.11 lands, every commit is written
+  within 2 seconds, which tightens this further; autosave stays as the
+  Milestone A mechanism.
+- Test: the validator kills the app with SIGKILL during editing and checks
+  that relaunch recovers every edit older than 15 seconds and the last
+  edit older than 3 seconds.
 
 ---
 
@@ -1440,6 +1464,13 @@ range checks.
 ---
 
 ## Changelog
+
+### Amendment 10 (2026-10-07, owner)
+
+Autosave for crashes and OOM kills (7.6): 3 s after the last edit and at
+least every 15 s while editing; plugin state every 60 s when changed;
+SIGTERM, SIGHUP, SIGINT save then exit; automatic recovery on launch as one
+undoable step; validator SIGKILL test.
 
 ### Amendment 9 (2026-10-07, owner)
 
