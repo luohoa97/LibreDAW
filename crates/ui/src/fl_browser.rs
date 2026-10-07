@@ -97,7 +97,7 @@ fn start_scan(app: &Rc<App>, install: FlInstall) {
 }
 
 /// Picks up the choice remembered from an earlier run, once.
-fn resume(app: &Rc<App>) {
+pub fn resume(app: &Rc<App>) {
     if STARTED.with(|s| s.replace(true)) {
         return;
     }

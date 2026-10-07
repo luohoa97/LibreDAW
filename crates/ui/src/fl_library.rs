@@ -226,7 +226,7 @@ pub fn instrument_matches(i: &Instrument, search: &str, role: Option<&str>) -> b
     )
 }
 
-fn blank_entry() -> SoundEntry {
+pub(crate) fn blank_entry() -> SoundEntry {
     SoundEntry {
         id: String::new(),
         name: String::new(),
