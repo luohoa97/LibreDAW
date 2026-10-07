@@ -15,7 +15,7 @@
 //! - `octave`: an integer, `-1` to `9`. `C4` is MIDI 60 (middle C), `C-1` is
 //!   0, so the MIDI number is `12 * (octave + 1) + semitone`.
 //! - `start` and `length`: a fraction of a bar counted from the start of the
-//!   pattern: `1/4` is a quarter of a bar (one beat in 4/4), `0` is the
+//!   content: `1/4` is a quarter of a bar (one beat in 4/4), `0` is the
 //!   start, `1` is one whole bar. A decimal (`0.25`) works too. A trailing
 //!   `t` means ticks instead (`240t`, 960 ticks per quarter note). The value
 //!   must be a whole number of ticks.
@@ -31,7 +31,7 @@ pub const MAX_NOTES: usize = 4096;
 
 pub const GRAMMAR: &str = "Note text: notes separated by spaces, commas or newlines; each note is <pitch><octave>:<start>:<length>[:<vel>]. \
 pitch = letter A-G (+ '#' sharp or 'b' flat); join pitches with '+' for a chord (C3+E3+G3:0:1/2). Octave -1 to 9, C4 = MIDI 60 (middle C), C2 = 36. \
-start and length are fractions of a BAR from the start of the pattern: 1/4 = one beat in 4/4, 0 = the start, 1 = a whole bar; decimals (0.25) and ticks \
+start and length are fractions of a BAR from the start of the clip (its content): 1/4 = one beat in 4/4, 0 = the start, 1 = a whole bar; decimals (0.25) and ticks \
 with a 't' suffix (240t, 960 ticks per quarter note) also work, and the value must be a whole number of ticks. vel 1-127, default 100. \
 Example (4/4): \"C3:0:1/4 E3:1/4:1/8 G3:3/8:1/8:90\".";
 
@@ -152,7 +152,14 @@ fn to_ticks(
     u32::try_from(ticks).map_err(|_| format!("{what} '{s}' in '{token}' is too large"))
 }
 
-/// Parses note text. `pattern_ticks` is the pattern length, so a note that
+/// A time position or length written like the note text does it: a
+/// fraction of a bar (`1/4`, `2`, `0.5`) or ticks (`240t`).
+pub fn parse_ticks(s: &str, ticks_per_bar: u32, what: &str) -> Result<u32, String> {
+    let s = s.trim();
+    to_ticks(parse_amount(s, what, s)?, ticks_per_bar, what, s, s)
+}
+
+/// Parses note text. `pattern_ticks` is the content length, so a note that
 /// starts after the end is reported.
 pub fn parse_notes(
     text: &str,
@@ -196,7 +203,7 @@ pub fn parse_notes(
         }
         if start >= pattern_ticks {
             return Err(format!(
-                "start '{}' in '{token}' is tick {start}, at or after the end of the pattern ({pattern_ticks} ticks = {} bar(s)): use a start before the end, or make the pattern longer first",
+                "start '{}' in '{token}' is tick {start}, at or after the end of the content ({pattern_ticks} ticks = {} bar(s)): use a start before the end, or make the content longer first with content_set",
                 parts[1],
                 pattern_ticks as f64 / ticks_per_bar as f64
             ));
@@ -222,7 +229,7 @@ pub fn parse_notes(
         }
         if notes.len() > MAX_NOTES {
             return Err(format!(
-                "more than {MAX_NOTES} notes in one call: split them into several notes_write calls"
+                "more than {MAX_NOTES} notes in one call: split them into several parts or calls"
             ));
         }
     }
@@ -364,7 +371,7 @@ mod tests {
         let e = parse_notes("C3:0:0", BAR, BAR).unwrap_err();
         assert!(e.contains("zero"), "{e}");
         let e = parse_notes("C3:1:1/4", BAR, BAR).unwrap_err();
-        assert!(e.contains("end of the pattern"), "{e}");
+        assert!(e.contains("end of the content"), "{e}");
         let e = parse_notes("C3:0:1/4:0", BAR, BAR).unwrap_err();
         assert!(e.contains("1 to 127"), "{e}");
         let e = parse_notes("C3:abc:1/4", BAR, BAR).unwrap_err();

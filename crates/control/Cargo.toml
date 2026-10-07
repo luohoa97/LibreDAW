@@ -19,3 +19,6 @@ serde = { version = "1", features = ["derive"] }
 [dev-dependencies]
 # The existing control socket client, used to drive the server in tests.
 libredaw-script = { path = "../script" }
+# The real document and change tree behind the reference bridge in the
+# end-to-end tests (tests/support), so tool calls run against real apply().
+libredaw-doc = { path = "../doc" }

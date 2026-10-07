@@ -12,9 +12,11 @@
 //! `poll()`/`reply()` ticket path as script requests, so the UI cannot tell
 //! an MCP agent from the old bridge.
 
-pub(crate) mod build;
+pub mod build;
+pub mod compose;
 pub(crate) mod exec;
 pub mod grid;
+pub mod ids;
 pub mod notes;
 pub(crate) mod prompts;
 pub(crate) mod resources;
