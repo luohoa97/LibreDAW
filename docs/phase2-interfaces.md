@@ -183,3 +183,33 @@ rate: u32, per_track: &[(u32, Vec<[f32; 2]>)]) -> protocol::control::Analysis`:
 BS.1770 gated integrated loudness, true peak (4x oversampled), clipped
 sample count, per-track peak and RMS, three-band energy balance. Pure
 functions; `ui` renders and calls it on the export thread.
+
+## MCP-native socket and suggestions (SPEC 18.3, 18.5)
+
+One socket: the first line a client sends decides the protocol. A JSON-RPC
+message means MCP (agents, through `libredaw-mcp`, which is a byte relay);
+a hello line means the script line protocol (Deno bridge). The socket
+directory is `control::default_socket_path()`: `$XDG_RUNTIME_DIR/libredaw`,
+or `$XDG_RUNTIME_DIR/app/$FLATPAK_ID/libredaw` inside the Flatpak. The ui
+and the script bridge both use that function.
+
+ui obligations: call `ControlServer::notify_revision(revision)` after every
+document change (any author) so subscribed agents see user edits; drain
+`Polled.suggestions`; the Suggest button calls `request_suggestion`.
+
+```rust
+ControlServer::request_suggestion(&self, SuggestionRequest) -> Result<SuggestionId, SuggestError> // NoAgent, TooManyPending (8)
+ControlServer::cancel_suggestion(&self, SuggestionId)
+ControlServer::pending_suggestions(&self) -> Vec<PendingSuggestion>
+ControlServer::notify_revision(&self, u64)
+pub struct SuggestionRequest { kind: SuggestionKind /* Fill | Variation | Bassline | SoundChoice | Other */,
+    pattern: Option<PatternId>, channel: Option<ChannelId>, note: Option<String> }
+pub struct Suggestion { title: String, explanation: String, pattern: PatternId,
+    edits: Vec<Edit> /* SetStep, SetStepLanes, AddNotes, RemoveNotes */, diff: Vec<String> }
+pub enum SuggestionEvent { Requested { id, request, via_sampling }, Arrived { id, suggestion }, Failed { id, reason } }
+// Polled gains `suggestions: Vec<SuggestionEvent>`.
+```
+
+Accepting a suggestion applies its edits as one agent-authored undo group;
+nothing changes before acceptance. Under the timeline model (SPEC 20)
+`pattern` means a clip content and `channel` an instrument.

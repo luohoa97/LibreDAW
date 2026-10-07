@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! The Milestone B edits (SPEC 15, 17.2): step lanes, samples, sampler and
-//! 808, built-in effects, sends and sidechains, the playlist.
+//! 808, built-in effects, sends and sidechains.
 //!
 //! Every function checks its arguments before it changes anything, and
 //! reports the exact reason. Rules that need the whole project (routing
@@ -13,13 +13,12 @@ use std::sync::Arc;
 use protocol::beats::{BuiltinFx, SampleMode};
 use protocol::consts::*;
 use protocol::edit::{Edit, EditError};
-use protocol::ids::{ChannelId, ClipId, InstanceId, NoteId, PatternId, PlaylistTrackId, TrackId};
-use protocol::model::{Clip, Insert, Instrument, Note, PlaylistTrack, Project, Send};
-use protocol::validate::ValidationError;
+use protocol::ids::{ChannelId, InstanceId, NoteId, PatternId, TrackId};
+use protocol::model::{Insert, Instrument, Note, Project, Send};
 
 use super::{
-    Work, bad, channel_idx, check_vel, locate, not_found, out_of_range, pattern_idx, too_many,
-    track_idx,
+    Work, bad, channel_idx, check_vel, locate, not_found, out_of_range, pattern_idx, root_of,
+    too_many, track_idx,
 };
 
 /// Fails unless a sample with this hash is registered in the project.
@@ -96,43 +95,16 @@ fn fx_mut(p: &mut Project, ti: usize, ii: usize) -> &mut BuiltinFx {
     }
 }
 
-fn playlist_idx(p: &Project, id: PlaylistTrackId) -> Result<usize, EditError> {
-    p.playlist
-        .iter()
-        .position(|t| t.id == id)
-        .ok_or_else(|| not_found("playlist track", id.0))
-}
-
-/// `(row, index in row)` of every named clip; `NotFound` for the first
-/// missing id. Duplicates count once.
-fn locate_clips(p: &Project, ids: &[ClipId]) -> Result<Vec<(usize, ClipId)>, EditError> {
-    let mut seen = HashSet::new();
-    let mut out = Vec::new();
-    for id in ids {
-        if !seen.insert(*id) {
-            continue;
-        }
-        let row = p
-            .playlist
-            .iter()
-            .position(|t| t.clips.iter().any(|c| c.id == *id))
-            .ok_or_else(|| not_found("clip", id.0))?;
-        out.push((row, *id));
-    }
-    Ok(out)
-}
-
 pub(super) fn apply(w: &mut Work, e: &Edit) -> Result<(), EditError> {
     match e {
         // Steps and groove
         Edit::SetStepLanes {
             pattern,
-            channel,
             step,
             vel,
             off,
             repeat,
-        } => set_step_lanes(w, *pattern, *channel, *step, *vel, *off, *repeat)?,
+        } => set_step_lanes(w, *pattern, *step, *vel, *off, *repeat)?,
         Edit::SetNoteRepeat {
             pattern,
             notes,
@@ -143,21 +115,21 @@ pub(super) fn apply(w: &mut Work, e: &Edit) -> Result<(), EditError> {
                 return Err(out_of_range("note.repeat", *repeat as f64));
             }
             let want = locate(&w.p.patterns[pi], notes)?;
-            for cn in &w.p.patterns[pi].notes {
-                for n in cn.notes.iter().filter(|n| want.contains(&n.id)) {
-                    if !n.len.is_multiple_of(*repeat as u32) {
-                        return Err(bad("note length must be divisible by its repeat"));
-                    }
+            for n in w.p.patterns[pi]
+                .notes
+                .iter()
+                .filter(|n| want.contains(&n.id))
+            {
+                if !n.len.is_multiple_of(*repeat as u32) {
+                    return Err(bad("note length must be divisible by its repeat"));
                 }
             }
             if want.is_empty() {
                 return Ok(());
             }
             let pat = Arc::make_mut(&mut w.p.patterns[pi]);
-            for cn in &mut pat.notes {
-                for n in cn.notes.iter_mut().filter(|n| want.contains(&n.id)) {
-                    n.repeat = *repeat;
-                }
+            for n in pat.notes.iter_mut().filter(|n| want.contains(&n.id)) {
+                n.repeat = *repeat;
             }
         }
         Edit::SetSwing { pattern, swing } => {
@@ -409,108 +381,10 @@ pub(super) fn apply(w: &mut Work, e: &Edit) -> Result<(), EditError> {
             Arc::make_mut(&mut w.p.tracks[ti]).sends.remove(i);
         }
 
-        // Playlist
-        Edit::AddPlaylistTrack { name } => {
-            if w.p.playlist.len() >= MAX_PLAYLIST_TRACKS {
-                return Err(too_many("playlist tracks", MAX_PLAYLIST_TRACKS));
-            }
-            let id = PlaylistTrackId(w.alloc()?);
-            w.p.playlist.push(Arc::new(PlaylistTrack {
-                id,
-                name: name.clone(),
-                clips: Vec::new(),
-            }));
-        }
-        Edit::RemovePlaylistTrack { track } => {
-            let i = playlist_idx(&w.p, *track)?;
-            w.p.playlist.remove(i);
-        }
-        Edit::RenamePlaylistTrack { track, name } => {
-            let i = playlist_idx(&w.p, *track)?;
-            Arc::make_mut(&mut w.p.playlist[i]).name = name.clone();
-        }
-        Edit::AddClip {
-            track,
-            pattern,
-            start,
-            len,
-        } => {
-            let ti = playlist_idx(&w.p, *track)?;
-            pattern_idx(&w.p, *pattern)?;
-            if *len == 0 {
-                return Err(out_of_range("clip.len", 0.0));
-            }
-            if *start as u64 + *len as u64 > MAX_TICK as u64 {
-                return Err(out_of_range("clip.end", *start as f64 + *len as f64));
-            }
-            let total: usize = w.p.playlist.iter().map(|t| t.clips.len()).sum();
-            if total >= MAX_CLIPS {
-                return Err(too_many("clips", MAX_CLIPS));
-            }
-            if let Some(o) = w.p.playlist[ti]
-                .clips
-                .iter()
-                .find(|c| (c.start as u64) < *start as u64 + *len as u64 && *start < c.end())
-            {
-                return Err(overlap(o.id));
-            }
-            let id = ClipId(w.alloc()?);
-            Arc::make_mut(&mut w.p.playlist[ti]).clips.push(Clip {
-                id,
-                pattern: *pattern,
-                start: *start,
-                len: *len,
-            });
-        }
-        Edit::RemoveClips { clips } => {
-            let found = locate_clips(&w.p, clips)?;
-            let gone: HashSet<ClipId> = found.iter().map(|f| f.1).collect();
-            for (row, _) in found {
-                let t = Arc::make_mut(&mut w.p.playlist[row]);
-                t.clips.retain(|c| !gone.contains(&c.id));
-            }
-        }
-        Edit::MoveClips { clips, dt, dtrack } => move_clips(w, clips, *dt, *dtrack)?,
-        Edit::ResizeClips { clips, dlen } => {
-            let found = locate_clips(&w.p, clips)?;
-            // Check every clip before touching any.
-            for (row, id) in &found {
-                let c = w.p.playlist[*row]
-                    .clips
-                    .iter()
-                    .find(|c| c.id == *id)
-                    .expect("located");
-                let l = (c.len as i64)
-                    .checked_add(*dlen)
-                    .ok_or_else(|| out_of_range("clip.len", f64::INFINITY))?;
-                if l < 1 {
-                    return Err(out_of_range("clip.len", l as f64));
-                }
-                if c.start as i64 + l > MAX_TICK as i64 {
-                    return Err(out_of_range("clip.end", (c.start as i64 + l) as f64));
-                }
-            }
-            for (row, id) in found {
-                let t = Arc::make_mut(&mut w.p.playlist[row]);
-                if let Some(c) = t.clips.iter_mut().find(|c| c.id == id) {
-                    c.len = (c.len as i64 + *dlen) as u32;
-                }
-            }
-        }
-
         // Not ours; the dispatcher in `document.rs` never sends these here.
         _ => return Err(bad("edit is not a Milestone B edit")),
     }
     Ok(())
-}
-
-fn overlap(id: ClipId) -> EditError {
-    EditError::Invalid {
-        reason: ValidationError::Overlap {
-            what: "clips".into(),
-            id: id.0,
-        },
-    }
 }
 
 fn sampler_channel(p: &Project, id: ChannelId) -> Result<usize, EditError> {
@@ -534,15 +408,13 @@ fn bass_channel(p: &Project, id: ChannelId) -> Result<usize, EditError> {
 fn set_step_lanes(
     w: &mut Work,
     pattern: PatternId,
-    channel: ChannelId,
     step: u8,
     vel: Option<u8>,
     off: Option<i8>,
     repeat: Option<u8>,
 ) -> Result<(), EditError> {
     let pi = pattern_idx(&w.p, pattern)?;
-    let ci = channel_idx(&w.p, channel)?;
-    let root = w.p.channels[ci].root_key;
+    let root = root_of(&w.p, &w.p.patterns[pi])?;
     let (step_ticks, start) = {
         let pat = &w.p.patterns[pi];
         if step >= pat.length_steps {
@@ -571,7 +443,7 @@ fn set_step_lanes(
     }
     let pat = &w.p.patterns[pi];
     let targets: Vec<NoteId> = pat
-        .notes_of(channel)
+        .notes
         .iter()
         .filter(|n| n.start == start && n.is_step_note(root, pat))
         .map(|n| n.id)
@@ -581,12 +453,10 @@ fn set_step_lanes(
     }
     let want: HashSet<NoteId> = targets.into_iter().collect();
     let pat = Arc::make_mut(&mut w.p.patterns[pi]);
-    for cn in pat.notes.iter_mut().filter(|c| c.channel == channel) {
-        for n in cn.notes.iter_mut().filter(|n| want.contains(&n.id)) {
-            apply_lanes(n, root, vel, off, repeat);
-        }
-        cn.notes.sort_by_key(|n| (n.start, n.key, n.id));
+    for n in pat.notes.iter_mut().filter(|n| want.contains(&n.id)) {
+        apply_lanes(n, root, vel, off, repeat);
     }
+    pat.notes.sort_by_key(|n| (n.start, n.key, n.id));
     Ok(())
 }
 
@@ -601,54 +471,4 @@ fn apply_lanes(n: &mut Note, root: u8, vel: Option<u8>, off: Option<i8>, repeat:
     if let Some(r) = repeat {
         n.repeat = r;
     }
-}
-
-fn move_clips(w: &mut Work, clips: &[ClipId], dt: i64, dtrack: i32) -> Result<(), EditError> {
-    let found = locate_clips(&w.p, clips)?;
-    let rows = w.p.playlist.len() as i64;
-    // (clip, destination row), all checked before anything changes.
-    let mut moves: Vec<(Clip, usize)> = Vec::new();
-    for (row, id) in &found {
-        let c = *w.p.playlist[*row]
-            .clips
-            .iter()
-            .find(|c| c.id == *id)
-            .expect("located");
-        let dest = *row as i64 + dtrack as i64;
-        if !(0..rows).contains(&dest) {
-            return Err(out_of_range("clip.track", dest as f64));
-        }
-        let s = (c.start as i64)
-            .checked_add(dt)
-            .ok_or_else(|| out_of_range("clip.start", f64::INFINITY))?;
-        if s < 0 {
-            return Err(out_of_range("clip.start", s as f64));
-        }
-        if s.saturating_add(c.len as i64) > MAX_TICK as i64 {
-            return Err(out_of_range(
-                "clip.end",
-                s.saturating_add(c.len as i64) as f64,
-            ));
-        }
-        moves.push((
-            Clip {
-                start: s as u32,
-                ..c
-            },
-            dest as usize,
-        ));
-    }
-    if moves.is_empty() || (dt == 0 && dtrack == 0) {
-        return Ok(());
-    }
-    let gone: HashSet<ClipId> = moves.iter().map(|m| m.0.id).collect();
-    for (row, _) in &found {
-        let t = Arc::make_mut(&mut w.p.playlist[*row]);
-        t.clips.retain(|c| !gone.contains(&c.id));
-    }
-    for (clip, dest) in moves {
-        Arc::make_mut(&mut w.p.playlist[dest]).clips.push(clip);
-    }
-    // Overlap is reported by validation, after `sort_canonical`.
-    Ok(())
 }

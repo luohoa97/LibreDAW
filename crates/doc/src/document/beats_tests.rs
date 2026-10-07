@@ -6,7 +6,7 @@ use super::*;
 use protocol::beats::{
     Bass808Param, BuiltinFx, BuiltinFxKind, SampleMode, SamplerParam, SaturatorCurve,
 };
-use protocol::ids::{ClipId, PlaylistTrackId};
+use protocol::ids::ClipId;
 use protocol::model::SampleRef;
 
 fn hash(n: u32) -> String {
@@ -30,18 +30,17 @@ fn add_sample(d: &Document, n: u32) -> Document {
     ok(d, Edit::AddSample { sample: sample(n) }).0
 }
 
-fn step_note(d: &Document, p: PatternId, c: ChannelId, step: u8) -> Note {
+fn step_note(d: &Document, p: PatternId, _c: ChannelId, step: u8) -> Note {
     let pat = d.project.pattern(p).unwrap();
     let t = step as u32 * pat.step_ticks;
-    *pat.notes_of(c).iter().find(|n| n.start == t).expect("note")
+    *pat.notes.iter().find(|n| n.start == t).expect("note")
 }
 
-fn step_on(d: &Document, p: PatternId, c: ChannelId, step: u8) -> Document {
+fn step_on(d: &Document, p: PatternId, _c: ChannelId, step: u8) -> Document {
     ok(
         d,
         Edit::SetStep {
             pattern: p,
-            channel: c,
             step,
             on: true,
             vel: None,
@@ -53,7 +52,7 @@ fn step_on(d: &Document, p: PatternId, c: ChannelId, step: u8) -> Document {
 fn lanes(
     d: &Document,
     p: PatternId,
-    c: ChannelId,
+    _c: ChannelId,
     step: u8,
     off: Option<i8>,
     repeat: Option<u8>,
@@ -62,7 +61,6 @@ fn lanes(
         d,
         &Edit::SetStepLanes {
             pattern: p,
-            channel: c,
             step,
             vel: None,
             off,
@@ -83,7 +81,6 @@ fn step_lanes_set_velocity_pitch_and_ratchet() {
         &d,
         Edit::SetStepLanes {
             pattern: p,
-            channel: c,
             step: 4,
             vel: Some(64),
             off: Some(-5),
@@ -118,7 +115,7 @@ fn step_lanes_reject_bad_values_and_missing_step_notes() {
         assert!(lanes(&d, p, c, 4, None, Some(rep)).is_err(), "{rep}");
     }
     assert!(lanes(&d, p, c, 16, None, Some(2)).is_err());
-    assert!(lanes(&d, p, ChannelId(999), 4, None, Some(2)).is_err());
+    assert!(lanes(&d, PatternId(999), c, 4, None, Some(2)).is_err());
     // 240 ticks: 8 divides, but not for a 100 tick step.
     let (d2, _) = ok(
         &d,
@@ -148,7 +145,6 @@ fn toggle_off_removes_step_notes_whatever_their_offset() {
         &d,
         Edit::SetStep {
             pattern: p,
-            channel: c,
             step: 2,
             on: false,
             vel: None,
@@ -203,7 +199,7 @@ fn piano_roll_move_and_resize_clear_the_pitch_offset() {
             dkey: 2,
         },
     );
-    let n = m.project.pattern(p).unwrap().notes_of(c)[0];
+    let n = m.project.pattern(p).unwrap().notes[0];
     assert_eq!((n.off, n.key), (0, 67));
 
     let (r, _) = ok(
@@ -214,7 +210,7 @@ fn piano_roll_move_and_resize_clear_the_pitch_offset() {
             dlen: 20,
         },
     );
-    let n = r.project.pattern(p).unwrap().notes_of(c)[0];
+    let n = r.project.pattern(p).unwrap().notes[0];
     assert_eq!((n.off, n.key, n.len), (0, 65, 260));
 
     // A zero move leaves it a step note.
@@ -227,7 +223,7 @@ fn piano_roll_move_and_resize_clear_the_pitch_offset() {
             dkey: 0,
         },
     );
-    assert_eq!(z.project.pattern(p).unwrap().notes_of(c)[0].off, 5);
+    assert_eq!(z.project.pattern(p).unwrap().notes[0].off, 5);
 }
 
 #[test]
@@ -292,12 +288,11 @@ fn step_ticks_keeps_offsets_and_rejects_indivisible_ratchets() {
 
 #[test]
 fn note_repeat_checks_values_and_lengths() {
-    let (d, c, p) = base();
+    let (d, _c, p) = base();
     let (d, _) = ok(
         &d,
         Edit::AddNotes {
             pattern: p,
-            channel: c,
             notes: vec![
                 NewNote {
                     start: 0,
@@ -318,7 +313,7 @@ fn note_repeat_checks_values_and_lengths() {
         .project
         .pattern(p)
         .unwrap()
-        .notes_of(c)
+        .notes
         .iter()
         .map(|n| n.id)
         .collect();
@@ -1078,338 +1073,16 @@ fn remove_track_removes_sends_to_it_and_clears_sidechains() {
 }
 
 // ---------------------------------------------------------------------------
-// Playlist
-
-fn song() -> (Document, PlaylistTrackId, PatternId) {
-    let (d, _, p) = base();
-    let (d, t) = ok(
-        &d,
-        Edit::AddPlaylistTrack {
-            name: "Drums".into(),
-        },
-    );
-    (d, PlaylistTrackId(t[0]), p)
-}
-
-fn clips(d: &Document, t: PlaylistTrackId) -> Vec<(u32, u32, u32)> {
-    d.project
-        .playlist
-        .iter()
-        .find(|x| x.id == t)
-        .unwrap()
-        .clips
-        .iter()
-        .map(|c| (c.id.0, c.start, c.len))
-        .collect()
-}
-
-#[test]
-fn playlist_tracks_and_clips() {
-    let (d, t, p) = song();
-    let add = |start, len| Edit::AddClip {
-        track: t,
-        pattern: p,
-        start,
-        len,
-    };
-    let (d, a) = ok(&d, add(3840, 3840));
-    let (d, b) = ok(&d, add(0, 3840));
-    assert_eq!(
-        clips(&d, t).iter().map(|c| c.1).collect::<Vec<_>>(),
-        [0, 3840],
-        "sorted by start"
-    );
-    assert_eq!(a.len(), 1);
-    assert_ne!(a, b);
-    // Overlap, bad length, bad pattern, bad track.
-    assert!(matches!(
-        fails(&d, add(3000, 100)),
-        EditError::Invalid {
-            reason: ValidationError::Overlap { .. }
-        }
-    ));
-    assert!(fails(&d, add(7680, 0)).to_string().contains("clip.len"));
-    assert!(fails(&d, add(u32::MAX, 5)).to_string().contains("clip.end"));
-    assert!(matches!(
-        fails(
-            &d,
-            Edit::AddClip {
-                track: t,
-                pattern: PatternId(999),
-                start: 9000,
-                len: 10
-            }
-        ),
-        EditError::NotFound { .. }
-    ));
-    assert!(matches!(
-        fails(
-            &d,
-            Edit::AddClip {
-                track: PlaylistTrackId(999),
-                pattern: p,
-                start: 9000,
-                len: 10
-            }
-        ),
-        EditError::NotFound { .. }
-    ));
-    // Touching clips are fine.
-    assert!(apply(&d, &add(7680, 10)).is_ok());
-
-    let (d, _) = ok(
-        &d,
-        Edit::RenamePlaylistTrack {
-            track: t,
-            name: "Beat".into(),
-        },
-    );
-    assert_eq!(d.project.playlist[0].name, "Beat");
-    assert!(
-        fails(
-            &d,
-            Edit::RenamePlaylistTrack {
-                track: t,
-                name: String::new()
-            }
-        )
-        .to_string()
-        .contains("playlist.name")
-    );
-
-    let ids = [ClipId(a[0]), ClipId(b[0])];
-    assert!(matches!(
-        fails(
-            &d,
-            Edit::RemoveClips {
-                clips: vec![ids[0], ClipId(5555)]
-            }
-        ),
-        EditError::NotFound { .. }
-    ));
-    let (d2, _) = ok(
-        &d,
-        Edit::RemoveClips {
-            clips: vec![ids[0], ids[0]],
-        },
-    );
-    assert_eq!(clips(&d2, t).len(), 1);
-    // Removing the track removes its clips.
-    let (d3, _) = ok(&d, Edit::RemovePlaylistTrack { track: t });
-    assert!(d3.project.playlist.is_empty());
-}
-
-#[test]
-fn clips_move_resize_and_change_rows() {
-    let (d, t1, p) = song();
-    let (d, t2) = ok(
-        &d,
-        Edit::AddPlaylistTrack {
-            name: "Bass".into(),
-        },
-    );
-    let t2 = PlaylistTrackId(t2[0]);
-    let (d, a) = ok(
-        &d,
-        Edit::AddClip {
-            track: t1,
-            pattern: p,
-            start: 0,
-            len: 960,
-        },
-    );
-    let (d, b) = ok(
-        &d,
-        Edit::AddClip {
-            track: t1,
-            pattern: p,
-            start: 960,
-            len: 960,
-        },
-    );
-    let (a, b) = (ClipId(a[0]), ClipId(b[0]));
-    // Move both right: no clash among themselves, and rows by id order.
-    let (m, _) = ok(
-        &d,
-        Edit::MoveClips {
-            clips: vec![a, b],
-            dt: 480,
-            dtrack: 0,
-        },
-    );
-    assert_eq!(
-        clips(&m, t1).iter().map(|c| c.1).collect::<Vec<_>>(),
-        [480, 1440]
-    );
-    let (m, _) = ok(
-        &d,
-        Edit::MoveClips {
-            clips: vec![b],
-            dt: 0,
-            dtrack: 1,
-        },
-    );
-    assert_eq!(clips(&m, t2).len(), 1);
-    assert_eq!(clips(&m, t1).len(), 1);
-    // Failures: overlap, out of range, negative start, missing row.
-    assert!(matches!(
-        fails(
-            &d,
-            Edit::MoveClips {
-                clips: vec![a],
-                dt: 100,
-                dtrack: 0
-            }
-        ),
-        EditError::Invalid {
-            reason: ValidationError::Overlap { .. }
-        }
-    ));
-    assert!(
-        fails(
-            &d,
-            Edit::MoveClips {
-                clips: vec![a],
-                dt: -1,
-                dtrack: 0
-            }
-        )
-        .to_string()
-        .contains("clip.start")
-    );
-    assert!(
-        fails(
-            &d,
-            Edit::MoveClips {
-                clips: vec![a],
-                dt: 0,
-                dtrack: 2
-            }
-        )
-        .to_string()
-        .contains("clip.track")
-    );
-    assert!(
-        fails(
-            &d,
-            Edit::MoveClips {
-                clips: vec![a],
-                dt: 0,
-                dtrack: -1
-            }
-        )
-        .to_string()
-        .contains("clip.track")
-    );
-    fails(
-        &d,
-        Edit::MoveClips {
-            clips: vec![a],
-            dt: i64::MAX,
-            dtrack: 0,
-        },
-    );
-    assert!(matches!(
-        fails(
-            &d,
-            Edit::MoveClips {
-                clips: vec![ClipId(404)],
-                dt: 0,
-                dtrack: 0
-            }
-        ),
-        EditError::NotFound { .. }
-    ));
-    // Resize.
-    let (r, _) = ok(
-        &d,
-        Edit::ResizeClips {
-            clips: vec![a, b],
-            dlen: -480,
-        },
-    );
-    assert_eq!(
-        clips(&r, t1).iter().map(|c| c.2).collect::<Vec<_>>(),
-        [480, 480]
-    );
-    assert!(
-        fails(
-            &d,
-            Edit::ResizeClips {
-                clips: vec![a],
-                dlen: -960
-            }
-        )
-        .to_string()
-        .contains("clip.len")
-    );
-    assert!(matches!(
-        fails(
-            &d,
-            Edit::ResizeClips {
-                clips: vec![a],
-                dlen: 100
-            }
-        ),
-        EditError::Invalid {
-            reason: ValidationError::Overlap { .. }
-        }
-    ));
-    fails(
-        &d,
-        Edit::ResizeClips {
-            clips: vec![a],
-            dlen: i64::MAX,
-        },
-    );
-}
-
-#[test]
-fn remove_pattern_removes_its_clips() {
-    let (d, t, p) = song();
-    let (d, q) = ok(
-        &d,
-        Edit::AddPattern {
-            name: "B".into(),
-            length_steps: 16,
-        },
-    );
-    let q = PatternId(q[0]);
-    let (d, _) = ok(
-        &d,
-        Edit::AddClip {
-            track: t,
-            pattern: p,
-            start: 0,
-            len: 960,
-        },
-    );
-    let (d, _) = ok(
-        &d,
-        Edit::AddClip {
-            track: t,
-            pattern: q,
-            start: 960,
-            len: 960,
-        },
-    );
-    let (d, _) = ok(&d, Edit::RemovePattern { pattern: p });
-    let left = &d.project.playlist[0].clips;
-    assert_eq!(left.len(), 1);
-    assert_eq!(left[0].pattern, q);
-}
-
-// ---------------------------------------------------------------------------
 // ids (17.1)
 
 #[test]
 fn new_id_kinds_come_from_the_counter_and_never_repeat() {
-    let (d, t, p) = song();
+    let (d, c, p) = base();
     let (d, a) = ok(
         &d,
         Edit::AddClip {
-            track: t,
-            pattern: p,
+            instrument: c,
+            pattern: Some(p),
             start: 0,
             len: 10,
         },
@@ -1422,7 +1095,7 @@ fn new_id_kinds_come_from_the_counter_and_never_repeat() {
             fx: BuiltinFxKind::Limiter,
         },
     );
-    let all = [t.0, a[0], fx[0]];
+    let all = [a[0], fx[0]];
     assert!(all.windows(2).all(|w| w[0] < w[1]));
     assert!(d.next_id > d.project.max_id());
     // Undo-like replacement keeps the counter monotonic.
@@ -1444,8 +1117,8 @@ fn new_id_kinds_come_from_the_counter_and_never_repeat() {
     let (_, again) = ok(
         &d2,
         Edit::AddClip {
-            track: t,
-            pattern: p,
+            instrument: c,
+            pattern: None,
             start: 0,
             len: 10,
         },
@@ -1561,14 +1234,6 @@ pub(crate) fn random_edit_b(r: &mut Rng, d: &Document) -> Edit {
             TrackId(r.below(60) as u32)
         }
     };
-    let ptrk = |r: &mut Rng| {
-        if r.chance(94) {
-            r.pick(&p.playlist.iter().map(|x| x.id).collect::<Vec<_>>())
-                .unwrap_or(PlaylistTrackId(r.below(40) as u32))
-        } else {
-            PlaylistTrackId(r.below(60) as u32)
-        }
-    };
     let fx_of = |r: &mut Rng| -> (TrackId, InstanceId) {
         let all: Vec<(TrackId, InstanceId)> = p
             .tracks
@@ -1578,28 +1243,13 @@ pub(crate) fn random_edit_b(r: &mut Rng, d: &Document) -> Edit {
         r.pick(&all)
             .unwrap_or((TrackId(r.below(40) as u32), InstanceId(r.below(60) as u32)))
     };
-    let some_clips = |r: &mut Rng| -> Vec<ClipId> {
-        let all: Vec<ClipId> = p
-            .playlist
-            .iter()
-            .flat_map(|t| t.clips.iter().map(|c| c.id))
-            .collect();
-        let n = 1 + r.below(3) as usize;
-        let mut v: Vec<ClipId> = (0..n).filter_map(|_| r.pick(&all)).collect();
-        if r.chance(3) {
-            v.push(ClipId(r.below(1000) as u32));
-        }
-        v
-    };
     // Step notes that exist, so lanes and toggles hit something real.
-    let mut steps: Vec<(PatternId, ChannelId, u8)> = Vec::new();
+    let mut steps: Vec<(PatternId, u8)> = Vec::new();
     for pt in &p.patterns {
-        for cn in &pt.notes {
-            if let Some(ch) = p.channel(cn.channel) {
-                for n in &cn.notes {
-                    if n.is_step_note(ch.root_key, pt) {
-                        steps.push((pt.id, cn.channel, (n.start / pt.step_ticks) as u8));
-                    }
+        if let Some(ch) = p.channel(pt.instrument) {
+            for n in &pt.notes {
+                if n.is_step_note(ch.root_key, pt) {
+                    steps.push((pt.id, (n.start / pt.step_ticks) as u8));
                 }
             }
         }
@@ -1607,7 +1257,6 @@ pub(crate) fn random_edit_b(r: &mut Rng, d: &Document) -> Edit {
     if r.chance(12) {
         return Edit::SetStep {
             pattern: pat(r),
-            channel: chan(r),
             step: r.below(16) as u8,
             on: r.chance(85),
             vel: None,
@@ -1615,13 +1264,12 @@ pub(crate) fn random_edit_b(r: &mut Rng, d: &Document) -> Edit {
     }
     match r.below(30) {
         0..=2 => {
-            let (pattern, channel, step) = match r.pick(&steps) {
+            let (pattern, step) = match r.pick(&steps) {
                 Some(s) if r.chance(85) => s,
-                _ => (pat(r), chan(r), r.below(18) as u8),
+                _ => (pat(r), r.below(18) as u8),
             };
             Edit::SetStepLanes {
                 pattern,
-                channel,
                 step,
                 vel: if r.chance(50) {
                     None
@@ -1645,12 +1293,7 @@ pub(crate) fn random_edit_b(r: &mut Rng, d: &Document) -> Edit {
             let have: Vec<NoteId> = d
                 .project
                 .pattern(pt)
-                .map(|x| {
-                    x.notes
-                        .iter()
-                        .flat_map(|c| c.notes.iter().map(|n| n.id))
-                        .collect()
-                })
+                .map(|x| x.notes.iter().map(|n| n.id).collect())
                 .unwrap_or_default();
             let n = r.below(3) as usize;
             Edit::SetNoteRepeat {
@@ -1824,47 +1467,98 @@ pub(crate) fn random_edit_b(r: &mut Rng, d: &Document) -> Edit {
                 }
             }
         }
-        24 => match r.below(4) {
-            0 | 1 => Edit::AddPlaylistTrack {
-                name: if r.chance(95) {
-                    "pl".into()
+        _ => random_clip_edit(r, d),
+    }
+}
+
+/// Random timeline edits (20.3) against existing clips, with some garbage.
+pub(crate) fn random_clip_edit(r: &mut Rng, d: &Document) -> Edit {
+    let p = &d.project;
+    let chan = |r: &mut Rng| {
+        if r.chance(94) {
+            r.pick(&p.channels.iter().map(|x| x.id).collect::<Vec<_>>())
+                .unwrap_or(ChannelId(r.below(40) as u32))
+        } else {
+            ChannelId(r.below(60) as u32)
+        }
+    };
+    let some_clips = |r: &mut Rng| -> Vec<ClipId> {
+        let all: Vec<ClipId> = p.clips.iter().map(|c| c.id).collect();
+        let n = 1 + r.below(3) as usize;
+        let mut v: Vec<ClipId> = (0..n).filter_map(|_| r.pick(&all)).collect();
+        if r.chance(3) {
+            v.push(ClipId(r.below(1000) as u32));
+        }
+        v
+    };
+    let one_clip = |r: &mut Rng| {
+        let all: Vec<ClipId> = p.clips.iter().map(|c| c.id).collect();
+        r.pick(&all).unwrap_or(ClipId(r.below(1000) as u32))
+    };
+    let dt = |r: &mut Rng| (r.below(9) as i64 - 3) * 960;
+    match r.below(20) {
+        0..=4 => {
+            let instrument = chan(r);
+            let own: Vec<PatternId> = p
+                .patterns
+                .iter()
+                .filter(|x| x.instrument == instrument)
+                .map(|x| x.id)
+                .collect();
+            Edit::AddClip {
+                instrument,
+                pattern: if r.chance(50) { None } else { r.pick(&own) },
+                start: r.below(24) as u32 * 960,
+                len: if r.chance(95) {
+                    960 * (1 + r.below(4)) as u32
                 } else {
-                    String::new()
+                    0
                 },
-            },
-            2 => Edit::RemovePlaylistTrack { track: ptrk(r) },
-            _ => Edit::RenamePlaylistTrack {
-                track: ptrk(r),
-                name: format!("r{}", r.below(99)),
-            },
-        },
-        25..=27 => Edit::AddClip {
-            track: ptrk(r),
-            pattern: pat(r),
-            start: r.below(40) as u32 * 960,
-            len: if r.chance(95) {
-                960 * (1 + r.below(4)) as u32
-            } else {
-                0
-            },
-        },
-        28 => Edit::RemoveClips {
-            clips: some_clips(r),
-        },
-        _ => {
-            if r.chance(50) {
-                Edit::MoveClips {
-                    clips: some_clips(r),
-                    dt: r.below(4000) as i64 - 1500,
-                    dtrack: r.below(5) as i32 - 2,
-                }
-            } else {
-                Edit::ResizeClips {
-                    clips: some_clips(r),
-                    dlen: r.below(3000) as i64 - 1500,
-                }
             }
         }
+        5 | 6 => Edit::DuplicateClips {
+            clips: some_clips(r),
+            dt: dt(r),
+            linked: r.chance(50),
+        },
+        7 | 8 => Edit::RemoveClips {
+            clips: some_clips(r),
+        },
+        9 | 10 => Edit::MoveClips {
+            clips: some_clips(r),
+            dt: dt(r),
+        },
+        11 => Edit::MoveClipToInstrument {
+            clip: one_clip(r),
+            instrument: chan(r),
+        },
+        12 | 13 => Edit::ResizeClips {
+            clips: some_clips(r),
+            dlen: r.below(7) as i64 * 480 - 1440,
+            from_start: r.chance(50),
+        },
+        14 | 15 => Edit::SplitClip {
+            clip: one_clip(r),
+            at: r.below(24 * 960) as u32,
+        },
+        16 => Edit::MakeUnique { clip: one_clip(r) },
+        17 => Edit::SetClipMuted {
+            clips: some_clips(r),
+            muted: r.chance(50),
+        },
+        18 => {
+            let start = r.below(8) as u32 * 960;
+            Edit::SetLoopRegion {
+                start,
+                end: start + r.below(8) as u32 * 960,
+                enabled: r.chance(60),
+            }
+        }
+        _ => Edit::RemovePattern {
+            pattern: r
+                .pick(&p.patterns.iter().map(|x| x.id).collect::<Vec<_>>())
+                .unwrap_or(PatternId(r.below(40) as u32)),
+        },
     }
 }
 
@@ -1934,9 +1628,12 @@ fn milestone_b_random_sequences_stay_valid_unique_and_round_trip() {
         "MoveInsert",
         "SetSend",
         "RemoveSend",
-        "AddPlaylistTrack",
-        "RemovePlaylistTrack",
-        "RenamePlaylistTrack",
+        "DuplicateClips",
+        "MoveClipToInstrument",
+        "SplitClip",
+        "MakeUnique",
+        "SetClipMuted",
+        "SetLoopRegion",
         "AddClip",
         "RemoveClips",
         "MoveClips",

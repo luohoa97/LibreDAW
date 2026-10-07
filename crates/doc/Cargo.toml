@@ -11,3 +11,5 @@ name = "doc"
 
 [dependencies]
 libredaw-protocol = { path = "../protocol" }
+serde = { version = "1", features = ["derive"] }
+toml = "1"

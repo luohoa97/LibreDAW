@@ -39,6 +39,8 @@ What we borrow from GNOME apps with dense editing UIs (in structure, not in appe
 
 ### 2.1 Widget tree
 
+**Amendment (owner, 2026-10-07): split header bars.** The top level is the split view; each pane (Sounds, content, Inspector) is its own `AdwToolbarView` with its own `AdwHeaderBar`, as in GNOME Files and Settings. The content header holds the view switcher, undo, redo, and the main menu; the transport bar is a top bar of the content pane only. Pane headers carry the pane title. Panes are pinned when the content keeps at least 600 sp, and overlay below that; the switch never changes which panes are open, and the user's choice persists across resize and maximize. The Inspector is capped at about 360 sp wide. The tree below is kept for history where it differs.
+
 ```
 GtkApplication "io.github.luohoa97.LibreDAW" (app id to be confirmed in ASSETS/packaging)
 AdwApplicationWindow  (default 1360x800, width-request 360, height-request 294)
