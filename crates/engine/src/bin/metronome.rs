@@ -6,7 +6,7 @@
 use engine::live::{HostKind, LiveParams, run};
 use std::process::ExitCode;
 
-const USAGE: &str = "usage: metronome [--host alsa|jack] [--buffer FRAMES] [--seconds S] \
+const USAGE: &str = "usage: metronome [--host alsa|jack|pipewire] [--buffer FRAMES] [--seconds S] \
 [--rate HZ] [--bpm B] [--gain G]";
 
 fn parse() -> Result<LiveParams, String> {
@@ -26,6 +26,7 @@ fn parse() -> Result<LiveParams, String> {
                 p.host = match value()?.as_str() {
                     "alsa" => HostKind::Alsa,
                     "jack" => HostKind::Jack,
+                    "pipewire" => HostKind::PipeWire,
                     other => return Err(format!("unknown host '{other}'")),
                 }
             }
@@ -62,10 +63,10 @@ fn main() -> ExitCode {
             ExitCode::SUCCESS
         }
         Err(e) => {
-            let host = if p.host == HostKind::Alsa {
-                "alsa"
-            } else {
-                "jack"
+            let host = match p.host {
+                HostKind::Alsa => "alsa",
+                HostKind::Jack => "jack",
+                HostKind::PipeWire => "pipewire",
             };
             println!(
                 "RESULT host={host} buffer_req={} rate={} bpm={} status=failed",
