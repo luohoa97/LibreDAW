@@ -1457,6 +1457,95 @@ memory when read and never rewritten. Named versions are refs whose file
 name is an opaque counter; the human name is a string inside the file.
 Restore loads through the 7.3 migrate and validate path and `apply()`
 range checks.
+
+## 18. Agents in the workstation (Amendment 13)
+
+Owner direction: a DAW is a workstation, so agents work inside it, visibly.
+Status: approved scope, not yet adversarially reviewed.
+
+### 18.1 Presence
+
+- While an agent session is active (connected and has sent a request in
+  the last 5 s, or holds an open activity, 18.2), the main window shows an
+  orange glow along its inner edges: an inset shadow in the libadwaita
+  warning color (`@warning_color`), 3 px, softly pulsing at 1 Hz. With
+  "reduce animation" (GNOME setting) the glow is static. The glow never
+  carries meaning alone (HIG): the header bar also shows an agent pill
+  (agent name, current activity text, a Stop button), and the screen
+  reader announces activity changes.
+- The thing being worked on glows too: the channel row, step row, piano
+  roll page title, mixer strip, playlist clip, or insert the agent is
+  touching gets the same orange outline while the agent focuses it.
+- Stop: the pill's Stop button (and Esc twice in the main window) ends
+  the agent session for this run: the control server disconnects the
+  agent and refuses reconnects until the user re-enables agents. Work
+  already applied stays and is undoable as usual (author-scoped history).
+- The Agent page in the inspector lists the activity log: time, activity
+  text, and each undo group the agent made, with an Undo button per group.
+
+### 18.2 Activity reporting
+
+- Agents declare what they are doing with an activity: text (at most 80
+  characters, untrusted, 17.1 rules) plus an optional focus (channel,
+  pattern, track, insert, clip, or playlist track). One activity at a
+  time per session; a new one replaces the old; `null` ends it.
+- If an agent does not declare a focus, the DAW derives it from the
+  entities its last edit batch touched, so the glow is always accurate.
+
+### 18.3 MCP native
+
+- The control socket speaks MCP itself (JSON-RPC 2.0, MCP revision pinned
+  in `crates/control`), not a private protocol. `libredaw-mcp` becomes a
+  byte relay between stdio and the socket (plus `setup`). Any MCP client
+  that can launch a stdio server works unchanged. No network listener:
+  an HTTP transport would expose the DAW to other local processes and
+  browsers and is out of scope.
+- The `RequestBody` API (section 16, `protocol::control`) stays the
+  internal contract between `control` and `ui`; `control` maps MCP tool
+  calls to it.
+- MCP features used:
+  - Tools: efficient, beat-level tools (18.4).
+  - Resources: `libredaw://project` (compact summary), `libredaw://pattern/<id>`
+    (grid text), `libredaw://mixer`, `libredaw://song`, with
+    `resources/subscribe` notifications when they change, so agents do not
+    poll.
+  - Prompts: starter prompts such as "make a <genre> beat", "add a hi-hat
+    roll", "fix my mix", parameterized by genre and tempo.
+  - Progress notifications for jobs (export, analyze).
+  - Sampling (`sampling/createMessage`) is used only for the "Suggest"
+    feature (18.5) and only when the client supports it.
+- Elicitation is not used for approvals: approvals stay a human click in
+  the DAW window (17.1).
+
+### 18.4 Efficient tools
+
+Tools are designed for few round trips and small payloads:
+- `beat_grid_set { pattern, rows: [{ channel, grid: "x...x...x..x...",
+  vel?, ratchet? }] }`: writes whole step rows from compact text in one
+  undo group (x = hit, X = accent, r2/r3/r4 ratchet markers as documented).
+- `beat_grid_get { pattern }`: the same text form back.
+- `notes_write { pattern, channel, notes: "C3:0:1/4 E3:1/4:1/8 ..." }`
+  compact note syntax, plus the existing structured form.
+- `project_summary`: one compact text block (tempo, key, channels with
+  instrument and track, patterns with row grids, song layout), sized for
+  an LLM context.
+- `kit_add { pack, kit }`, `sound_search { role, genre }`, `channel_add`
+  with preset names, `mix_set` batching mixer changes.
+- `activity_set { text, focus? }` (18.2).
+- Every tool that edits returns the new revision and a compact diff, so
+  the agent never needs a full re-read.
+
+### 18.5 Suggestions (AI-assisted beats)
+
+- A "Suggest" button in the Pattern and Song views asks the connected
+  agent for ideas (fills, variations, a bassline for these drums, which
+  kit or sound to use). With a client that supports MCP sampling, the DAW
+  sends the request through `sampling/createMessage`; otherwise the DAW
+  shows the suggestion request in the Agent page and the agent picks it up
+  through a `suggestions_pending` resource.
+- Suggestions arrive as previews (ghost notes, highlighted rows) the user
+  accepts or rejects; nothing changes the project until accepted.
+- LibreDAW itself contains no model, no API key, and no network client.
 ---
 
 ## Owner decisions (approved 2026-10-07)
@@ -1470,6 +1559,15 @@ range checks.
 ---
 
 ## Changelog
+
+### Amendment 13 (2026-10-07, owner)
+
+Agents work visibly inside the DAW (section 18): orange edge glow and an
+agent pill while an agent works, glow on the entity it is touching, Stop
+button; activity reporting; the control socket speaks MCP natively with
+resources, subscriptions, prompts, and efficient beat-level tools;
+suggestions through MCP sampling when the client supports it. Double-click
+on a channel name opens its notes; rename is F2 or the menu.
 
 ### Amendment 12 (2026-10-07, orchestrator, under the owner's HIG direction)
 
