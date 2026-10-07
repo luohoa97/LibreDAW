@@ -29,13 +29,13 @@ use std::sync::Arc;
 use protocol::consts::*;
 use protocol::edit::{Edit, EditError};
 use protocol::ids::{ChannelId, ClipId, NoteId, PatternId};
-use protocol::model::{Clip, Note, Pattern, Project};
+use protocol::model::{AudioSource, Clip, ClipGroup, Instrument, Note, Pattern, Project};
 use protocol::validate::ValidationError;
 
 use super::{Work, bad, channel_idx, not_found, out_of_range, pattern_idx, too_many};
 
 /// A clip-to-be on a row: `(instrument, start, end, id if it has one)`.
-type Placement = (ChannelId, u32, u32, Option<ClipId>);
+pub(super) type Placement = (ChannelId, u32, u32, Option<ClipId>);
 
 fn overlap(a: Option<ClipId>, b: ClipId) -> EditError {
     EditError::Invalid {
@@ -48,7 +48,7 @@ fn overlap(a: Option<ClipId>, b: ClipId) -> EditError {
 
 /// Fails if any placement overlaps a clip of the project (other than
 /// those in `ignore`) or another placement on the same row.
-fn check_placements(
+pub(super) fn check_placements(
     p: &Project,
     planned: &[Placement],
     ignore: &HashSet<ClipId>,
@@ -70,7 +70,7 @@ fn check_placements(
 
 /// The named clips in request order. Duplicates count once; `NotFound`
 /// for the first missing id.
-fn locate_clips(p: &Project, ids: &[ClipId]) -> Result<Vec<Clip>, EditError> {
+pub(super) fn locate_clips(p: &Project, ids: &[ClipId]) -> Result<Vec<Clip>, EditError> {
     let mut seen = HashSet::new();
     let mut out = Vec::new();
     for id in ids {
@@ -94,7 +94,7 @@ fn clip_mut(p: &mut Project, id: ClipId) -> &mut Clip {
         .expect("clip was located")
 }
 
-fn check_span(start: i64, len: i64) -> Result<(u32, u32), EditError> {
+pub(super) fn check_span(start: i64, len: i64) -> Result<(u32, u32), EditError> {
     if start < 0 {
         return Err(out_of_range("clip.start", start as f64));
     }
@@ -110,7 +110,7 @@ fn check_span(start: i64, len: i64) -> Result<(u32, u32), EditError> {
     Ok((start as u32, len as u32))
 }
 
-fn check_clip_room(p: &Project, extra: usize) -> Result<(), EditError> {
+pub(super) fn check_clip_room(p: &Project, extra: usize) -> Result<(), EditError> {
     if p.clips.len() + extra > MAX_CLIPS {
         return Err(too_many("clips", MAX_CLIPS));
     }
@@ -248,7 +248,9 @@ pub(super) fn apply(w: &mut Work, e: &Edit) -> Result<(), EditError> {
         Edit::SplitClip { clip, at } => split(w, *clip, *at),
         Edit::MakeUnique { clip } => {
             let c = locate_clips(&w.p, &[*clip])?[0];
-            if w.p.clips.iter().filter(|x| x.pattern == c.pattern).count() <= 1 {
+            if c.audio.is_some()
+                || w.p.clips.iter().filter(|x| x.pattern == c.pattern).count() <= 1
+            {
                 return Ok(());
             }
             let src = &w.p.patterns[pattern_idx(&w.p, c.pattern)?];
@@ -297,7 +299,10 @@ fn add_clip(
     start: u32,
     len: u32,
 ) -> Result<(), EditError> {
-    channel_idx(&w.p, instrument)?;
+    let ci = channel_idx(&w.p, instrument)?;
+    if matches!(w.p.channels[ci].instrument, Instrument::Audio) {
+        return Err(bad("an audio row holds audio clips, not note clips"));
+    }
     let (start, len) = check_span(start as i64, len as i64)?;
     check_clip_room(&w.p, 1)?;
     check_placements(
@@ -333,6 +338,8 @@ fn add_clip(
         len,
         offset: 0,
         muted: false,
+        audio: None,
+        group: None,
     });
     Ok(())
 }
@@ -355,7 +362,7 @@ fn duplicate(w: &mut Work, clips: &[ClipId], dt: i64, linked: bool) -> Result<()
     // Copies of clips that share content share one new content.
     let mut mapped: HashMap<PatternId, PatternId> = HashMap::new();
     if !linked {
-        for c in &src {
+        for c in src.iter().filter(|c| c.audio.is_none()) {
             if mapped.contains_key(&c.pattern) {
                 continue;
             }
@@ -368,12 +375,31 @@ fn duplicate(w: &mut Work, clips: &[ClipId], dt: i64, linked: bool) -> Result<()
             mapped.insert(c.pattern, new);
         }
     }
+    // Copies of grouped clips are a new instance of their pattern (20.7);
+    // clips that were one instance stay one.
+    let mut instances: HashMap<(u32, u32), u32> = HashMap::new();
+    let mut top: HashMap<protocol::ids::GroupId, u32> = HashMap::new();
+    for c in &w.p.clips {
+        if let Some(g) = c.group {
+            let t = top.entry(g.group).or_insert(0);
+            *t = (*t).max(g.instance);
+        }
+    }
     for (c, pl) in src.iter().zip(&planned) {
         let id = ClipId(w.alloc()?);
+        let group = c.group.map(|g| ClipGroup {
+            group: g.group,
+            instance: *instances.entry((g.group.0, g.instance)).or_insert_with(|| {
+                let t = top.get_mut(&g.group).expect("counted");
+                *t += 1;
+                *t
+            }),
+        });
         w.p.clips.push(Clip {
             id,
             pattern: mapped.get(&c.pattern).copied().unwrap_or(c.pattern),
             start: pl.1,
+            group,
             ..*c
         });
     }
@@ -402,15 +428,22 @@ fn move_clips(w: &mut Work, clips: &[ClipId], dt: i64) -> Result<(), EditError> 
 
 fn move_to_instrument(w: &mut Work, clip: ClipId, instrument: ChannelId) -> Result<(), EditError> {
     let c = locate_clips(&w.p, &[clip])?[0];
-    channel_idx(&w.p, instrument)?;
+    let to = channel_idx(&w.p, instrument)?;
     if c.instrument == instrument {
         return Ok(());
+    }
+    if matches!(w.p.channels[to].instrument, Instrument::Audio) != c.audio.is_some() {
+        return Err(bad("audio clips stay on audio rows, note clips on note rows"));
     }
     check_placements(
         &w.p,
         &[(instrument, c.start, c.end(), Some(c.id))],
         &HashSet::from([c.id]),
     )?;
+    if c.audio.is_some() {
+        clip_mut(&mut w.p, c.id).instrument = instrument;
+        return Ok(());
+    }
     let src_name = w.p.patterns[pattern_idx(&w.p, c.pattern)?].name.clone();
     let old_inst =
         w.p.channel(c.instrument)
@@ -443,7 +476,20 @@ fn resize(w: &mut Work, clips: &[ClipId], dlen: i64, from_start: bool) -> Result
         let len = (c.len as i64)
             .checked_add(dlen)
             .ok_or_else(|| out_of_range("clip.len", f64::INFINITY))?;
-        let (start, offset) = if from_start {
+        let (start, offset) = if from_start && c.audio.is_some() {
+            // An audio clip trims into the sample: growing at the start
+            // uncovers earlier audio, so it cannot go below 0.
+            let offset = c.offset as i64 - dlen;
+            if !(0..=MAX_TICK as i64).contains(&offset) {
+                return Err(out_of_range("clip.offset", offset as f64));
+            }
+            (
+                (c.start as i64)
+                    .checked_sub(dlen)
+                    .ok_or_else(|| out_of_range("clip.start", f64::INFINITY))?,
+                offset as u32,
+            )
+        } else if from_start {
             let content = w.p.patterns[pattern_idx(&w.p, c.pattern)?]
                 .length_ticks()
                 .max(1) as i64;
@@ -467,6 +513,10 @@ fn resize(w: &mut Work, clips: &[ClipId], dlen: i64, from_start: bool) -> Result
         m.start = start;
         m.len = len;
         m.offset = offset;
+        if let Some(a) = &mut m.audio {
+            a.fade_in = a.fade_in.min(len);
+            a.fade_out = a.fade_out.min(len);
+        }
     }
     Ok(())
 }
@@ -477,10 +527,39 @@ fn split(w: &mut Work, clip: ClipId, at: u32) -> Result<(), EditError> {
         return Err(bad("split point must be inside the clip"));
     }
     check_clip_room(&w.p, 1)?;
+    let left = at - c.start;
+    if let Some(a) = c.audio {
+        // The right part plays on from where the left stops; the fade-in
+        // stays with the left part and the fade-out with the right.
+        let right_len = c.end() - at;
+        let id = ClipId(w.alloc()?);
+        let m = clip_mut(&mut w.p, c.id);
+        m.len = left;
+        if let Some(x) = &mut m.audio {
+            x.fade_in = a.fade_in.min(left);
+            x.fade_out = 0;
+        }
+        w.p.clips.push(Clip {
+            id,
+            start: at,
+            len: right_len,
+            offset: c
+                .offset
+                .checked_add(left)
+                .filter(|o| *o <= MAX_TICK)
+                .ok_or_else(|| out_of_range("clip.offset", c.offset as f64 + left as f64))?,
+            audio: Some(AudioSource {
+                fade_in: 0,
+                fade_out: a.fade_out.min(right_len),
+                ..a
+            }),
+            ..c
+        });
+        return Ok(());
+    }
     let content = w.p.patterns[pattern_idx(&w.p, c.pattern)?]
         .length_ticks()
         .max(1) as u64;
-    let left = at - c.start;
     let id = ClipId(w.alloc()?);
     clip_mut(&mut w.p, c.id).len = left;
     w.p.clips.push(Clip {

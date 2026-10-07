@@ -257,8 +257,22 @@ pub(super) fn apply(w: &mut Work, e: &Edit) -> Result<(), EditError> {
                 Insert::Builtin {
                     instance,
                     fx: BuiltinFx::new(*fx),
+                    bypass: false,
                 },
             );
+        }
+        Edit::SetInsertBypass {
+            track,
+            instance,
+            bypass,
+        } => {
+            let ti = track_idx(&w.p, *track)?;
+            let ii = builtin_idx(&w.p, ti, *instance)?;
+            if let Insert::Builtin { bypass: b, .. } =
+                &mut Arc::make_mut(&mut w.p.tracks[ti]).inserts[ii]
+            {
+                *b = *bypass;
+            }
         }
         Edit::SetFxParam {
             track,

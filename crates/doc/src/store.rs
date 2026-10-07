@@ -163,6 +163,10 @@ struct RootObject {
     samples: Vec<SampleRef>,
     #[serde(default)]
     clips: Vec<Clip>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    groups: Vec<protocol::model::PatternGroup>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    shapes: Vec<protocol::model::Shape>,
 }
 
 type NodeCache<T> = HashMap<usize, (Arc<T>, String)>;
@@ -513,6 +517,8 @@ impl HistoryStore {
             tracks,
             samples: p.samples.clone(),
             clips: p.clips.clone(),
+            groups: p.groups.clone(),
+            shapes: p.shapes.clone(),
         };
         let text = toml::to_string(&root)
             .map_err(|e| StoreError::Corrupt(format!("cannot write root: {e}")))?;
@@ -680,6 +686,8 @@ impl HistoryStore {
             samples: root.samples,
             clips: root.clips,
             loop_region: root.loop_region,
+            groups: root.groups,
+            shapes: root.shapes,
         };
         protocol::validate::validate(&p)
             .map_err(|e| StoreError::Corrupt(format!("commit {commit}: {e}")))?;

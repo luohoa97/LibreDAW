@@ -44,6 +44,7 @@ use protocol::validate::{ValidationError, check_synth, sort_canonical, validate}
 
 mod beats;
 mod clips;
+mod v4;
 
 /// Velocity of a step turned on without an explicit velocity.
 pub const DEFAULT_STEP_VEL: u8 = 100;
@@ -125,6 +126,7 @@ pub fn apply_batch_indexed(
     for (i, e) in edits.iter().enumerate() {
         apply_one(&mut w, e).map_err(|err| (Some(i as u32), err))?;
     }
+    v4::collect_groups(&mut w.p);
     sort_canonical(&mut w.p);
     if let Err(err) = validate(&w.p) {
         return Err((first_invalid_edit(doc, edits), err.into()));
@@ -421,6 +423,7 @@ fn apply_one(w: &mut Work, e: &Edit) -> Result<(), EditError> {
                     mono: *mono,
                     ..Bass808::default()
                 }),
+                NewInstrument::Audio => Instrument::Audio,
             };
             w.p.channels.push(Arc::new(Channel {
                 id,
@@ -438,6 +441,7 @@ fn apply_one(w: &mut Work, e: &Edit) -> Result<(), EditError> {
             // Its contents and clips go with it (20.3).
             w.p.patterns.retain(|pat| pat.instrument != *channel);
             w.p.clips.retain(|c| c.instrument != *channel);
+            v4::forget_channel(&mut w.p, *channel);
         }
         Edit::RenameChannel { channel, name } => {
             let i = channel_idx(&w.p, *channel)?;
@@ -688,6 +692,7 @@ fn apply_one(w: &mut Work, e: &Edit) -> Result<(), EditError> {
                 }
             }
             beats::forget_track(&mut w.p, *track);
+            v4::forget_track(&mut w.p, *track);
         }
         Edit::RenameTrack { track, name } => {
             let i = track_idx(&w.p, *track)?;
@@ -724,6 +729,7 @@ fn apply_one(w: &mut Work, e: &Edit) -> Result<(), EditError> {
                 .position(|i| i.instance() == *instance)
                 .ok_or_else(|| not_found("insert", instance.0))?;
             Arc::make_mut(&mut w.p.tracks[ti]).inserts.remove(ii);
+            v4::forget_insert(&mut w.p, *track, *instance);
         }
 
         // Plugins
@@ -778,6 +784,7 @@ fn apply_one(w: &mut Work, e: &Edit) -> Result<(), EditError> {
         | Edit::SetDelayPingPong { .. }
         | Edit::SetSidechain { .. }
         | Edit::MoveInsert { .. }
+        | Edit::SetInsertBypass { .. }
         | Edit::SetSend { .. }
         | Edit::RemoveSend { .. } => beats::apply(w, e)?,
 
@@ -792,6 +799,17 @@ fn apply_one(w: &mut Work, e: &Edit) -> Result<(), EditError> {
         | Edit::MakeUnique { .. }
         | Edit::SetClipMuted { .. }
         | Edit::SetLoopRegion { .. } => clips::apply(w, e)?,
+
+        // Audio clips, patterns and shapes (v4)
+        Edit::AddAudioClip { .. }
+        | Edit::SetClipAudio { .. }
+        | Edit::MakePattern { .. }
+        | Edit::PlacePattern { .. }
+        | Edit::Ungroup { .. }
+        | Edit::RenameGroup { .. }
+        | Edit::AddShape { .. }
+        | Edit::SetShapePoints { .. }
+        | Edit::RemoveShape { .. } => v4::apply(w, e)?,
     }
     Ok(())
 }
@@ -948,6 +966,8 @@ fn set_step_ticks(w: &mut Work, pattern: PatternId, new: u32) -> Result<(), Edit
 
 #[cfg(test)]
 mod beats_tests;
+#[cfg(test)]
+mod v4_tests;
 #[cfg(test)]
 mod clips_props;
 #[cfg(test)]

@@ -20,7 +20,7 @@ fn assert_saves(d: &Document) {
 /// Every clip names existing content of its own instrument, with an
 /// offset inside it.
 fn assert_clip_invariants(d: &Document) {
-    for c in &d.project.clips {
+    for c in d.project.clips.iter().filter(|c| c.audio.is_none()) {
         let pat = d
             .project
             .pattern(c.pattern)

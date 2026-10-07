@@ -81,6 +81,8 @@ pub fn diff_projects(a: &Project, b: &Project) -> Vec<String> {
     channel_lines(&cx, &mut out);
     content_lines(&cx, &mut out);
     clip_lines(&cx, &mut out);
+    group_lines(&cx, &mut out);
+    shape_lines(&cx, &mut out);
     track_lines(&cx, &mut out);
     sample_lines(&cx, &mut out);
     if out.len() > MAX_LINES {
@@ -344,7 +346,11 @@ fn clip_lines(cx: &Ctx, out: &mut Vec<String>) {
     for c in &cx.b.clips {
         let inst = cx.inst(c.instrument);
         match a.get(&c.id) {
-            None => added.push(format!("{inst}: clip added at bar {}", cx.at(c.start))),
+            None => added.push(format!(
+                "{inst}: {} added at bar {}",
+                if c.audio.is_some() { "audio clip" } else { "clip" },
+                cx.at(c.start)
+            )),
             Some(o) if **o != *c => {
                 if o.instrument != c.instrument {
                     other.push(format!(
@@ -374,6 +380,29 @@ fn clip_lines(cx: &Ctx, out: &mut Vec<String>) {
                         cx.at(c.start),
                         if c.muted { "muted" } else { "unmuted" }
                     ));
+                }
+                if o.audio != c.audio && o.audio.is_some() && c.audio.is_some() {
+                    other.push(format!(
+                        "{inst}: audio clip at bar {} sound settings changed",
+                        cx.at(c.start)
+                    ));
+                }
+                if o.group != c.group {
+                    let name = |g: Option<protocol::model::ClipGroup>, p: &Project| {
+                        g.and_then(|g| p.groups.iter().find(|x| x.id == g.group))
+                            .map(|g| g.name.clone())
+                    };
+                    match (name(c.group, cx.b), name(o.group, cx.a)) {
+                        (Some(n), _) => other.push(format!(
+                            "{inst}: clip at bar {} is now in pattern {n}",
+                            cx.at(c.start)
+                        )),
+                        (None, Some(n)) => other.push(format!(
+                            "{inst}: clip at bar {} left pattern {n}",
+                            cx.at(c.start)
+                        )),
+                        (None, None) => {}
+                    }
                 }
                 if o.pattern != c.pattern && o.instrument == c.instrument {
                     let name = |id: PatternId, p: &Project| {
@@ -423,6 +452,62 @@ fn clip_lines(cx: &Ctx, out: &mut Vec<String>) {
     out.extend(other);
 }
 
+fn group_lines(cx: &Ctx, out: &mut Vec<String>) {
+    let a: HashMap<_, _> = cx.a.groups.iter().map(|g| (g.id, g)).collect();
+    let b: HashSet<_> = cx.b.groups.iter().map(|g| g.id).collect();
+    for g in &cx.b.groups {
+        match a.get(&g.id) {
+            None => out.push(format!("added pattern {}", g.name)),
+            Some(old) if old.name != g.name => {
+                out.push(format!("pattern {} renamed to {}", old.name, g.name));
+            }
+            Some(_) => {}
+        }
+    }
+    for g in &cx.a.groups {
+        if !b.contains(&g.id) {
+            out.push(format!("removed pattern {}", g.name));
+        }
+    }
+}
+
+fn shape_target(cx: &Ctx, t: &protocol::model::ShapeTarget) -> String {
+    use protocol::model::ShapeTarget as T;
+    match t {
+        T::Volume { track } => format!("{} volume", cx.track(*track)),
+        T::Pan { track } => format!("{} pan", cx.track(*track)),
+        T::Pitch { instrument } => format!("{} pitch", cx.inst(*instrument)),
+        T::Filter { instrument } => format!("{} filter", cx.inst(*instrument)),
+        T::FxParam { track, .. } => format!("{} effect setting", cx.track(*track)),
+    }
+}
+
+fn shape_lines(cx: &Ctx, out: &mut Vec<String>) {
+    let a: HashMap<_, _> = cx.a.shapes.iter().map(|s| (s.id, s)).collect();
+    let b: HashSet<_> = cx.b.shapes.iter().map(|s| s.id).collect();
+    for s in &cx.b.shapes {
+        match a.get(&s.id) {
+            None => out.push(format!(
+                "added shape for {} ({})",
+                shape_target(cx, &s.target),
+                plural(s.points.len(), "point", "points")
+            )),
+            Some(old) if old.points != s.points => out.push(format!(
+                "shape for {}: {} -> {}",
+                shape_target(cx, &s.target),
+                plural(old.points.len(), "point", "points"),
+                plural(s.points.len(), "point", "points")
+            )),
+            Some(_) => {}
+        }
+    }
+    for s in &cx.a.shapes {
+        if !b.contains(&s.id) {
+            out.push(format!("removed shape for {}", shape_target(cx, &s.target)));
+        }
+    }
+}
+
 fn track_lines(cx: &Ctx, out: &mut Vec<String>) {
     let a = by_id(&cx.a.tracks, |t: &Track| t.id);
     let b: HashSet<TrackId> = cx.b.tracks.iter().map(|t| t.id).collect();
@@ -445,7 +530,21 @@ fn track_lines(cx: &Ctx, out: &mut Vec<String>) {
                 old.inserts.len(),
                 t.inserts.len()
             ));
-        } else if old.inserts != t.inserts {
+        }
+        let bypassed = |t: &Track| {
+            t.inserts
+                .iter()
+                .filter(|i| matches!(i, protocol::model::Insert::Builtin { bypass: true, .. }))
+                .count()
+        };
+        if old.inserts.len() == t.inserts.len() && bypassed(old) != bypassed(t) {
+            out.push(format!(
+                "track {}: effects bypassed {} -> {}",
+                t.name,
+                bypassed(old),
+                bypassed(t)
+            ));
+        } else if old.inserts.len() == t.inserts.len() && old.inserts != t.inserts {
             out.push(format!("track {}: effect settings changed", t.name));
         }
         if old.sends != t.sends {
