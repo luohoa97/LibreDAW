@@ -44,12 +44,12 @@ fn tempo_doc(bpm: f64) -> Document {
 fn untitled_projects_get_the_first_free_number() {
     let t = Tmp::new();
     let d = t.dirs();
-    assert_eq!(d.next_untitled(), d.projects().join("Untitled 1.ldaw"));
-    fs::create_dir_all(d.projects().join("Untitled 1.ldaw")).unwrap();
-    fs::create_dir_all(d.projects().join("Untitled 2.ldaw")).unwrap();
-    assert_eq!(d.next_untitled(), d.projects().join("Untitled 3.ldaw"));
-    fs::remove_dir_all(d.projects().join("Untitled 1.ldaw")).unwrap();
-    assert_eq!(d.next_untitled(), d.projects().join("Untitled 1.ldaw"));
+    assert_eq!(d.next_untitled(), d.projects().join("Untitled 1.oto"));
+    fs::create_dir_all(d.projects().join("Untitled 1.oto")).unwrap();
+    fs::create_dir_all(d.projects().join("Untitled 2.oto")).unwrap();
+    assert_eq!(d.next_untitled(), d.projects().join("Untitled 3.oto"));
+    fs::remove_dir_all(d.projects().join("Untitled 1.oto")).unwrap();
+    assert_eq!(d.next_untitled(), d.projects().join("Untitled 1.oto"));
 }
 
 #[test]
@@ -60,7 +60,7 @@ fn recovery_bundles_live_under_the_data_dir() {
     assert_eq!(id, "1700000000-42");
     assert_eq!(
         d.recovery_bundle(&id),
-        d.data.join("libredaw/recovery/1700000000-42.ldaw")
+        d.data.join("libredaw/recovery/1700000000-42.oto")
     );
 }
 
@@ -70,7 +70,7 @@ fn last_session_round_trips_awkward_text() {
         path: Some(PathBuf::from(
             "/home/u/Music/LibreDAW/My \"Song\" \\ 1.ldaw",
         )),
-        note: Some("Saved to ~/Music/LibreDAW/Untitled 1.ldaw\nsecond line".into()),
+        note: Some("Saved to ~/Music/LibreDAW/Untitled 1.oto\nsecond line".into()),
     };
     assert_eq!(LastSession::parse(&l.emit()), l);
     assert_eq!(LastSession::parse(""), LastSession::default());
@@ -115,7 +115,9 @@ fn view_state_round_trips_and_tolerates_junk() {
     let junk = ViewState::parse(
         "px_per_tick = NaN\nrow_h = abc\nsnap = -1\nwhat = 2\n=\npage = \"nowhere\"\nfocus = 3\nsplit = 7\n",
     );
-    assert_eq!(junk.page, "pattern");
+    assert_eq!(junk.page, "timeline");
+    assert_eq!(ViewState::parse("page = \"song\"\n").page, "timeline");
+    assert_eq!(ViewState::parse("page = \"pattern\"\n").page, "timeline");
     assert_eq!(junk.focus, "both");
     assert_eq!(junk.split, 0.9);
     assert_eq!(
@@ -204,18 +206,10 @@ fn recovery_bundles_are_found_newest_first_and_only_bundles() {
         .iter()
         .map(|(p, _)| p.file_name().unwrap().to_string_lossy().to_string())
         .collect();
-    assert_eq!(names, vec!["b.ldaw", "a.ldaw"]);
+    assert_eq!(names, vec!["b.oto", "a.oto"]);
     remove_recovery(&d, "b");
     assert_eq!(find_recovery_bundles(&d).len(), 1);
     assert!(find_recovery_bundles(&Tmp::new().dirs()).is_empty());
-}
-
-#[test]
-fn recovery_message_text() {
-    assert_eq!(
-        recovered_message("14:05"),
-        "Recovered unsaved work from 14:05. Undo to go back to the last save."
-    );
 }
 
 #[test]

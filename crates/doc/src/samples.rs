@@ -106,7 +106,7 @@ impl LocalSamples {
 fn emit_registry(entries: &BTreeMap<String, PathBuf>) -> String {
     let mut s = String::from(
         "# Local-only samples on this machine (never copied into a project).\n\
-         # Written by LibreDAW; safe to delete.\n",
+         # Written by Oto; safe to delete.\n",
     );
     for (hash, path) in entries {
         s.push_str("\n[[sample]]\n");
