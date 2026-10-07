@@ -46,6 +46,12 @@ pub enum NewInstrument {
     /// found by the plugin scan (16.3).
     Clap {
         plugin_id: String,
+        /// Factory preset loaded right after creation, as a path under the
+        /// plugin's preset root (crates/plugin-host/presets/instruments.toml),
+        /// for example "Basses/Sub 1.fxp". The saved plugin state is what
+        /// persists; this field only records the choice.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        preset: Option<String>,
     },
     /// A sampler playing a registered sample (15.1). `sample` must already be
     /// in the project (`Edit::AddSample`), or `None` for an empty sampler.
