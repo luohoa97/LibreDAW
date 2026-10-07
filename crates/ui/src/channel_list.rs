@@ -191,6 +191,8 @@ impl ChannelList {
 
         let label = gtk::EditableLabel::new(name);
         label.set_hexpand(true);
+        label.set_width_chars(4);
+        label.set_max_width_chars(14);
         label.set_valign(gtk::Align::Center);
         label.add_css_class("ldaw-channel-name");
         label.set_tooltip_text(Some("Double-click to rename"));

@@ -281,7 +281,59 @@ pub fn build(gapp: &adw::Application, app: Rc<App>) -> adw::ApplicationWindow {
         app.on_change(move || sync_header(&u, &a));
     }
     sync_header(&ui, &app);
+    install_debug_shot(gapp, &ui);
     window
+}
+
+/// Debug aids for screenshots without a screenshot tool:
+/// `LIBREDAW_PAGE=pattern|song|mixer` picks the page,
+/// `LIBREDAW_THEME=light|dark` the color scheme, and
+/// `LIBREDAW_SHOT=/path.png` writes the window to a PNG a moment after it
+/// is shown and quits. `LIBREDAW_SIZE=360x640` sets the size.
+fn install_debug_shot(gapp: &adw::Application, ui: &Rc<Ui>) {
+    if let Ok(p) = std::env::var("LIBREDAW_PAGE") {
+        // After the project's saved view has been restored.
+        let u = ui.clone();
+        glib::timeout_add_local_once(Duration::from_millis(900), move || go_to_page(&u, &p));
+    }
+    match std::env::var("LIBREDAW_THEME").as_deref() {
+        Ok("dark") => adw::StyleManager::default().set_color_scheme(adw::ColorScheme::ForceDark),
+        Ok("light") => adw::StyleManager::default().set_color_scheme(adw::ColorScheme::ForceLight),
+        _ => {}
+    }
+    let Ok(path) = std::env::var("LIBREDAW_SHOT") else {
+        return;
+    };
+    let (gapp, window) = (gapp.clone(), ui.window.clone());
+    glib::timeout_add_local_once(Duration::from_millis(2500), move || {
+        let (w, h) = (window.width(), window.height());
+        let paintable = gtk::WidgetPaintable::new(Some(&window));
+        let snap = gtk::Snapshot::new();
+        paintable.snapshot(&snap, w as f64, h as f64);
+        let saved = match (snap.to_node(), window.native().and_then(|n| n.renderer())) {
+            (Some(node), Some(r)) => {
+                let t = r.render_texture(
+                    &node,
+                    Some(&gtk::graphene::Rect::new(0.0, 0.0, w as f32, h as f32)),
+                );
+                let r = t.save_to_png(&path);
+                if let Err(e) = &r {
+                    eprintln!("libredaw: png: {e}");
+                }
+                r.is_ok()
+            }
+            (n, r) => {
+                eprintln!(
+                    "libredaw: no node {} or renderer {}",
+                    n.is_none(),
+                    r.is_none()
+                );
+                false
+            }
+        };
+        eprintln!("libredaw: screenshot {path} {w}x{h}: {saved}");
+        gapp.quit();
+    });
 }
 
 /// Binds the two pane toggles to their split views and sets tooltips.
@@ -872,6 +924,7 @@ fn install_tick(app: &Rc<App>) {
             a.notify();
         }
         a.tasks.poll();
+        a.poll_peaks();
 
         // Autosave: note changes, write when due.
         let (rev, dirty) = {

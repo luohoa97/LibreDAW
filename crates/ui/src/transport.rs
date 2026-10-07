@@ -13,12 +13,13 @@ use gtk::glib;
 use protocol::consts::{MAX_TEMPO_BPM, MAX_TIME_SIG_NUM, MIN_TEMPO_BPM, MIN_TIME_SIG_NUM};
 use protocol::edit::Edit;
 
-use crate::app::App;
+use crate::app::{App, MeterUser};
 use crate::shortcuts;
 use crate::size_class::SizeClass;
 use crate::transport_logic::{
     PositionFormat, TapTempo, format_position, parse_tempo, spoken_position,
 };
+use crate::widgets::meter::{Meter, peak_to_db};
 
 pub struct Transport {
     pub bar: gtk::Box,
@@ -39,6 +40,8 @@ pub struct Transport {
     settings_btn: gtk::MenuButton,
     pop: gtk::Popover,
     seps: [gtk::Separator; 2],
+    master: Meter,
+    master_btn: gtk::Button,
     metro_shown: Cell<bool>,
     updating: Cell<bool>,
     fmt: Cell<PositionFormat>,
@@ -197,6 +200,17 @@ impl Transport {
         bar.append(&extras);
         bar.append(&settings_btn);
         bar.append(&spacer);
+        let master = Meter::new_horizontal();
+        master.set_label("Master level");
+        master.set_size_request(96, 12);
+        master.set_valign(gtk::Align::Center);
+        let master_btn = gtk::Button::new();
+        master_btn.set_child(Some(&master));
+        master_btn.add_css_class("flat");
+        master_btn.set_action_name(Some("win.view-mixer"));
+        master_btn.set_tooltip_text(Some("Master Level - click to open the Mixer"));
+        master_btn.update_property(&[gtk::accessible::Property::Label("Open the mixer")]);
+        bar.append(&master_btn);
 
         let t = Rc::new(Transport {
             bar,
@@ -215,6 +229,8 @@ impl Transport {
             settings_btn,
             pop,
             seps: [sep1, sep2],
+            master,
+            master_btn,
             metro_shown: Cell::new(true),
             updating: Cell::new(false),
             fmt: Cell::new(PositionFormat::Bars),
@@ -406,6 +422,10 @@ impl Transport {
     }
 
     fn update_position(&self) {
+        let p = self
+            .app
+            .take_peaks(protocol::ids::TrackId::MASTER, MeterUser::Transport);
+        self.master.update([peak_to_db(p[0]), peak_to_db(p[1])]);
         let (tick, beats, bpm) = {
             let s = self.app.session.borrow();
             let p = &s.document().project;
@@ -435,6 +455,7 @@ impl Transport {
         bp.add_setter(&self.tempo_btn, "visible", Some(&true.to_value()));
         bp.add_setter(&self.metro, "visible", Some(&false.to_value()));
         bp.add_setter(&self.settings_btn, "visible", Some(&false.to_value()));
+        bp.add_setter(&self.master_btn, "visible", Some(&false.to_value()));
         for s in &self.seps {
             bp.add_setter(s, "visible", Some(&false.to_value()));
         }

@@ -55,6 +55,9 @@
 .ldaw-strip-bar { min-height: 4px; border-radius: 6px 6px 0 0; }
 .ldaw-strip.silenced scale, .ldaw-strip.silenced meter { opacity: 0.4; }
 .ldaw-strip.soloed { outline: 2px solid @accent_color; outline-offset: -2px; }
+.ldaw-strip scale.horizontal, .ldaw-strip scale.horizontal trough { min-width: 40px; }
+.ldaw-strip .linked > button { padding: 4px 3px; min-width: 0; }
+.ldaw-strip button.flat { padding-left: 3px; padding-right: 3px; }
 .ldaw-fader trough { min-width: 6px; }
 .ldaw-fader slider { min-height: 20px; min-width: 20px; }
 

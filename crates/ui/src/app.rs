@@ -73,6 +73,14 @@ pub struct App {
     focus: Cell<PatternFocus>,
     view_listeners: RefCell<Vec<Rc<dyn Fn()>>>,
     command_listeners: RefCell<Vec<CommandListener>>,
+    peaks: RefCell<[std::collections::HashMap<TrackId, [f32; 2]>; 2]>,
+}
+
+/// Who reads the meter peaks (each keeps its own accumulation).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MeterUser {
+    Mixer = 0,
+    Transport = 1,
 }
 
 /// Requests from one widget to the window or to another widget.
@@ -103,6 +111,7 @@ impl App {
             focus: Cell::new(PatternFocus::Both),
             view_listeners: RefCell::new(Vec::new()),
             command_listeners: RefCell::new(Vec::new()),
+            peaks: RefCell::default(),
             dirs,
             session_id: crate::persist::session_id(
                 std::time::SystemTime::now()
@@ -423,6 +432,40 @@ impl App {
                 .link
                 .command(EngineCommand::SetPlayingPattern { pattern: p });
         }
+    }
+
+    // ---- level meters ----
+
+    /// Reads the engine's peak atomics (each read resets them) and adds the
+    /// values to what each meter user has not taken yet. Call from the
+    /// 10 ms tick.
+    pub fn poll_peaks(&self) {
+        let s = self.session.borrow();
+        let status = s.link.status.clone();
+        let mut acc = self.peaks.borrow_mut();
+        for t in &s.document().project.tracks {
+            let Some((slot, _)) = s.slots.track_slot(t.id) else {
+                continue;
+            };
+            let mut v = [0.0f32; 2];
+            for (ch, p) in v.iter_mut().enumerate() {
+                let bits = status.track_peaks[slot.0 as usize * 2 + ch].swap(0, Ordering::Relaxed);
+                *p = f32::from_bits(bits);
+            }
+            for user in acc.iter_mut() {
+                let e = user.entry(t.id).or_insert([0.0; 2]);
+                e[0] = e[0].max(v[0]);
+                e[1] = e[1].max(v[1]);
+            }
+        }
+    }
+
+    /// Linear peaks (left, right) of a track since this user last asked.
+    pub fn take_peaks(&self, track: TrackId, user: MeterUser) -> [f32; 2] {
+        let mut acc = self.peaks.borrow_mut();
+        acc[user as usize]
+            .insert(track, [0.0; 2])
+            .unwrap_or([0.0; 2])
     }
 
     // ---- note preview (owner request, SPEC 17.2 audition) ----
