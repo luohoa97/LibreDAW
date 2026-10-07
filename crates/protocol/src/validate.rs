@@ -8,8 +8,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::beats::{Bass808Param, BuiltinFx, SamplerParam};
 use crate::consts::*;
-use crate::ids::TrackId;
-use crate::model::{ClapRef, Insert, Instrument, Mix, Project, SynthParam, SynthParams};
+use crate::ids::{PatternId, TrackId};
+use crate::model::{
+    ClapRef, Insert, Instrument, Mix, Project, ShapeTarget, SynthParam, SynthParams,
+};
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "error", rename_all = "snake_case")]
@@ -322,6 +324,7 @@ pub fn validate(p: &Project) -> Result<(), ValidationError> {
     }
 
     let mut channel_roots = std::collections::HashMap::new();
+    let mut audio_rows = HashSet::new();
     for (i, c) in p.channels.iter().enumerate() {
         unique(&mut ids, c.id.0)?;
         if i > 0 && c.id <= p.channels[i - 1].id {
@@ -330,6 +333,9 @@ pub fn validate(p: &Project) -> Result<(), ValidationError> {
             });
         }
         channel_roots.insert(c.id, c.root_key);
+        if matches!(c.instrument, Instrument::Audio) {
+            audio_rows.insert(c.id);
+        }
         check_name("channel.name", &c.name)?;
         int_range("channel.root_key", c.root_key as u64, 0, 127)?;
         int_range(
@@ -373,6 +379,7 @@ pub fn validate(p: &Project) -> Result<(), ValidationError> {
                     range(&format!("bass808.{bp:?}"), b.params.get(*bp), lo, hi)?;
                 }
             }
+            Instrument::Audio => {}
         }
     }
 
@@ -413,6 +420,12 @@ pub fn validate(p: &Project) -> Result<(), ValidationError> {
                 id: pat.instrument.0,
             });
         };
+        if audio_rows.contains(&pat.instrument) {
+            return Err(ValidationError::MissingRef {
+                what: "note instrument (an audio row has no notes)".into(),
+                id: pat.instrument.0,
+            });
+        }
         pattern_owner.insert(pat.id, (pat.instrument, pat.length_ticks()));
         for (k, n) in pat.notes.iter().enumerate() {
             unique(&mut ids, n.id.0)?;
@@ -469,18 +482,57 @@ pub fn validate(p: &Project) -> Result<(), ValidationError> {
     }
     for (j, c) in p.clips.iter().enumerate() {
         unique(&mut ids, c.id.0)?;
-        let Some(&(owner, content_len)) = pattern_owner.get(&c.pattern) else {
-            return Err(ValidationError::MissingRef {
-                what: "clip content".into(),
-                id: c.pattern.0,
-            });
+        let content_len = if let Some(a) = &c.audio {
+            // An audio clip (21.1): on an Audio row, no notes, a known
+            // sample. The sample's length is not stored in the project, so
+            // offset + len is checked against it by the engine, not here.
+            if !audio_rows.contains(&c.instrument) {
+                return Err(ValidationError::MissingRef {
+                    what: "audio row for clip".into(),
+                    id: c.instrument.0,
+                });
+            }
+            if c.pattern != PatternId::NONE {
+                return Err(ValidationError::MissingRef {
+                    what: "clip content (audio clips have none)".into(),
+                    id: c.pattern.0,
+                });
+            }
+            if !sample_hashes.contains(a.sample.to_hex().as_str()) {
+                return Err(ValidationError::BadString {
+                    field: "clip.audio.sample (not in samples)".into(),
+                });
+            }
+            int_range(
+                "clip.audio.gain_mdb",
+                (a.gain_mdb as i64 + 200_000) as u64,
+                100_000,
+                200_000 + 24_000,
+            )?;
+            int_range("clip.audio.fade_in", a.fade_in as u64, 0, c.len as u64)?;
+            int_range("clip.audio.fade_out", a.fade_out as u64, 0, c.len as u64)?;
+            u32::MAX
+        } else {
+            if audio_rows.contains(&c.instrument) {
+                return Err(ValidationError::MissingRef {
+                    what: "pattern clip on an audio row".into(),
+                    id: c.instrument.0,
+                });
+            }
+            let Some(&(owner, content_len)) = pattern_owner.get(&c.pattern) else {
+                return Err(ValidationError::MissingRef {
+                    what: "clip content".into(),
+                    id: c.pattern.0,
+                });
+            };
+            if owner != c.instrument {
+                return Err(ValidationError::MissingRef {
+                    what: "clip content of this instrument".into(),
+                    id: c.pattern.0,
+                });
+            }
+            content_len
         };
-        if owner != c.instrument {
-            return Err(ValidationError::MissingRef {
-                what: "clip content of this instrument".into(),
-                id: c.pattern.0,
-            });
-        }
         int_range("clip.len", c.len as u64, 1, MAX_TICK as u64)?;
         int_range(
             "clip.end",
@@ -488,7 +540,7 @@ pub fn validate(p: &Project) -> Result<(), ValidationError> {
             1,
             MAX_TICK as u64,
         )?;
-        if c.offset >= content_len.max(1) {
+        if c.audio.is_none() && c.offset >= content_len.max(1) {
             return Err(ValidationError::OutOfRange {
                 field: "clip.offset".into(),
                 value: c.offset as f64,
@@ -509,6 +561,7 @@ pub fn validate(p: &Project) -> Result<(), ValidationError> {
             }
         }
     }
+    check_groups_and_shapes(p, &mut ids, &track_ids)?;
     let lr = p.loop_region;
     if lr.enabled || lr.end != 0 || lr.start != 0 {
         int_range("loop.end", lr.end as u64, 1, MAX_TICK as u64)?;
@@ -520,6 +573,138 @@ pub fn validate(p: &Project) -> Result<(), ValidationError> {
         }
     }
     Ok(())
+}
+
+/// Patterns (20.7) and shapes (24.2-1).
+fn check_groups_and_shapes(
+    p: &Project,
+    ids: &mut HashSet<u32>,
+    track_ids: &HashSet<TrackId>,
+) -> Result<(), ValidationError> {
+    if p.groups.len() > MAX_GROUPS {
+        return Err(ValidationError::TooMany {
+            what: "pattern groups".into(),
+            max: MAX_GROUPS,
+        });
+    }
+    for (i, g) in p.groups.iter().enumerate() {
+        unique(ids, g.id.0)?;
+        if i > 0 && g.id <= p.groups[i - 1].id {
+            return Err(ValidationError::NotSorted {
+                what: "groups".into(),
+            });
+        }
+        check_name("group.name", &g.name)?;
+        int_range("group.color", g.color as u64, 0, 0xFF_FFFF)?;
+    }
+    // Every grouped clip names a known group. Instances may differ in
+    // their members once a clip of one is edited on its own.
+    for c in &p.clips {
+        if let Some(g) = &c.group {
+            if p.groups.binary_search_by_key(&g.group, |x| x.id).is_err() {
+                return Err(ValidationError::MissingRef {
+                    what: "group".into(),
+                    id: g.group.0,
+                });
+            }
+        }
+    }
+
+    if p.shapes.len() > MAX_SHAPES {
+        return Err(ValidationError::TooMany {
+            what: "shapes".into(),
+            max: MAX_SHAPES,
+        });
+    }
+    for (i, s) in p.shapes.iter().enumerate() {
+        unique(ids, s.id.0)?;
+        if i > 0 && s.id <= p.shapes[i - 1].id {
+            return Err(ValidationError::NotSorted {
+                what: "shapes".into(),
+            });
+        }
+        let (lo, hi) = match s.target {
+            ShapeTarget::Volume { track } => {
+                need_track(track_ids, track)?;
+                (-60.0, 6.0)
+            }
+            ShapeTarget::Pan { track } => {
+                need_track(track_ids, track)?;
+                (-1.0, 1.0)
+            }
+            ShapeTarget::Pitch { instrument } => {
+                need_channel(p, instrument.0)?;
+                (-24.0, 24.0)
+            }
+            ShapeTarget::Filter { instrument } => {
+                need_channel(p, instrument.0)?;
+                (0.0, 1.0)
+            }
+            ShapeTarget::FxParam {
+                track,
+                instance,
+                param,
+            } => {
+                let fx = p
+                    .tracks
+                    .iter()
+                    .find(|t| t.id == track)
+                    .and_then(|t| {
+                        t.inserts.iter().find_map(|i| match i {
+                            Insert::Builtin { instance: n, fx, .. } if *n == instance => Some(fx),
+                            _ => None,
+                        })
+                    })
+                    .ok_or(ValidationError::MissingRef {
+                        what: "shape effect".into(),
+                        id: instance.0,
+                    })?;
+                fx.param_range(param as usize)
+                    .ok_or(ValidationError::OutOfRange {
+                        field: "shape.param".into(),
+                        value: param as f64,
+                    })?
+            }
+        };
+        if s.points.len() > MAX_SHAPE_POINTS {
+            return Err(ValidationError::TooMany {
+                what: "shape points".into(),
+                max: MAX_SHAPE_POINTS,
+            });
+        }
+        for (k, pt) in s.points.iter().enumerate() {
+            int_range("shape.tick", pt.tick as u64, 0, MAX_TICK as u64)?;
+            range("shape.value", pt.value as f64, lo, hi)?;
+            if k > 0 && s.points[k - 1].tick >= pt.tick {
+                return Err(ValidationError::NotSorted {
+                    what: "shape points".into(),
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
+fn need_track(track_ids: &HashSet<TrackId>, t: TrackId) -> Result<(), ValidationError> {
+    if track_ids.contains(&t) {
+        Ok(())
+    } else {
+        Err(ValidationError::MissingRef {
+            what: "shape track".into(),
+            id: t.0,
+        })
+    }
+}
+
+fn need_channel(p: &Project, id: u32) -> Result<(), ValidationError> {
+    if p.channels.iter().any(|c| c.id.0 == id) {
+        Ok(())
+    } else {
+        Err(ValidationError::MissingRef {
+            what: "shape instrument".into(),
+            id,
+        })
+    }
 }
 
 /// SHA-256 as 64 lowercase hex digits.
@@ -618,6 +803,11 @@ pub fn sort_canonical(p: &mut Project) {
     }
     p.samples.sort_by(|a, b| a.hash.cmp(&b.hash));
     p.clips.sort_by_key(|c| (c.instrument, c.start, c.id));
+    p.groups.sort_by_key(|g| g.id);
+    p.shapes.sort_by_key(|s| s.id);
+    for s in &mut p.shapes {
+        s.points.sort_by_key(|pt| pt.tick);
+    }
 }
 
 #[cfg(test)]
@@ -671,6 +861,8 @@ mod tests {
             len: 3840,
             offset: 0,
             muted: false,
+            audio: None,
+            group: None,
         };
         p.clips = vec![clip(7, 0), clip(8, 3840)];
         p.loop_region = crate::model::LoopRegion {
@@ -704,6 +896,7 @@ mod tests {
             .push(Insert::Builtin {
                 instance: InstanceId(9),
                 fx,
+                bypass: false,
             });
         assert_eq!(validate(&p), Err(ValidationError::RoutingCycle));
     }
@@ -769,5 +962,105 @@ mod tests {
         let n = p.patterns[0].notes[0];
         assert!(n.is_step_note(42, &p.patterns[0]));
         assert!(!n.is_step_note(41, &p.patterns[0]));
+    }
+
+    fn audio_project() -> Project {
+        let mut p = base();
+        let hash = crate::model::SampleHash([7; 32]);
+        p.samples.push(crate::model::SampleRef {
+            hash: hash.to_hex(),
+            orig_name: "a.wav".into(),
+            size: 10,
+            local_only: false,
+        });
+        p.channels.push(Arc::new(Channel {
+            id: ChannelId(20),
+            name: "Audio".into(),
+            root_key: 60,
+            track: TrackId(1),
+            mix: Mix::default(),
+            instrument: Instrument::Audio,
+            choke_group: 0,
+        }));
+        p.clips.push(Clip {
+            id: ClipId(21),
+            instrument: ChannelId(20),
+            pattern: PatternId::NONE,
+            start: 0,
+            len: 960,
+            offset: 100,
+            muted: false,
+            audio: Some(crate::model::AudioSource {
+                sample: hash,
+                gain_mdb: 0,
+                fade_in: 10,
+                fade_out: 10,
+            }),
+            group: None,
+        });
+        p
+    }
+
+    #[test]
+    fn audio_clips_need_an_audio_row_and_a_known_sample() {
+        let p = audio_project();
+        let last = p.clips.len() - 1;
+        assert_eq!(validate(&p), Ok(()));
+        let mut bad = p.clone();
+        bad.samples.clear();
+        assert!(validate(&bad).is_err());
+        let mut bad = p.clone();
+        bad.clips[last].pattern = PatternId(5);
+        assert!(validate(&bad).is_err());
+        let mut bad = p.clone();
+        bad.clips[last].audio.as_mut().unwrap().fade_in = 5000;
+        assert!(validate(&bad).is_err());
+        let mut bad = p;
+        bad.clips[last].audio = None;
+        assert!(validate(&bad).is_err());
+    }
+
+    #[test]
+    fn shapes_need_sorted_points_in_range_and_existing_targets() {
+        use crate::ids::ShapeId;
+        use crate::model::{Curve, Shape, ShapePoint};
+        let pt = |tick, value| ShapePoint {
+            tick,
+            value,
+            curve: Curve::Smooth,
+        };
+        let mut p = base();
+        p.shapes.push(Shape {
+            id: ShapeId(30),
+            target: ShapeTarget::Volume { track: TrackId(1) },
+            points: vec![pt(0, -6.0), pt(480, 0.0)],
+        });
+        assert_eq!(validate(&p), Ok(()));
+        let mut bad = p.clone();
+        bad.shapes[0].points = vec![pt(480, 0.0), pt(0, 0.0)];
+        assert!(validate(&bad).is_err());
+        let mut bad = p.clone();
+        bad.shapes[0].points = vec![pt(0, 20.0)];
+        assert!(validate(&bad).is_err());
+        let mut bad = p;
+        bad.shapes[0].target = ShapeTarget::Pan { track: TrackId(9) };
+        assert!(validate(&bad).is_err());
+    }
+
+    #[test]
+    fn grouped_clips_need_their_group() {
+        let mut p = audio_project();
+        let last = p.clips.len() - 1;
+        p.clips[last].group = Some(crate::model::ClipGroup {
+            group: crate::ids::GroupId(40),
+            instance: 1,
+        });
+        assert!(validate(&p).is_err());
+        p.groups.push(crate::model::PatternGroup {
+            id: crate::ids::GroupId(40),
+            name: "Drop".into(),
+            color: 0xff8800,
+        });
+        assert_eq!(validate(&p), Ok(()));
     }
 }

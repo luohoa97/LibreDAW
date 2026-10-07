@@ -93,3 +93,9 @@ pub const FX_POOL_SATURATOR: usize = 32;
 pub const FX_POOL_REVERB: usize = 16;
 pub const FX_POOL_DELAY: usize = 16;
 pub const FX_POOL_LIMITER: usize = 16;
+
+/// Most patterns (groups) in a project (20.7).
+pub const MAX_GROUPS: usize = 999;
+/// Most shapes in a project, and most points in one (24.2-1).
+pub const MAX_SHAPES: usize = 1000;
+pub const MAX_SHAPE_POINTS: usize = 10_000;

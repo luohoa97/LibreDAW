@@ -102,6 +102,12 @@ impl Project {
         for c in &self.clips {
             m = m.max(c.id.0);
         }
+        for g in &self.groups {
+            m = m.max(g.id.0);
+        }
+        for s in &self.shapes {
+            m = m.max(s.id.0);
+        }
         m
     }
 

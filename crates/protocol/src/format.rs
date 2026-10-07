@@ -22,8 +22,8 @@ use crate::beats::{
 use crate::consts::FORMAT_VERSION;
 use crate::ids::InstanceId;
 use crate::model::{
-    Adsr, Channel, ClapRef, Clip, Insert, Instrument, LoopRegion, Metronome, Mix, Osc, Pattern,
-    Project, SampleRef, SynthParams, Track, Wave,
+    Adsr, Channel, ClapRef, Clip, Curve, Insert, Instrument, LoopRegion, Metronome, Mix, Osc, Pattern,
+    PatternGroup, Project, SampleRef, Shape, ShapeTarget, SynthParams, Track, Wave,
 };
 use crate::validate::{ValidationError, validate};
 
@@ -98,6 +98,7 @@ pub fn emit(p: &Project, next_id: u32) -> Result<String, ValidationError> {
             Instrument::Clap(r) => emit_clap(w, r),
             Instrument::Sampler(s) => emit_sampler(w, s),
             Instrument::Bass808(b) => emit_808(w, b),
+            Instrument::Audio => line(w, format_args!("kind = \"audio\"")),
         }
     }
 
@@ -157,8 +158,47 @@ pub fn emit(p: &Project, next_id: u32) -> Result<String, ValidationError> {
             w.push_str("\n[[tracks.inserts]]\n");
             match ins {
                 Insert::Clap(r) => emit_clap(w, r),
-                Insert::Builtin { instance, fx, .. } => emit_builtin(w, *instance, fx),
+                Insert::Builtin {
+                    instance,
+                    fx,
+                    bypass,
+                } => {
+                    emit_builtin(w, *instance, fx);
+                    if *bypass {
+                        line(w, format_args!("bypass = true"));
+                    }
+                }
             }
+        }
+    }
+
+    for g in &p.groups {
+        w.push_str("\n[[groups]]\n");
+        line(w, format_args!("id = {}", g.id));
+        line(w, format_args!("name = {}", string(&g.name)));
+        line(w, format_args!("color = {}", g.color));
+    }
+
+    for s in &p.shapes {
+        w.push_str("\n[[shapes]]\n");
+        line(w, format_args!("id = {}", s.id));
+        line(w, format_args!("target = {}", shape_target(&s.target)));
+        if s.points.is_empty() {
+            w.push_str("points = []\n");
+        } else {
+            w.push_str("points = [\n");
+            for pt in &s.points {
+                line(
+                    w,
+                    format_args!(
+                        "  {{ tick = {}, value = {}, curve = \"{}\" }},",
+                        pt.tick,
+                        float(f64::from(pt.value)),
+                        curve(pt.curve)
+                    ),
+                );
+            }
+            w.push_str("]\n");
         }
     }
 
@@ -180,6 +220,26 @@ pub fn emit(p: &Project, next_id: u32) -> Result<String, ValidationError> {
             }
             if c.muted {
                 extra.push_str(", muted = true");
+            }
+            if let Some(a) = &c.audio {
+                let _ = write!(extra, ", audio = {{ sample = \"{}\"", a.sample.to_hex());
+                if a.gain_mdb != 0 {
+                    let _ = write!(extra, ", gain_mdb = {}", a.gain_mdb);
+                }
+                if a.fade_in != 0 {
+                    let _ = write!(extra, ", fade_in = {}", a.fade_in);
+                }
+                if a.fade_out != 0 {
+                    let _ = write!(extra, ", fade_out = {}", a.fade_out);
+                }
+                extra.push_str(" }");
+            }
+            if let Some(g) = &c.group {
+                let _ = write!(
+                    extra,
+                    ", group = {{ group = {}, instance = {} }}",
+                    g.group, g.instance
+                );
             }
             line(
                 w,
@@ -229,6 +289,37 @@ fn string(s: &str) -> String {
     }
     o.push('"');
     o
+}
+
+fn curve(c: Curve) -> &'static str {
+    match c {
+        Curve::Smooth => "smooth",
+        Curve::Linear => "linear",
+        Curve::Hold => "hold",
+        Curve::Stairs => "stairs",
+        Curve::Pulse => "pulse",
+        Curve::Wave => "wave",
+    }
+}
+
+fn shape_target(t: &ShapeTarget) -> String {
+    match t {
+        ShapeTarget::Volume { track } => format!("{{ kind = \"volume\", track = {track} }}"),
+        ShapeTarget::Pan { track } => format!("{{ kind = \"pan\", track = {track} }}"),
+        ShapeTarget::Pitch { instrument } => {
+            format!("{{ kind = \"pitch\", instrument = {instrument} }}")
+        }
+        ShapeTarget::Filter { instrument } => {
+            format!("{{ kind = \"filter\", instrument = {instrument} }}")
+        }
+        ShapeTarget::FxParam {
+            track,
+            instance,
+            param,
+        } => format!(
+            "{{ kind = \"fx_param\", track = {track}, instance = {instance}, param = {param} }}"
+        ),
+    }
 }
 
 fn mix(m: &Mix) -> String {
@@ -413,7 +504,7 @@ struct Timeline {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct FileV3 {
+struct FileV4 {
     #[allow(dead_code)]
     format_version: u32,
     next_id: u32,
@@ -427,6 +518,10 @@ struct FileV3 {
     #[serde(default)]
     patterns: Vec<Pattern>,
     tracks: Vec<Track>,
+    #[serde(default)]
+    groups: Vec<PatternGroup>,
+    #[serde(default)]
+    shapes: Vec<Shape>,
     timeline: Option<Timeline>,
 }
 
@@ -443,12 +538,12 @@ pub fn parse(text: &str) -> Result<(Project, u32), FormatError> {
         // Versions 1 and 2 used multi-channel patterns and a playlist
         // (15.6); they are converted to the timeline model (20.5).
         Some(1 | 2) => legacy::parse_v2(text),
-        Some(_) => parse_v3(text),
+        Some(_) => parse_v4(text),
     }
 }
 
-fn parse_v3(text: &str) -> Result<(Project, u32), FormatError> {
-    let f: FileV3 = toml::from_str(text).map_err(|e| FormatError::Syntax(e.to_string()))?;
+fn parse_v4(text: &str) -> Result<(Project, u32), FormatError> {
+    let f: FileV4 = toml::from_str(text).map_err(|e| FormatError::Syntax(e.to_string()))?;
     let (clips, loop_region) = match f.timeline {
         Some(t) => (t.clips, t.loop_region),
         None => (Vec::new(), LoopRegion::default()),
@@ -463,6 +558,8 @@ fn parse_v3(text: &str) -> Result<(Project, u32), FormatError> {
         samples: f.samples,
         clips,
         loop_region,
+        groups: f.groups,
+        shapes: f.shapes,
     };
     validate(&p).map_err(FormatError::Invalid)?;
     let next_id = f.next_id.max(p.max_id() + 1);
@@ -646,6 +743,8 @@ mod legacy {
                         len: *len,
                         offset: 0,
                         muted: false,
+                        audio: None,
+                        group: None,
                     });
                 }
             }
@@ -673,6 +772,8 @@ mod legacy {
                     len,
                     offset: 0,
                     muted: false,
+                    audio: None,
+                    group: None,
                 });
             }
             if longest > 0 {
@@ -694,6 +795,8 @@ mod legacy {
             samples: f.samples,
             clips,
             loop_region,
+            groups: Vec::new(),
+            shapes: Vec::new(),
         };
         sort_canonical(&mut p);
         validate(&p).map_err(FormatError::Invalid)?;
@@ -839,6 +942,7 @@ mod tests {
                     inserts.push(Insert::Builtin {
                         instance: InstanceId(next),
                         fx,
+                        bypass: r.below(4) == 0,
                     });
                     next += 1;
                 }
@@ -1008,10 +1112,102 @@ mod tests {
                     len,
                     offset: r.below(content_len.max(1) as u64) as u32,
                     muted: r.below(5) == 0,
+                    audio: None,
+                    group: None,
                 });
                 next += 1;
                 t += len;
             }
+        }
+        // An audio row with audio clips (21.1).
+        if !p.samples.is_empty() && r.below(2) == 0 {
+            let row = ChannelId(next);
+            next += 1;
+            p.channels.push(Arc::new(Channel {
+                id: row,
+                name: "Audio".into(),
+                root_key: 60,
+                track: r.pick(&track_ids),
+                mix: mix(r),
+                instrument: Instrument::Audio,
+                choke_group: 0,
+            }));
+            let mut t = 0u32;
+            for _ in 0..1 + r.below(4) {
+                t += r.below(4000) as u32;
+                let len = 100 + r.below(8000) as u32;
+                let h = &hashes[r.below(hashes.len() as u64) as usize];
+                p.clips.push(Clip {
+                    id: ClipId(next),
+                    instrument: row,
+                    pattern: PatternId::NONE,
+                    start: t,
+                    len,
+                    offset: r.below(5000) as u32,
+                    muted: r.below(5) == 0,
+                    audio: Some(AudioSource {
+                        sample: SampleHash::parse(h).unwrap(),
+                        gain_mdb: r.below(40_000) as i32 - 20_000,
+                        fade_in: r.below(len as u64 + 1) as u32,
+                        fade_out: r.below(len as u64 + 1) as u32,
+                    }),
+                    group: None,
+                });
+                next += 1;
+                t += len;
+            }
+        }
+        // Patterns and shapes (20.7, 24.2-1).
+        if r.below(2) == 0 {
+            let gid = GroupId(next);
+            next += 1;
+            p.groups.push(PatternGroup {
+                id: gid,
+                name: r.pick(NAMES).into(),
+                color: r.below(0x100_0000) as u32,
+            });
+            for (i, c) in p.clips.iter_mut().enumerate() {
+                if i % 2 == 0 {
+                    c.group = Some(ClipGroup {
+                        group: gid,
+                        instance: 1 + r.below(3) as u32,
+                    });
+                }
+            }
+        }
+        for _ in 0..r.below(4) {
+            let tr = r.pick(&track_ids);
+            let (target, lo, hi) = match r.below(3) {
+                0 => (ShapeTarget::Volume { track: tr }, -60.0, 6.0),
+                1 => (ShapeTarget::Pan { track: tr }, -1.0, 1.0),
+                _ => match p.channels.first() {
+                    Some(c) => (ShapeTarget::Pitch { instrument: c.id }, -24.0, 24.0),
+                    None => (ShapeTarget::Pan { track: tr }, -1.0, 1.0),
+                },
+            };
+            let mut points = Vec::new();
+            let mut tick = 0u32;
+            for _ in 0..r.below(6) {
+                tick += 1 + r.below(2000) as u32;
+                points.push(ShapePoint {
+                    tick,
+                    value: r.float(lo, hi) as f32,
+                    curve: r.pick(&[
+                        Curve::Smooth,
+                        Curve::Linear,
+                        Curve::Hold,
+                        Curve::Stairs,
+                        Curve::Pulse,
+                        Curve::Wave,
+                    ]),
+                });
+            }
+            p.shapes.push(Shape {
+                id: ShapeId(next),
+                target,
+                points,
+            });
+            next += 1;
         }
         if r.below(2) == 0 {
             let start = r.below(10_000) as u32;
@@ -1043,11 +1239,20 @@ mod tests {
     }
 
     #[test]
+    fn version_3_text_loads_unchanged() {
+        let text = emit(&Project::empty(), FIRST_ID)
+            .unwrap()
+            .replace("format_version = 4", "format_version = 3");
+        let (p, _) = parse(&text).unwrap();
+        assert_eq!(p, Project::empty());
+    }
+
+    #[test]
     fn empty_project_text_is_stable() {
         let text = emit(&Project::empty(), FIRST_ID).unwrap();
         assert_eq!(
             text,
-            "format_version = 3\nnext_id = 1\ntempo_bpm = 120.0\ntime_sig_num = 4\n\n\
+            "format_version = 4\nnext_id = 1\ntempo_bpm = 120.0\ntime_sig_num = 4\n\n\
              [metronome]\nenabled = false\ngain_db = -6.0\n\n\
              [[tracks]]\nid = 0\nname = \"Master\"\n\
              mix = { volume_db = 0.0, pan = 0.0, mute = false, solo = false }\n\n\
@@ -1126,15 +1331,15 @@ mod tests {
     #[test]
     fn rejects_newer_version_missing_version_and_unknown_keys() {
         let text = emit(&Project::empty(), 1).unwrap();
-        let newer = text.replace("format_version = 3", "format_version = 4");
+        let newer = text.replace("format_version = 4", "format_version = 5");
         assert_eq!(
             parse(&newer).unwrap_err(),
             FormatError::TooNew {
-                found: 4,
-                supported: 3
+                found: 5,
+                supported: 4
             }
         );
-        let missing = text.replace("format_version = 3\n", "");
+        let missing = text.replace("format_version = 4\n", "");
         assert_eq!(parse(&missing).unwrap_err(), FormatError::MissingVersion);
         let unknown = text.replace("time_sig_num = 4", "time_sig_num = 4\nswing = 3");
         assert!(matches!(
@@ -1220,7 +1425,7 @@ mod tests {
         );
         // Saving writes version 3 with the same note line as version 1.
         let out = emit(&p, next).unwrap();
-        assert!(out.starts_with("format_version = 3\n"));
+        assert!(out.starts_with("format_version = 4\n"));
         assert!(out.contains("  { id = 3, start = 0, len = 240, key = 36, vel = 100 },\n"));
     }
 
@@ -1263,7 +1468,7 @@ mod tests {
             assert_eq!(content.instrument, c.instrument);
         }
         assert!(next > p.max_id());
-        // The converted project round-trips in version 3.
+        // The converted project round-trips in version 4.
         let text = emit(&p, next).unwrap();
         assert_eq!(parse(&text).unwrap().0, p);
     }
