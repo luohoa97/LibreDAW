@@ -958,3 +958,22 @@ fn kit_get_asks_for_one_kit_and_sound_search_filters_by_kit() {
     assert!(reqs.iter().any(|q| matches!(&q.body,
         RequestBody::SoundSearch { tags, limit: 1, .. } if tags == &["kit_id:fl:kit:abc".to_string()])));
 }
+
+#[test]
+fn seek_goes_to_a_bar() {
+    let rig = rig(true, |_| {});
+    let mut c = Mcp::connect(&rig);
+    c.init();
+    c.ok("seek", json!({"position": 8}));
+    c.ok("seek", json!({"position": "1/4"}));
+    let ticks: Vec<u64> = rig
+        .ui
+        .requests()
+        .iter()
+        .filter_map(|q| match q.body {
+            RequestBody::Seek { tick } => Some(tick),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(ticks, [8 * 3840, 960]);
+}

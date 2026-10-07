@@ -185,6 +185,7 @@ impl RefDaw {
             RequestBody::ProjectGet => ok(ReplyBody::Project {
                 revision: self.revision(),
                 project: self.project(),
+                next_id: self.editor.document().next_id,
             }),
             RequestBody::ProjectInfo => {
                 ok(ReplyBody::ProjectInfo(protocol::control::ProjectInfo {
@@ -369,6 +370,7 @@ impl RefDaw {
                 theme: Theme::System,
                 metronome_enabled: false,
             })),
+            RequestBody::Seek { .. } => ok(ReplyBody::Done),
             RequestBody::SettingsSet { .. } | RequestBody::PluginScan => ok(ReplyBody::Done),
             RequestBody::PluginList => ok(ReplyBody::Plugins { plugins: vec![] }),
             RequestBody::SetActivity { text, focus } => {
@@ -384,9 +386,14 @@ impl RefDaw {
                     tags: vec![],
                     pack: "core".into(),
                     kit: Some("trap-kit".into()),
+                    source: "Your Folder".into(),
+                    kind: "single sound".into(),
+                    kit_name: Some("Trap Kit".into()),
                 }],
+                total: 1,
+                notes: vec![],
             }),
-            RequestBody::KitAdd { kit, track, .. } => {
+            RequestBody::KitAdd { kit, track, .. } | RequestBody::SoundAdd { id: kit, track } => {
                 if let Some(s) = self.stale(base) {
                     return s;
                 }

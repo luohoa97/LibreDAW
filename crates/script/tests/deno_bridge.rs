@@ -25,6 +25,7 @@ fn project_reply(revision: u64) -> Outcome {
         body: ReplyBody::Project {
             revision,
             project: Arc::new(Project::empty()),
+            next_id: 1,
         },
     }
 }

@@ -56,7 +56,7 @@ pub type BuildResult = Result<Built, String>;
 
 /// A time in bars: a JSON number (`2`, `0.5`) or text like the note text
 /// (`"1/4"`, `"240t"`). Negative values only where a move allows it.
-fn ticks_of(v: &Value, tpb: u32, what: &str) -> Result<u32, String> {
+pub fn ticks_of(v: &Value, tpb: u32, what: &str) -> Result<u32, String> {
     let s = match v {
         Value::Number(n) => n.to_string(),
         Value::String(s) => s.clone(),

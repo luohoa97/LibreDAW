@@ -201,7 +201,7 @@ fn fl_sounds_are_off_until_the_user_turns_them_on_then_found_and_added() {
     // Off: the agent is told what to ask the user, in plain words.
     let r = talk(
         &rig,
-        vec![search(r#""tags":["kick","source:FL Studio"],"limit":20"#)],
+        vec![search(r#""query":"kick","source":"FL Studio","limit":20"#)],
     );
     assert!(
         r[0].contains("not turned on") && r[0].contains("Use Your FL Studio Sounds"),
@@ -216,7 +216,7 @@ fn fl_sounds_are_off_until_the_user_turns_them_on_then_found_and_added() {
 
     let kicks = talk(
         &rig,
-        vec![search(r#""tags":["kick","source:FL Studio"],"limit":20"#)],
+        vec![search(r#""query":"kick","source":"FL Studio","limit":20"#)],
     )
     .remove(0);
     assert!(
@@ -229,7 +229,7 @@ fn fl_sounds_are_off_until_the_user_turns_them_on_then_found_and_added() {
     let added = talk(
         &rig,
         vec![format!(
-            r#"{{"id":2,"body":{{"op":"kit_add","pack":"@sound","kit":"{sound}"}}}}"#
+            r#"{{"id":2,"body":{{"op":"sound_add","id":"{sound}"}}}}"#
         )],
     )
     .remove(0);
@@ -241,9 +241,7 @@ fn fl_sounds_are_off_until_the_user_turns_them_on_then_found_and_added() {
     // A kit: six slots at most, one undo step.
     let kits = talk(
         &rig,
-        vec![search(
-            r#""tags":["source:FL Studio"],"role":"drums","limit":50"#,
-        )],
+        vec![search(r#""source":"FL Studio","role":"drums","limit":50"#)],
     )
     .remove(0);
     let kit = id_with(&kits, "fl:kit:");
@@ -251,7 +249,7 @@ fn fl_sounds_are_off_until_the_user_turns_them_on_then_found_and_added() {
     let r = talk(
         &rig,
         vec![
-            format!(r#"{{"id":3,"body":{{"op":"kit_add","pack":"@sound","kit":"{kit}"}}}}"#),
+            format!(r#"{{"id":3,"body":{{"op":"sound_add","id":"{kit}"}}}}"#),
             r#"{"id":4,"body":{"op":"undo"}}"#.into(),
         ],
     );
@@ -278,14 +276,14 @@ fn fl_sounds_are_off_until_the_user_turns_them_on_then_found_and_added() {
     // An instrument plays from its root sample.
     let inst = talk(
         &rig,
-        vec![search(r#""tags":["jazz","source:FL Studio"],"limit":50"#)],
+        vec![search(r#""query":"jazz","source":"FL Studio","limit":50"#)],
     )
     .remove(0);
     let inst = id_with(&inst, "fl:instrument:");
     let added = talk(
         &rig,
         vec![format!(
-            r#"{{"id":5,"body":{{"op":"kit_add","pack":"@sound","kit":"{inst}"}}}}"#
+            r#"{{"id":5,"body":{{"op":"sound_add","id":"{inst}"}}}}"#
         )],
     )
     .remove(0);
@@ -299,7 +297,7 @@ fn fl_sounds_are_off_until_the_user_turns_them_on_then_found_and_added() {
     // Unknown ids and file paths are refused.
     let bad = talk(
         &rig,
-        vec![r#"{"id":6,"body":{"op":"kit_add","pack":"@sound","kit":"/etc/passwd"}}"#.into()],
+        vec![r#"{"id":6,"body":{"op":"sound_add","id":"/etc/passwd"}}"#.into()],
     )
     .remove(0);
     assert!(bad.contains("\"status\":\"err\""), "{bad}");
@@ -310,9 +308,7 @@ fn surge_sounds_are_listed_with_their_source() {
     let rig = rig("surge");
     let r = talk(
         &rig,
-        vec![search(
-            r#""role":"bass","tags":["source:Surge XT"],"limit":5"#,
-        )],
+        vec![search(r#""role":"bass","source":"Surge XT","limit":5"#)],
     );
     assert!(
         r[0].contains("\"id\":\"surge:") && r[0].contains("Surge XT"),
@@ -345,7 +341,7 @@ fn the_real_fl_install_is_searchable_and_addable() {
     fl::set_status(Status::Ready(Arc::new(loaded)));
     let kicks = talk(
         &rig,
-        vec![search(r#""tags":["kick","source:FL Studio"],"limit":5"#)],
+        vec![search(r#""query":"kick","source":"FL Studio","limit":5"#)],
     )
     .remove(0);
     println!("{kicks}");
@@ -353,7 +349,7 @@ fn the_real_fl_install_is_searchable_and_addable() {
     let added = talk(
         &rig,
         vec![format!(
-            r#"{{"id":2,"body":{{"op":"kit_add","pack":"@sound","kit":"{id}"}}}}"#
+            r#"{{"id":2,"body":{{"op":"sound_add","id":"{id}"}}}}"#
         )],
     )
     .remove(0);
@@ -361,26 +357,20 @@ fn the_real_fl_install_is_searchable_and_addable() {
     assert!(samplers(&rig.app).iter().all(|(_, local)| *local));
     let kits = talk(
         &rig,
-        vec![search(
-            r#""tags":["source:FL Studio"],"role":"drums","limit":3"#,
-        )],
+        vec![search(r#""source":"FL Studio","role":"drums","limit":3"#)],
     )
     .remove(0);
     let kit = id_with(&kits, "fl:kit:");
     let added = talk(
         &rig,
         vec![format!(
-            r#"{{"id":3,"body":{{"op":"kit_add","pack":"@sound","kit":"{kit}"}}}}"#
+            r#"{{"id":3,"body":{{"op":"sound_add","id":"{kit}"}}}}"#
         )],
     )
     .remove(0);
     assert!(added.contains("\"status\":\"ok\""), "{added}");
     println!("channels now: {:?}", samplers(&rig.app));
-    let surge = talk(
-        &rig,
-        vec![search(r#""tags":["source:Surge XT"],"limit":3"#)],
-    )
-    .remove(0);
+    let surge = talk(&rig, vec![search(r#""source":"Surge XT","limit":3"#)]).remove(0);
     println!("{surge}");
     assert!(surge.contains("surge:"));
 }
@@ -393,50 +383,45 @@ fn sounds_know_their_kit_and_kits_list_their_pieces() {
     fl::set_status(Status::Ready(Arc::new(loaded)));
     let kits = talk(
         &rig,
-        vec![search(
-            r#""tags":["source:FL Studio"],"role":"drums","limit":50"#,
-        )],
+        vec![search(r#""source":"FL Studio","role":"drums","limit":50"#)],
     )
     .remove(0);
     let kit_id = id_with(&kits, "fl:kit:");
     // The kit entry lists its pieces: role, sound id and name.
     let got = talk(
         &rig,
-        vec![search(&format!(r#""tags":["kit_id:{kit_id}"],"limit":1"#))],
+        vec![search(&format!(r#""kit":"{kit_id}","limit":50"#))],
     )
     .remove(0);
     assert!(got.contains(&kit_id), "{got}");
-    for slot in [
-        "slot:kick\u{1f}fl:sound:",
-        "slot:snare\u{1f}fl:sound:",
-        "slot:hat\u{1f}fl:sound:",
-    ] {
-        // The wire escapes the separator as \u001f.
-        let wire = slot.replace('\u{1f}', "\\u001f");
-        assert!(got.contains(&wire), "{slot} in {got}");
+    // Searching by the kit id lists the kit and every piece, each naming it.
+    for piece in ["909 Kick", "909 Snare", "909 CH"] {
+        assert!(got.contains(piece), "{piece} in {got}");
     }
+    assert!(got.contains(&format!("\"kit\":\"{kit_id}\"")), "{got}");
+    assert!(got.contains("\"kit_name\""), "{got}");
     // Every piece names its kit, and `kit:` filters by it.
     let kick = talk(
         &rig,
         vec![search(
-            r#""tags":["kit:909","kick","source:FL Studio"],"limit":50"#,
+            r#""query":"kick","kit":"909","source":"FL Studio","limit":50"#,
         )],
     )
     .remove(0);
     assert!(kick.contains("909 Kick"), "{kick}");
     assert!(
-        kick.contains(&format!("{kit_id}\\u001f")),
+        kick.contains(&format!("\"kit\":\"{kit_id}\"")),
         "kit on the sound: {kick}"
     );
     let none = talk(
         &rig,
         vec![search(
-            r#""tags":["kit:nonesuch","source:FL Studio"],"limit":50"#,
+            r#""kit":"nonesuch","source":"FL Studio","limit":50"#,
         )],
     )
     .remove(0);
     assert!(!none.contains("909 Kick"), "{none}");
     // Built-in Oto Kit sounds are not offered.
-    let oto = talk(&rig, vec![search(r#""tags":["kick"],"limit":50"#)]).remove(0);
+    let oto = talk(&rig, vec![search(r#""query":"kick","limit":50"#)]).remove(0);
     assert!(!oto.contains("\"oto:"), "{oto}");
 }

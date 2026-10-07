@@ -16,6 +16,7 @@ mod client;
 pub mod fake_ui;
 pub mod mcp;
 mod socket;
+pub mod song_map;
 mod state;
 pub mod suggest;
 

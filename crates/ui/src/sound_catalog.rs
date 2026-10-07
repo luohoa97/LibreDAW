@@ -29,7 +29,7 @@ pub const FL_PARTIAL: &str =
     "FL Studio instruments are still being worked out; search again in a few seconds to see them.";
 
 /// One thing that can be added.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Entry {
     pub id: String,
     pub name: String,
@@ -53,10 +53,8 @@ pub struct Query {
     pub role: String,
     pub source: String,
     pub genre: String,
-    /// Words of a kit name ("909"): only sounds of kits that match.
+    /// A kit id (the kit and its pieces) or words of a kit name ("909").
     pub kit: String,
-    /// Exactly this kit entry (its id), with its pieces.
-    pub kit_id: String,
     pub offset: usize,
     pub limit: usize,
 }
@@ -332,9 +330,9 @@ pub fn search(entries: &[Entry], q: &Query) -> (Vec<Entry>, usize) {
             }
         })
         .filter(|e| q.genre.trim().is_empty() || eq(&q.genre, &e.family))
-        .filter(|e| q.kit_id.trim().is_empty() || e.id == q.kit_id.trim())
         .filter(|e| {
-            q.kit.trim().is_empty() || {
+            let want = q.kit.trim();
+            want.is_empty() || e.id == want || e.kit.as_ref().is_some_and(|k| k.0 == want) || {
                 let own = (e.kind == DRUM_KIT).then_some(e.name.as_str());
                 own.or(e.kit.as_ref().map(|k| k.1.as_str()))
                     .is_some_and(|n| text_matches_words(n, &q.kit))
@@ -554,12 +552,11 @@ mod kit_tests {
         };
         assert_eq!(search(&all, &q).0.len(), 3, "the kit and its two pieces");
         let q = Query {
-            kit_id: "fl:kit:k1".into(),
+            kit: "fl:kit:k1".into(),
             limit: 50,
             ..Query::default()
         };
         let (one, _) = search(&all, &q);
-        assert_eq!(one.len(), 1);
-        assert_eq!(one[0].slots[0].1, "fl:sound:a");
+        assert_eq!(one.len(), 3, "the kit and its two pieces");
     }
 }

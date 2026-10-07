@@ -32,6 +32,8 @@ pub fn analyze(frames: &[[f32; 2]], rate: u32, per_track: &[(u32, Vec<[f32; 2]>)
             .map(|(track, f)| track_levels(*track, f))
             .collect(),
         band_balance: band_balance(frames, rate),
+        bars: Vec::new(),
+        sections: Vec::new(),
     }
 }
 
