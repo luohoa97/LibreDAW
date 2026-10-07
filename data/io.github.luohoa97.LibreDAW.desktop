@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+[Desktop Entry]
+Type=Application
+Name=LibreDAW
+GenericName=Beat Maker
+Comment=Make beats and music
+Exec=libredaw %F
+Icon=io.github.luohoa97.LibreDAW
+Terminal=false
+StartupNotify=true
+Categories=AudioVideo;Audio;Music;Midi;Sequencer;
+Keywords=daw;beat;drum;music;sequencer;midi;audio;producer;
+MimeType=application/x-libredaw-project;
+StartupWMClass=io.github.luohoa97.LibreDAW
