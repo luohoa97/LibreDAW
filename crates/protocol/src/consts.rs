@@ -85,3 +85,12 @@ pub const MAX_SAMPLES: usize = 4096;
 /// Playlist tracks and clips.
 pub const MAX_PLAYLIST_TRACKS: usize = 128;
 pub const MAX_CLIPS: usize = 20_000;
+
+/// Built-in effect pool sizes per kind, project-wide (17.2). `validate`
+/// rejects projects that use more; the engine preallocates exactly these.
+pub const FX_POOL_EQ: usize = 32;
+pub const FX_POOL_COMPRESSOR: usize = 32;
+pub const FX_POOL_SATURATOR: usize = 32;
+pub const FX_POOL_REVERB: usize = 16;
+pub const FX_POOL_DELAY: usize = 16;
+pub const FX_POOL_LIMITER: usize = 16;
