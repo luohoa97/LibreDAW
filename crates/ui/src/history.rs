@@ -20,7 +20,7 @@ use protocol::control::HistoryEntry;
 use protocol::edit::{Edit, EditError};
 use protocol::model::{Insert, Instrument, Pattern, Project};
 
-use crate::document::{Document, apply_batch};
+use crate::document::{Document, apply_batch, apply_batch_indexed};
 
 /// Who made a change (15.11, 17.1).
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -238,6 +238,16 @@ impl History {
         Ok(child)
     }
 
+    fn peek(&self, undo: bool, scope: &Scope) -> Option<Arc<Project>> {
+        let to = if undo {
+            self.can_undo(scope)
+        } else {
+            self.can_redo(scope)
+        }
+        .ok()?;
+        Some(self.entries[&to].project.clone())
+    }
+
     fn goto(&mut self, to: EntryId) {
         let from = self.current;
         // Moving up leaves the parent's redo pointer on the child we came
@@ -449,8 +459,33 @@ pub struct Queued {
 #[derive(Debug)]
 pub struct Done {
     pub token: u64,
-    pub result: Result<Applied, EditError>,
+    pub result: Result<Applied, EditFailure>,
 }
+
+/// A rejected batch: the error and the position of the edit that caused it
+/// (`None` if it cannot be pinned to one edit).
+#[derive(Clone, Debug, PartialEq)]
+pub struct EditFailure {
+    pub index: Option<u32>,
+    pub error: EditError,
+}
+
+impl From<(Option<u32>, EditError)> for EditFailure {
+    fn from((index, error): (Option<u32>, EditError)) -> EditFailure {
+        EditFailure { index, error }
+    }
+}
+
+impl std::fmt::Display for EditFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.index {
+            Some(i) => write!(f, "edit {i}: {}", self.error),
+            None => write!(f, "{}", self.error),
+        }
+    }
+}
+
+impl std::error::Error for EditFailure {}
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Applied {
@@ -538,7 +573,7 @@ impl Editor {
         description: Option<&str>,
         edits: Vec<Edit>,
         token: u64,
-    ) -> Result<Submitted, EditError> {
+    ) -> Result<Submitted, EditFailure> {
         let desc = description
             .map(str::to_string)
             .unwrap_or_else(|| describe_batch(&edits));
@@ -565,14 +600,14 @@ impl Editor {
         author: Author,
         desc: String,
         edits: &[Edit],
-    ) -> Result<Applied, EditError> {
+    ) -> Result<Applied, EditFailure> {
         if edits.is_empty() {
             return Ok(Applied {
                 revision: self.doc.revision,
                 created: Vec::new(),
             });
         }
-        let (nd, created) = apply_batch(&self.doc, edits)?;
+        let (nd, created) = apply_batch_indexed(&self.doc, edits).map_err(EditFailure::from)?;
         self.hist.push(nd.project.clone(), author, desc);
         self.doc = nd;
         Ok(Applied {
@@ -597,10 +632,13 @@ impl Editor {
 
     /// An edit inside the open gesture. The first one makes the gesture's
     /// entry; later ones replace it, so the whole gesture is one step.
-    pub fn gesture_edit(&mut self, edits: &[Edit]) -> Result<Applied, EditError> {
+    pub fn gesture_edit(&mut self, edits: &[Edit]) -> Result<Applied, EditFailure> {
         let Some(g) = &mut self.gesture else {
-            return Err(EditError::BadArgument {
-                what: "no gesture is open".into(),
+            return Err(EditFailure {
+                index: None,
+                error: EditError::BadArgument {
+                    what: "no gesture is open".into(),
+                },
             });
         };
         if edits.is_empty() {
@@ -609,7 +647,7 @@ impl Editor {
                 created: Vec::new(),
             });
         }
-        let (nd, created) = apply_batch(&self.doc, edits)?;
+        let (nd, created) = apply_batch_indexed(&self.doc, edits).map_err(EditFailure::from)?;
         if g.started {
             self.hist.replace_current(nd.project.clone());
         } else {
@@ -647,6 +685,18 @@ impl Editor {
         let before = self.queue.len();
         self.queue.retain(|q| q.token != token);
         self.queue.len() != before
+    }
+
+    /// The project an undo (or redo) would go to, without moving. Used to
+    /// capture plugin state before a step that removes plugins (7.5).
+    pub fn peek(&self, undo: bool, scope: &Scope) -> Option<Arc<Project>> {
+        self.hist.peek(undo, scope)
+    }
+
+    /// Marks the document as having unsaved changes that are not edits
+    /// (a plugin reported `state.mark_dirty`).
+    pub fn touch(&mut self) {
+        self.merged_since_save = true;
     }
 
     pub fn undo(&mut self, scope: &Scope) -> Result<(), HistoryError> {

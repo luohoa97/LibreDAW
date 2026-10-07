@@ -3,7 +3,12 @@
 
 pub mod bundle;
 pub mod change;
+pub mod compiler;
 pub mod document;
+pub mod engine_adapter;
 pub mod history;
+pub mod plugin_adapter;
+pub mod registry;
+pub mod session;
 pub mod slots;
 pub mod tables;
