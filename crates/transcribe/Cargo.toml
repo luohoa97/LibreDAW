@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+[package]
+name = "libredaw-transcribe"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+name = "transcribe"
+
+[dependencies]
+# Pure-Rust ONNX inference for the Basic Pitch model (SPEC 21.3).
+tract-onnx = "0.21"

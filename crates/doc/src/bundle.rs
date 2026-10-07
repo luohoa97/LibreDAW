@@ -61,6 +61,8 @@ pub enum BundleError {
     TooLarge(PathBuf),
     /// A sample file that is not a RIFF/WAVE file (15.1: only WAV is imported).
     NotWav(PathBuf),
+    /// A supported container whose audio would not decode, with the reason.
+    Undecodable(PathBuf, String),
     /// A sample file name that cannot be stored (empty, too long, control
     /// characters, or not UTF-8).
     BadName(PathBuf),
@@ -81,7 +83,15 @@ impl std::fmt::Display for BundleError {
             BundleError::BlobConflict(n) => write!(f, "plugin state file {n} already exists"),
             BundleError::Crashed(s) => write!(f, "simulated crash after {s:?}"),
             BundleError::TooLarge(p) => write!(f, "{} is too large", p.display()),
-            BundleError::NotWav(p) => write!(f, "{} is not a WAV file", p.display()),
+            BundleError::NotWav(p) => write!(f, "{} is not an audio file we can read", p.display()),
+            BundleError::Undecodable(p, why) => write!(
+                f,
+                "Couldn't read {}: {why}",
+                p.file_name().map_or_else(
+                    || p.display().to_string(),
+                    |n| n.to_string_lossy().into_owned()
+                )
+            ),
             BundleError::BadName(p) => {
                 write!(f, "{} has a name that cannot be stored", p.display())
             }

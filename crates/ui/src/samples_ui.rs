@@ -142,12 +142,9 @@ pub fn piece_setup(piece: &Piece, sample: SampleRef) -> SamplerSetup {
 
 /// A new sampler channel for each WAV file (a one-shot at middle C).
 pub fn add_channels_from_files(app: &Rc<App>, paths: Vec<PathBuf>) {
-    let wavs: Vec<PathBuf> = paths
-        .into_iter()
-        .filter(|p| p.extension().is_some_and(|e| e.eq_ignore_ascii_case("wav")))
-        .collect();
+    let wavs: Vec<PathBuf> = paths.into_iter().filter(|p| is_audio_file(p)).collect();
     if wavs.is_empty() {
-        app.toast("Only WAV files can be used as sounds");
+        app.toast("Only WAV, FLAC, Ogg, MP3 and WavPack files can be used as sounds");
         return;
     }
     let a = app.clone();
@@ -259,12 +256,30 @@ pub fn set_channel_sample(app: &Rc<App>, channel: ChannelId, item: ImportItem) {
     });
 }
 
+/// Whether `p` has an extension audiofile can decode (any case).
+pub fn is_audio_file(p: &Path) -> bool {
+    p.extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(audiofile::is_supported_ext)
+}
+
 fn wav_filters() -> gio::ListStore {
     let f = gtk::FileFilter::new();
-    f.set_name(Some("WAV sounds"));
-    f.add_suffix("wav");
-    f.add_mime_type("audio/x-wav");
-    f.add_mime_type("audio/wav");
+    f.set_name(Some("Sounds"));
+    for e in audiofile::EXTENSIONS {
+        f.add_suffix(e);
+    }
+    for m in [
+        "audio/x-wav",
+        "audio/wav",
+        "audio/flac",
+        "audio/x-flac",
+        "audio/ogg",
+        "audio/mpeg",
+        "audio/x-wavpack",
+    ] {
+        f.add_mime_type(m);
+    }
     let store = gio::ListStore::new::<gtk::FileFilter>();
     store.append(&f);
     store
@@ -310,10 +325,10 @@ pub fn choose_for_channel(parent: &impl IsA<gtk::Widget>, app: &Rc<App>, channel
             if let Ok(f) = res
                 && let Some(p) = f.path()
             {
-                if p.extension().is_some_and(|e| e.eq_ignore_ascii_case("wav")) {
+                if is_audio_file(&p) {
                     set_channel_sample(&a, channel, ImportItem::file(p));
                 } else {
-                    a.toast("Only WAV files can be used as sounds");
+                    a.toast("Only WAV, FLAC, Ogg, MP3 and WavPack files can be used as sounds");
                 }
             }
         },

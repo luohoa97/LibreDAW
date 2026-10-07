@@ -100,7 +100,9 @@ pub fn row_h(touch: bool) -> f64 {
 
 /// Where in a clip content of `len` ticks the playhead is: the first clip
 /// that plays `pattern` and covers `tick` gives the position (its start
-/// and offset). `None` when no such clip is playing there.
+/// and offset). Muted clips do not play. Linked copies share a pattern,
+/// so the transport inside any of them counts. `None` when no clip plays
+/// the pattern at `tick`.
 pub fn content_pos(
     clips: &[protocol::model::Clip],
     pattern: protocol::ids::PatternId,
@@ -112,7 +114,9 @@ pub fn content_pos(
     }
     clips
         .iter()
-        .find(|c| c.pattern == pattern && (c.start as u64) <= tick && tick < c.end() as u64)
+        .find(|c| {
+            c.pattern == pattern && !c.muted && (c.start as u64) <= tick && tick < c.end() as u64
+        })
         .map(|c| ((tick - c.start as u64 + c.offset as u64) % len as u64) as u32)
 }
 
@@ -342,6 +346,7 @@ pub fn channel_notes(pattern: &Pattern, channel: &Channel) -> Vec<Note> {
 mod tests {
     use super::*;
     use protocol::ids::{ChannelId, NoteId, PatternId, TrackId};
+    use protocol::model::Clip;
     use protocol::model::{Instrument, Mix, SynthParams};
 
     fn chan(root: u8) -> Channel {
@@ -372,6 +377,54 @@ mod tests {
             off: 0,
             repeat: 1,
         }
+    }
+
+    fn clip(id: u32, pattern: u32, start: u32, len: u32, offset: u32, muted: bool) -> Clip {
+        Clip {
+            id: protocol::ids::ClipId(id),
+            instrument: protocol::ids::ChannelId(1),
+            pattern: protocol::ids::PatternId(pattern),
+            start,
+            len,
+            offset,
+            muted,
+        }
+    }
+
+    const P: protocol::ids::PatternId = protocol::ids::PatternId(1);
+
+    #[test]
+    fn content_pos_follows_the_clip_under_the_transport() {
+        let clips = [clip(1, 1, 1920, 1920, 0, false)];
+        assert_eq!(content_pos(&clips, P, 960, 0), None, "before");
+        assert_eq!(content_pos(&clips, P, 960, 1919), None);
+        assert_eq!(content_pos(&clips, P, 960, 1920), Some(0), "at start");
+        assert_eq!(content_pos(&clips, P, 960, 2400), Some(480), "inside");
+        assert_eq!(
+            content_pos(&clips, P, 960, 3000),
+            Some(120),
+            "looped repeat"
+        );
+        assert_eq!(content_pos(&clips, P, 960, 3840), None, "after");
+        assert_eq!(content_pos(&clips, P, 960, 14000), None, "far after");
+    }
+
+    #[test]
+    fn content_pos_honours_offset_muting_links_and_len() {
+        let off = [clip(1, 1, 1000, 1000, 100, false)];
+        assert_eq!(content_pos(&off, P, 960, 1000), Some(100));
+        assert_eq!(content_pos(&off, P, 960, 1900), Some(40), "wraps");
+        let muted = [clip(1, 1, 0, 1000, 0, true)];
+        assert_eq!(content_pos(&muted, P, 960, 10), None);
+        let linked = [
+            clip(1, 1, 0, 960, 0, false),
+            clip(2, 1, 4000, 960, 0, false),
+        ];
+        assert_eq!(content_pos(&linked, P, 960, 4100), Some(100), "copy");
+        assert_eq!(content_pos(&linked, P, 960, 2000), None, "gap");
+        let other = [clip(1, 2, 0, 960, 0, false)];
+        assert_eq!(content_pos(&other, P, 960, 10), None, "other pattern");
+        assert_eq!(content_pos(&linked, P, 0, 10), None, "empty content");
     }
 
     #[test]

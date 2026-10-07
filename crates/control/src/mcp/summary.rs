@@ -199,7 +199,7 @@ fn clip_list(project: &Project, instrument: ChannelId) -> String {
 
 fn instrument_lines(project: &Project, out: &mut String) {
     if project.channels.is_empty() {
-        out.push_str("  (none: add some with instruments_add or kit_add)\n");
+        out.push_str("  (none: add some with sound_search then sound_add, or instruments_add)\n");
     }
     for c in &project.channels {
         out.push_str(&format!(

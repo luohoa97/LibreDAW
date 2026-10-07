@@ -346,6 +346,15 @@ impl Exec {
             RequestBody::Edit { edits } => Some(edits.clone()),
             _ => None,
         };
+        let page = match &body {
+            RequestBody::SoundSearch { tags, limit, .. } => Some((
+                tags.iter()
+                    .find_map(|t| t.strip_prefix("offset:")?.trim().parse::<usize>().ok())
+                    .unwrap_or(0),
+                *limit as usize,
+            )),
+            _ => None,
+        };
         let result = self.call(body, if needs_revision { base } else { None });
         if replaces && matches!(result, Ok(Outcome::Ok { .. })) {
             // A new document: numbering restarts and every resource changed.
@@ -368,6 +377,9 @@ impl Exec {
                 }
                 if let ReplyBody::Branches { current, branches } = &body {
                     v = branches_json(current, branches);
+                }
+                if let (ReplyBody::Sounds { sounds }, Some((offset, limit))) = (&body, page) {
+                    v = sounds_json(sounds, offset, limit);
                 }
                 for_agent(&mut v);
                 ToolOutput::ok(v)
@@ -964,6 +976,36 @@ fn instrument_sounds() -> Value {
         })
         .collect();
     Value::Array(roles)
+}
+
+/// The sound list as an agent reads it: id, name, role, tags, source and
+/// kind; messages from the DAW (ids starting `note:`) as `notes`. The DAW
+/// sends the kind first in `tags` and the source in `pack`.
+fn sounds_json(sounds: &[protocol::control::SoundInfo], offset: usize, limit: usize) -> Value {
+    let mut notes = Vec::new();
+    let mut items = Vec::new();
+    for s in sounds {
+        if s.id.starts_with("note:") {
+            notes.push(json!(s.name));
+            continue;
+        }
+        let (kind, tags) = s
+            .tags
+            .split_first()
+            .map_or(("", &[][..]), |(k, t)| (k.as_str(), t));
+        items.push(
+            json!({"id": s.id, "name": s.name, "role": s.role, "tags": tags,
+            "source": s.pack, "kind": kind, "family": s.genres.first()}),
+        );
+    }
+    let mut v = json!({"sounds": items});
+    if !notes.is_empty() {
+        v["notes"] = json!(notes);
+    }
+    if items.len() >= limit {
+        v["next_offset"] = json!(offset + items.len());
+    }
+    v
 }
 
 fn branches_json(current: &str, list: &[BranchInfo]) -> Value {

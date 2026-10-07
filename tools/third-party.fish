@@ -27,6 +27,8 @@ function justification
             echo "Flatpak realtime portal call that gives the audio thread real-time priority (engine); already pulled in by cpal realtime-dbus"
         case libc
             echo "RLIMIT_RTTIME and thread id for the realtime portal (engine); already pulled in by cpal"
+        case tract-onnx
+            echo "pure-Rust ONNX runtime that runs the Basic Pitch hum-to-notes model on the CPU, SPEC 21.3 (transcribe); MIT OR Apache-2.0"
         case symphonia
             echo "decode FLAC, Ogg Vorbis (also inside FL Studio WAV files), MP3 and PCM WAV samples, SPEC 15.3 (audiofile); MPL-2.0; features wav, pcm, flac, vorbis, ogg, mp3 only"
         case wavicle

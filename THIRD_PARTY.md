@@ -22,6 +22,7 @@ CI fails if this file is out of date.
 | serde_json | 1.0.151 | MIT OR Apache-2.0 | JSON for the control API used by scripts and agents (protocol tests now; ui, script, mcp later) |
 | symphonia | 0.6.1 | MPL-2.0 | decode FLAC, Ogg Vorbis (also inside FL Studio WAV files), MP3 and PCM WAV samples, SPEC 15.3 (audiofile); MPL-2.0; features wav, pcm, flac, vorbis, ogg, mp3 only |
 | toml | 1.1.6+spec-1.1.0 | MIT OR Apache-2.0 | parse the project file, SPEC 7.2 (protocol); saving uses our own emitter |
+| tract-onnx | 0.21.18 | MIT OR Apache-2.0 | pure-Rust ONNX runtime that runs the Basic Pitch hum-to-notes model on the CPU, SPEC 21.3 (transcribe); MIT OR Apache-2.0 |
 | wavicle | 0.1.0 | MIT OR Apache-2.0 | pure-Rust lossless WavPack decoder for FL Studio sample packs, SPEC 15.3 (audiofile); MIT OR Apache-2.0, no unsafe, no dependencies |
 | x11rb | 0.13.2 | MIT OR Apache-2.0 | X11 top-level window for plugin GUIs that need a parent, SPEC 9.2 (plugin-host) |
 
@@ -29,17 +30,26 @@ CI fails if this file is out of date.
 
 | Crate | Version | License |
 |---|---|---|
+| adler2 | 2.0.1 | 0BSD OR MIT OR Apache-2.0 |
+| ahash | 0.8.12 | MIT OR Apache-2.0 |
 | aho-corasick | 1.1.5 | Unlicense OR MIT |
 | alsa | 0.11.0 | Apache-2.0/MIT |
 | alsa-sys | 0.4.0 | MIT |
 | annotate-snippets | 0.11.5 | MIT OR Apache-2.0 |
 | anstyle | 1.0.14 | MIT OR Apache-2.0 |
+| anyhow | 1.0.104 | MIT OR Apache-2.0 |
+| anymap2 | 0.13.0 | MIT/Apache-2.0 |
+| anymap3 | 1.1.0 | BlueOak-1.0.0 OR MIT OR Apache-2.0 |
 | audio_thread_priority | 0.35.1 | MPL-2.0 |
 | autocfg | 1.5.1 | Apache-2.0 OR MIT |
 | bindgen | 0.72.1 | BSD-3-Clause |
+| bit-set | 0.5.3 | MIT/Apache-2.0 |
+| bit-vec | 0.6.3 | MIT/Apache-2.0 |
 | bitflags | 1.3.2 | MIT/Apache-2.0 |
 | bitflags | 2.13.2 | MIT OR Apache-2.0 |
 | bytemuck | 1.25.2 | Zlib OR Apache-2.0 OR MIT |
+| byteorder | 1.5.0 | Unlicense OR MIT |
+| bytes | 1.12.1 | MIT |
 | cairo-rs | 0.22.9 | MIT |
 | cairo-sys-rs | 0.22.9 | MIT |
 | cc | 1.6.0 | MIT OR Apache-2.0 |
@@ -50,14 +60,23 @@ CI fails if this file is out of date.
 | clap-sys | 0.5.0 | MIT/Apache-2.0 |
 | cookie-factory | 0.3.3 | MIT |
 | cpal | 0.18.2 | Apache-2.0 |
+| crc32fast | 1.5.2 | MIT OR Apache-2.0 |
 | dasp_sample | 0.11.0 | MIT OR Apache-2.0 |
 | dbus | 0.6.5 | Apache-2.0/MIT |
+| deranged | 0.4.0 | MIT OR Apache-2.0 |
+| derive-new | 0.5.9 | MIT |
+| doc-comment | 0.3.4 | MIT |
+| downcast-rs | 1.2.1 | MIT/Apache-2.0 |
+| dyn-clone | 1.0.20 | MIT OR Apache-2.0 |
+| dyn-hash | 0.2.2 | MIT OR Apache-2.0 |
 | either | 1.19.0 | MIT OR Apache-2.0 |
 | equivalent | 1.0.2 | Apache-2.0 OR MIT |
 | errno | 0.3.14 | MIT OR Apache-2.0 |
 | extended | 0.1.0 | MIT |
 | field-offset | 0.3.6 | MIT OR Apache-2.0 |
+| filetime | 0.2.29 | MIT/Apache-2.0 |
 | find-msvc-tools | 0.1.14 | MIT OR Apache-2.0 |
+| flate2 | 1.1.10 | MIT OR Apache-2.0 |
 | futures-channel | 0.3.34 | MIT OR Apache-2.0 |
 | futures-core | 0.3.34 | MIT OR Apache-2.0 |
 | futures-executor | 0.3.34 | MIT OR Apache-2.0 |
@@ -70,6 +89,7 @@ CI fails if this file is out of date.
 | gdk4 | 0.11.5 | MIT |
 | gdk4-sys | 0.11.5 | MIT |
 | gethostname | 1.1.0 | Apache-2.0 |
+| getrandom | 0.2.17 | MIT OR Apache-2.0 |
 | gio | 0.22.10 | MIT |
 | gio-sys | 0.22.9 | MIT |
 | glib | 0.22.10 | MIT |
@@ -84,13 +104,18 @@ CI fails if this file is out of date.
 | gtk4 | 0.11.5 | MIT |
 | gtk4-macros | 0.11.5 | MIT |
 | gtk4-sys | 0.11.5 | MIT |
+| half | 2.4.1 | MIT OR Apache-2.0 |
+| hashbrown | 0.14.5 | MIT OR Apache-2.0 |
 | hashbrown | 0.17.1 | MIT OR Apache-2.0 |
 | heck | 0.5.0 | MIT OR Apache-2.0 |
 | indexmap | 2.14.2 | Apache-2.0 OR MIT |
+| itertools | 0.10.5 | MIT/Apache-2.0 |
+| itertools | 0.12.1 | MIT OR Apache-2.0 |
 | itertools | 0.13.0 | MIT OR Apache-2.0 |
 | itoa | 1.0.18 | MIT OR Apache-2.0 |
 | jack | 0.13.5 | MIT |
 | jack-sys | 0.5.1 | MIT OR Apache-2.0 |
+| kstring | 2.0.2 | MIT OR Apache-2.0 |
 | lazy_static | 1.5.1 | MIT OR Apache-2.0 |
 | libadwaita | 0.9.2 | MIT |
 | libadwaita-sys | 0.9.2 | MIT |
@@ -98,26 +123,58 @@ CI fails if this file is out of date.
 | libdbus-sys | 0.2.7 | Apache-2.0/MIT |
 | libloading | 0.7.4 | ISC |
 | libloading | 0.8.9 | ISC |
+| libm | 0.2.11 | MIT AND (MIT OR Apache-2.0) |
 | libspa | 0.10.1 | MIT |
 | libspa-sys | 0.10.1 | MIT |
 | linux-raw-sys | 0.12.1 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT |
+| liquid | 0.26.8 | MIT OR Apache-2.0 |
+| liquid-core | 0.26.8 | MIT OR Apache-2.0 |
+| liquid-derive | 0.26.8 | MIT OR Apache-2.0 |
+| liquid-lib | 0.26.8 | MIT OR Apache-2.0 |
+| lock_api | 0.4.14 | MIT OR Apache-2.0 |
 | log | 0.4.34 | MIT OR Apache-2.0 |
+| maplit | 1.0.2 | MIT/Apache-2.0 |
+| matrixmultiply | 0.3.11 | MIT/Apache-2.0 |
 | memchr | 2.8.3 | Unlicense OR MIT |
+| memmap2 | 0.9.11 | MIT OR Apache-2.0 |
 | memoffset | 0.9.1 | MIT |
 | minimal-lexical | 0.2.1 | MIT/Apache-2.0 |
+| miniz_oxide | 0.9.1 | MIT OR Zlib OR Apache-2.0 |
+| ndarray | 0.16.1 | MIT OR Apache-2.0 |
 | nom | 7.1.3 | MIT |
 | nom | 8.0.0 | MIT |
 | num-complex | 0.4.6 | MIT OR Apache-2.0 |
+| num-conv | 0.1.0 | MIT OR Apache-2.0 |
+| num-integer | 0.1.47 | MIT OR Apache-2.0 |
 | num-traits | 0.2.19 | MIT OR Apache-2.0 |
+| once_cell | 1.21.4 | MIT OR Apache-2.0 |
 | pango | 0.22.9 | MIT |
 | pango-sys | 0.22.9 | MIT |
+| parking_lot | 0.12.5 | MIT OR Apache-2.0 |
+| parking_lot_core | 0.9.12 | MIT OR Apache-2.0 |
+| paste | 1.0.15 | MIT OR Apache-2.0 |
+| percent-encoding | 2.3.2 | MIT OR Apache-2.0 |
+| pest | 2.9.2 | MIT OR Apache-2.0 |
+| pest_derive | 2.9.2 | MIT OR Apache-2.0 |
+| pest_generator | 2.9.2 | MIT OR Apache-2.0 |
+| pest_meta | 2.9.2 | MIT OR Apache-2.0 |
 | pin-project-lite | 0.2.17 | Apache-2.0 OR MIT |
 | pipewire | 0.10.1 | MIT |
 | pipewire-sys | 0.10.1 | MIT |
 | pkg-config | 0.3.34 | MIT OR Apache-2.0 |
+| powerfmt | 0.2.1 | MIT OR Apache-2.0 |
+| ppv-lite86 | 0.2.21 | MIT OR Apache-2.0 |
+| primal-check | 0.3.4 | MIT OR Apache-2.0 |
 | proc-macro-crate | 3.5.0 | MIT OR Apache-2.0 |
 | proc-macro2 | 1.0.107 | MIT OR Apache-2.0 |
+| prost | 0.11.9 | Apache-2.0 |
+| prost-derive | 0.11.9 | Apache-2.0 |
 | quote | 1.0.47 | MIT OR Apache-2.0 |
+| rand | 0.8.8 | MIT OR Apache-2.0 |
+| rand_chacha | 0.3.1 | MIT OR Apache-2.0 |
+| rand_core | 0.6.4 | MIT OR Apache-2.0 |
+| rand_distr | 0.4.3 | MIT OR Apache-2.0 |
+| rawpointer | 0.2.1 | MIT/Apache-2.0 |
 | regex | 1.13.1 | MIT OR Apache-2.0 |
 | regex-automata | 0.4.18 | MIT OR Apache-2.0 |
 | regex-lite | 0.1.9 | MIT OR Apache-2.0 |
@@ -125,7 +182,11 @@ CI fails if this file is out of date.
 | rtrb | 0.4.0 | MIT OR Apache-2.0 |
 | rustc-hash | 2.1.3 | Apache-2.0 OR MIT |
 | rustc_version | 0.4.1 | MIT OR Apache-2.0 |
+| rustfft | 6.4.1 | MIT OR Apache-2.0 |
 | rustix | 1.1.5 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT |
+| same-file | 1.0.6 | Unlicense/MIT |
+| scan_fmt | 0.2.6 | MIT |
+| scopeguard | 1.2.0 | MIT OR Apache-2.0 |
 | semver | 1.0.28 | MIT OR Apache-2.0 |
 | serde | 1.0.229 | MIT OR Apache-2.0 |
 | serde_core | 1.0.229 | MIT OR Apache-2.0 |
@@ -134,8 +195,12 @@ CI fails if this file is out of date.
 | serde_spanned | 1.1.1 | MIT OR Apache-2.0 |
 | shlex | 1.3.0 | MIT OR Apache-2.0 |
 | shlex | 2.0.1 | MIT OR Apache-2.0 |
+| simd-adler32 | 0.3.10 | MIT |
 | slab | 0.4.12 | MIT |
 | smallvec | 1.16.2 | MIT OR Apache-2.0 |
+| static_assertions | 1.1.0 | MIT OR Apache-2.0 |
+| strength_reduce | 0.2.4 | MIT OR Apache-2.0 |
+| string-interner | 0.15.0 | MIT/Apache-2.0 |
 | symphonia | 0.6.1 | MPL-2.0 |
 | symphonia-bundle-flac | 0.6.1 | MPL-2.0 |
 | symphonia-bundle-mp3 | 0.6.1 | MPL-2.0 |
@@ -146,23 +211,45 @@ CI fails if this file is out of date.
 | symphonia-format-ogg | 0.6.1 | MPL-2.0 |
 | symphonia-format-riff | 0.6.1 | MPL-2.0 |
 | symphonia-metadata | 0.6.1 | MPL-2.0 |
+| syn | 1.0.109 | MIT OR Apache-2.0 |
 | syn | 2.0.119 | MIT OR Apache-2.0 |
 | syn | 3.0.6 | MIT OR Apache-2.0 |
 | system-deps | 7.0.8 | MIT OR Apache-2.0 |
 | system-deps | 9.0.0 | MIT OR Apache-2.0 |
+| tar | 0.4.46 | MIT OR Apache-2.0 |
 | target-lexicon | 0.13.5 | Apache-2.0 WITH LLVM-exception |
+| time | 0.3.41 | MIT OR Apache-2.0 |
+| time-core | 0.1.4 | MIT OR Apache-2.0 |
+| time-macros | 0.2.22 | MIT OR Apache-2.0 |
+| tinyvec | 1.13.3 | Zlib OR Apache-2.0 OR MIT |
 | toml | 1.1.6+spec-1.1.0 | MIT OR Apache-2.0 |
 | toml_datetime | 1.1.1+spec-1.1.0 | MIT OR Apache-2.0 |
 | toml_edit | 0.25.15+spec-1.1.0 | MIT OR Apache-2.0 |
 | toml_parser | 1.1.3+spec-1.1.0 | MIT OR Apache-2.0 |
 | toml_writer | 1.1.2+spec-1.1.0 | MIT OR Apache-2.0 |
+| tract-core | 0.21.18 | MIT OR Apache-2.0 |
+| tract-data | 0.21.18 | MIT OR Apache-2.0 |
+| tract-hir | 0.21.18 | MIT OR Apache-2.0 |
+| tract-linalg | 0.21.18 | MIT OR Apache-2.0 |
+| tract-nnef | 0.21.18 | MIT OR Apache-2.0 |
+| tract-onnx | 0.21.18 | MIT OR Apache-2.0 |
+| tract-onnx-opl | 0.21.18 | MIT OR Apache-2.0 |
+| transpose | 0.2.3 | MIT OR Apache-2.0 |
+| ucd-trie | 0.1.7 | MIT OR Apache-2.0 |
 | unicode-ident | 1.0.26 | (MIT OR Apache-2.0) AND Unicode-3.0 |
+| unicode-normalization | 0.1.25 | MIT OR Apache-2.0 |
+| unicode-segmentation | 1.13.3 | MIT OR Apache-2.0 |
 | unicode-width | 0.2.2 | MIT OR Apache-2.0 |
 | version-compare | 0.2.1 | MIT |
+| version_check | 0.9.5 | MIT/Apache-2.0 |
+| walkdir | 2.5.0 | Unlicense/MIT |
 | wavicle | 0.1.0 | MIT OR Apache-2.0 |
 | winnow | 1.0.4 | MIT |
 | x11rb | 0.13.2 | MIT OR Apache-2.0 |
 | x11rb-protocol | 0.13.2 | MIT OR Apache-2.0 |
+| xattr | 1.6.1 | MIT OR Apache-2.0 |
+| zerocopy | 0.8.61 | BSD-2-Clause OR Apache-2.0 OR MIT |
+| zlib-rs | 0.6.8 | Zlib |
 | zmij | 1.0.23 | MIT |
 
 ## System libraries (hand-maintained)

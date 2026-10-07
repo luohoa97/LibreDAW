@@ -53,6 +53,7 @@ pub mod shortcuts;
 pub mod signals;
 pub mod size_class;
 pub mod slots;
+pub mod sound_catalog;
 pub mod sound_picker;
 pub mod sound_search;
 pub mod soundlib;

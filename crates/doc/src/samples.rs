@@ -29,14 +29,32 @@ pub const LOCAL_SAMPLES_FILE: &str = "local-samples.toml";
 /// Largest sample file `import_sample` accepts.
 pub const MAX_SAMPLE_BYTES: u64 = 1 << 30;
 
-/// File name of a bundle sample: `<hash>.wav`.
+/// File name of a WAV bundle sample: `<hash>.wav`.
 pub fn sample_file_name(hash: &str) -> String {
-    format!("{hash}.wav")
+    sample_file_name_ext(hash, "wav")
+}
+
+/// Extensions a bundle sample is stored under: the canonical one for each
+/// container (an MP3 is `<hash>.mp3`). The bytes are the original file.
+pub const STORED_EXTS: [&str; 5] = ["wav", "flac", "ogg", "mp3", "wv"];
+
+pub fn sample_file_name_ext(hash: &str, ext: &str) -> String {
+    format!("{hash}.{ext}")
+}
+
+/// The stored file of a bundle sample under `root` (a `samples_root`), if any.
+pub fn find_bundle_sample(root: &Path, hash: &str) -> Option<PathBuf> {
+    STORED_EXTS
+        .iter()
+        .map(|e| root.join(sample_file_name_ext(hash, e)))
+        .find(|p| p.is_file())
 }
 
 /// The hash in a bundle sample file name, if it has our form.
 pub fn parse_sample_file_name(name: &str) -> Option<&str> {
-    let h = name.strip_suffix(".wav")?;
+    let h = STORED_EXTS
+        .iter()
+        .find_map(|e| name.strip_suffix(&format!(".{e}")))?;
     is_hash(h).then_some(h)
 }
 
@@ -239,12 +257,20 @@ pub fn import_sample_with(
         return Err(BundleError::TooLarge(path.to_path_buf()));
     }
     let mut head = [0u8; 12];
-    // A user library also holds FLAC, Ogg and WavPack files; those are only
-    // ever referenced in place (`local_only`), never copied into a bundle.
-    if src.read_exact(&mut head).is_err()
-        || !(is_wav_head(&head) || (local_only && is_other_audio_head(&head)))
-    {
+    let ext = if src.read_exact(&mut head).is_ok() {
+        container_ext(&head)
+    } else {
+        None
+    };
+    let Some(ext) = ext else {
         return Err(BundleError::NotWav(path.to_path_buf()));
+    };
+    // The engine decodes on load; check now so a bad file is reported at import.
+    if ext != "wav"
+        && !local_only
+        && let Err(e) = audiofile::decode_file(path)
+    {
+        return Err(BundleError::Undecodable(path.to_path_buf(), e.to_string()));
     }
 
     let dir = bundle.join(SAMPLES_DIR);
@@ -259,7 +285,7 @@ pub fn import_sample_with(
             std::process::id(),
             N.fetch_add(1, Ordering::Relaxed)
         ));
-        let result = copy_into_bundle(&head, &mut src, path, &dir, &tmp);
+        let result = copy_into_bundle(&head, &mut src, path, &dir, &tmp, ext);
         if result.is_err() {
             let _ = fs::remove_file(&tmp);
         }
@@ -285,12 +311,21 @@ pub fn import_sample_with(
     })
 }
 
-fn is_wav_head(head: &[u8; 12]) -> bool {
-    &head[0..4] == b"RIFF" && &head[8..12] == b"WAVE"
-}
-
-fn is_other_audio_head(head: &[u8; 12]) -> bool {
-    head.starts_with(b"fLaC") || head.starts_with(b"OggS") || head.starts_with(b"wvpk")
+/// The canonical stored extension for a file by its first bytes.
+fn container_ext(head: &[u8; 12]) -> Option<&'static str> {
+    if &head[0..4] == b"RIFF" && &head[8..12] == b"WAVE" {
+        Some("wav")
+    } else if head.starts_with(b"fLaC") {
+        Some("flac")
+    } else if head.starts_with(b"OggS") {
+        Some("ogg")
+    } else if head.starts_with(b"wvpk") {
+        Some("wv")
+    } else if head.starts_with(b"ID3") || (head[0] == 0xFF && head[1] & 0xE0 == 0xE0) {
+        Some("mp3")
+    } else {
+        None
+    }
 }
 
 /// Hashes the rest of `src` (after `head`), copying it to `out` if given.
@@ -331,12 +366,13 @@ fn copy_into_bundle(
     path: &Path,
     dir: &Path,
     tmp: &Path,
+    ext: &str,
 ) -> Result<(String, u64), BundleError> {
     let mut out = File::create(tmp).map_err(io_error(tmp))?;
     let (hash, size) = hash_stream(head, src, Some(&mut out), path)?;
     out.sync_all().map_err(io_error(tmp))?;
     drop(out);
-    let fin = dir.join(sample_file_name(&hash));
+    let fin = dir.join(sample_file_name_ext(&hash, ext));
     match fs::metadata(&fin) {
         Ok(m) if m.len() == size => {
             // Same content already stored: keep it, drop the copy.
@@ -360,7 +396,7 @@ pub fn resolve_sample(bundle: &Path, sample: &SampleRef, local: &LocalSamples) -
     let p = if sample.local_only {
         local.get(&sample.hash)?.to_path_buf()
     } else {
-        samples_root(bundle).join(sample_file_name(&sample.hash))
+        find_bundle_sample(&samples_root(bundle), &sample.hash)?
     };
     p.is_file().then_some(p)
 }

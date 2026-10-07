@@ -967,3 +967,43 @@ fn hum_prepare_returns_the_notes_the_fake_transcription_made() {
     let clip = r["clip"].as_u64().unwrap() as u32;
     assert!(rig.project().clips.iter().any(|c| c.id.0 == clip));
 }
+
+#[test]
+fn sounds_are_searched_then_added_by_id() {
+    let rig = rig(true, |_| {});
+    let mut c = Mcp::connect(&rig);
+    c.init();
+    let s = c.ok(
+        "sound_search",
+        json!({"query": "kick", "source": "FL Studio", "offset": 20, "limit": 1}),
+    );
+    assert_eq!(s["sounds"][0]["id"], "k1", "{s}");
+    assert_eq!(s["next_offset"], 21, "{s}");
+    let added = c.ok("sound_add", json!({"id": "fl:sound:abc"}));
+    assert!(added["created"].is_array(), "{added}");
+    // A Surge XT sound is the same call the pane's + makes.
+    let surge = plugin_host::sounds::sounds()
+        .iter()
+        .find_map(|s| {
+            Some(format!(
+                "surge:{}/{}",
+                plugin_host::sounds::plugin_of(s)?.key,
+                s.preset
+            ))
+        })
+        .unwrap();
+    c.ok("sound_add", json!({"id": surge}));
+    let reqs = rig.ui.requests();
+    assert!(reqs.iter().any(|q| matches!(&q.body,
+        RequestBody::SoundSearch { tags, .. }
+            if tags.contains(&"kick".to_string())
+                && tags.contains(&"source:FL Studio".to_string())
+                && tags.contains(&"offset:20".to_string()))));
+    assert!(reqs.iter().any(|q| matches!(&q.body,
+        RequestBody::KitAdd { pack, kit, .. } if pack == "@sound" && kit == "fl:sound:abc")));
+    assert!(reqs.iter().any(|q| matches!(&q.body,
+        RequestBody::Edit { edits } if edits.iter().any(|e| matches!(e,
+            Edit::AddChannel { instrument: protocol::edit::NewInstrument::Clap { preset: Some(_), .. }, .. })))));
+    let e = c.err("sound_add", json!({"id": "surge:nope/none"}));
+    assert!(e.contains("sound_search"), "{e}");
+}

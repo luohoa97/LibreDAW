@@ -17,3 +17,4 @@ Fonts and icons come from the system theme and are not bundled (SPEC 11).
 | `crates/audiofile/tests/fixtures/sine440.mp3` | CC0-1.0 | LibreDAW (0.2 s 440 Hz sine generated with ffmpeg for decoder tests) |
 | `crates/audiofile/tests/fixtures/sine440.ogg` | CC0-1.0 | LibreDAW (0.2 s 440 Hz sine generated with ffmpeg for decoder tests) |
 | `crates/audiofile/tests/fixtures/sine440.wv` | CC0-1.0 | LibreDAW (0.2 s 440 Hz sine generated with ffmpeg for decoder tests) |
+| `crates/transcribe/model/nmp.onnx` | Apache-2.0 | Spotify Basic Pitch, `saved_models/icassp_2022/nmp.onnx` from github.com/spotify/basic-pitch, SHA-256 2c3c1d144bfa61ad236e92e169c13535c880469a12a047d4e73451f2c059a0ec; NOTICE in `crates/transcribe/model/NOTICE.md` |
