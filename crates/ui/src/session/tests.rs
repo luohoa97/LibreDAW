@@ -30,22 +30,25 @@ fn settle(s: &mut Session) {
 fn with_channel(s: &mut Session) -> (ChannelId, PatternId) {
     let a = user(
         s,
-        vec![
-            Edit::AddChannel {
-                name: "c".into(),
-                instrument: NewInstrument::Synth {
-                    params: SynthParams::default(),
-                },
-                root_key: 60,
-                track: TrackId::MASTER,
+        vec![Edit::AddChannel {
+            name: "c".into(),
+            instrument: NewInstrument::Synth {
+                params: SynthParams::default(),
             },
-            Edit::AddPattern {
-                name: "p".into(),
-                length_steps: 16,
-            },
-        ],
+            root_key: 60,
+            track: TrackId::MASTER,
+        }],
     );
-    (ChannelId(a.created[0]), PatternId(a.created[1]))
+    let c = ChannelId(a.created[0]);
+    let p = user(
+        s,
+        vec![Edit::AddPattern {
+            instrument: c,
+            name: "p".into(),
+            length_steps: 16,
+        }],
+    );
+    (c, PatternId(p.created[0]))
 }
 
 #[test]
@@ -107,13 +110,12 @@ fn faders_write_tables_without_recompiling() {
 #[test]
 fn structural_edits_recompile_and_the_newest_revision_reaches_the_engine() {
     let mut s = session();
-    let (c, p) = with_channel(&mut s);
+    let (_, p) = with_channel(&mut s);
     for step in 0..16u8 {
         user(
             &mut s,
             vec![Edit::SetStep {
                 pattern: p,
-                channel: c,
                 step,
                 on: true,
                 vel: None,
@@ -135,12 +137,11 @@ fn a_full_state_ring_is_retried_not_lost() {
     s.link.ring_capacity = Some(0);
     s.tick();
     assert!(s.link.submitted.is_empty());
-    let (c, p) = with_channel(&mut s);
+    let (_, p) = with_channel(&mut s);
     user(
         &mut s,
         vec![Edit::SetStep {
             pattern: p,
-            channel: c,
             step: 0,
             on: true,
             vel: None,
@@ -368,12 +369,11 @@ fn removing_a_channel_frees_its_slot_and_bumps_generation_on_reuse() {
 #[test]
 fn snapshot_for_save_returns_the_current_document() {
     let mut s = session();
-    let (c, p) = with_channel(&mut s);
+    let (_, p) = with_channel(&mut s);
     user(
         &mut s,
         vec![Edit::AddNotes {
             pattern: p,
-            channel: c,
             notes: vec![NewNote {
                 start: 0,
                 len: 10,

@@ -84,13 +84,9 @@ impl View {
     /// Scroll range: content until `end_tick` plus one screen, and all rows.
     pub fn clamp_scroll(&mut self, end_tick: u32, rows: usize) {
         let content_w = end_tick as f64 * self.px_per_tick + self.width * 0.5;
-        self.scroll_x = self
-            .scroll_x
-            .clamp(0.0, (content_w - self.width).max(0.0));
+        self.scroll_x = self.scroll_x.clamp(0.0, (content_w - self.width).max(0.0));
         let content_h = RULER_H + rows as f64 * self.row_h + self.row_h;
-        self.scroll_y = self
-            .scroll_y
-            .clamp(0.0, (content_h - self.height).max(0.0));
+        self.scroll_y = self.scroll_y.clamp(0.0, (content_h - self.height).max(0.0));
     }
 
     /// Scrolls so `tick` is visible.
@@ -120,7 +116,11 @@ pub enum Hit {
     Ruler { tick: u32 },
     /// The loop strip under the bar numbers.
     Loop { tick: u32 },
-    Clip { clip: ClipId, row: usize, part: Part },
+    Clip {
+        clip: ClipId,
+        row: usize,
+        part: Part,
+    },
     /// An empty spot on a row.
     Lane { row: usize, tick: u32 },
     /// Below the last row.
@@ -153,7 +153,11 @@ pub fn hit(view: &View, rows: &[ChannelId], clips: &[Clip], x: f64, y: f64) -> H
         if x < x0 || x >= x1 {
             continue;
         }
-        let edge = if x1 - x0 > 3.0 * EDGE_PX { EDGE_PX } else { 0.0 };
+        let edge = if x1 - x0 > 3.0 * EDGE_PX {
+            EDGE_PX
+        } else {
+            0.0
+        };
         let part = if x < x0 + edge {
             Part::Start
         } else if x >= x1 - edge {
@@ -243,7 +247,12 @@ pub fn place_new_clip(
             .filter(|c| c.instrument == instrument && c.start <= start && start < c.end())
             .map(|c| c.end())
             .max()?;
-        return fit_from(clips, instrument, after.max(snap_floor(tick, STEP_TICKS)), bar_ticks);
+        return fit_from(
+            clips,
+            instrument,
+            after.max(snap_floor(tick, STEP_TICKS)),
+            bar_ticks,
+        );
     }
     fit_from(clips, instrument, start, bar_ticks)
 }
@@ -348,7 +357,12 @@ fn no_overlap(clips: &[Clip]) -> bool {
 
 /// The last tick anything uses: the end of the last clip or the loop.
 pub fn end_tick(clips: &[Clip], loop_end: u32) -> u32 {
-    clips.iter().map(|c| c.end()).max().unwrap_or(0).max(loop_end)
+    clips
+        .iter()
+        .map(|c| c.end())
+        .max()
+        .unwrap_or(0)
+        .max(loop_end)
 }
 
 /// Where the content's notes fall inside a clip, for the preview drawn on
@@ -426,17 +440,26 @@ mod tests {
         let x_end = v.tick_to_x(BAR as f64) - 2.0;
         assert!(matches!(
             hit(&v, &rows, &clips, x_end, y0),
-            Hit::Clip { part: Part::End, .. }
+            Hit::Clip {
+                part: Part::End,
+                ..
+            }
         ));
         assert!(matches!(
             hit(&v, &rows, &clips, 1.0, y0),
-            Hit::Clip { part: Part::Start, .. }
+            Hit::Clip {
+                part: Part::Start,
+                ..
+            }
         ));
         assert!(matches!(
             hit(&v, &rows, &clips, x_mid, v.row_y(1) + 5.0),
             Hit::Lane { row: 1, .. }
         ));
-        assert!(matches!(hit(&v, &rows, &clips, x_mid, 2.0), Hit::Ruler { .. }));
+        assert!(matches!(
+            hit(&v, &rows, &clips, x_mid, 2.0),
+            Hit::Ruler { .. }
+        ));
         assert!(matches!(
             hit(&v, &rows, &clips, x_mid, RULER_H - 2.0),
             Hit::Loop { .. }
@@ -464,20 +487,33 @@ mod tests {
             Some((2 * BAR, BAR))
         );
         // Another row is unaffected.
-        assert_eq!(place_new_clip(&clips, ChannelId(2), BAR, BAR), Some((BAR, BAR)));
+        assert_eq!(
+            place_new_clip(&clips, ChannelId(2), BAR, BAR),
+            Some((BAR, BAR))
+        );
     }
 
     #[test]
     fn moves_and_resizes_that_fit() {
-        let clips = [clip(1, 1, 0, BAR), clip(2, 1, 2 * BAR, BAR), clip(3, 2, 0, BAR)];
+        let clips = [
+            clip(1, 1, 0, BAR),
+            clip(2, 1, 2 * BAR, BAR),
+            clip(3, 2, 0, BAR),
+        ];
         assert!(fits_move(&clips, &[ClipId(1)], BAR as i64));
-        assert!(!fits_move(&clips, &[ClipId(1)], 2 * BAR as i64), "onto clip 2");
+        assert!(
+            !fits_move(&clips, &[ClipId(1)], 2 * BAR as i64),
+            "onto clip 2"
+        );
         assert!(!fits_move(&clips, &[ClipId(1)], -1), "before 0");
         assert!(fits_move(&clips, &[ClipId(1), ClipId(2)], 4 * BAR as i64));
         assert!(fits_move(&clips, &[ClipId(3)], 2 * BAR as i64), "other row");
         assert!(fits_resize(&clips, &[ClipId(1)], BAR as i64, false));
         assert!(!fits_resize(&clips, &[ClipId(1)], BAR as i64 + 1, false));
-        assert!(!fits_resize(&clips, &[ClipId(1)], -(BAR as i64), false), "too short");
+        assert!(
+            !fits_resize(&clips, &[ClipId(1)], -(BAR as i64), false),
+            "too short"
+        );
         assert!(!fits_resize(&clips, &[ClipId(2)], 1, true) || clips[1].start > 0);
         assert!(fits_resize(&clips, &[ClipId(2)], BAR as i64, true));
         assert!(!fits_resize(&clips, &[ClipId(2)], BAR as i64 + 1, true));
@@ -486,7 +522,10 @@ mod tests {
     #[test]
     fn duplicates_go_right_after_the_selection() {
         let clips = [clip(1, 1, 0, BAR), clip(2, 2, 0, 2 * BAR)];
-        assert_eq!(duplicate_offset(&clips, &[ClipId(1), ClipId(2)]), Some(2 * BAR as i64));
+        assert_eq!(
+            duplicate_offset(&clips, &[ClipId(1), ClipId(2)]),
+            Some(2 * BAR as i64)
+        );
         let blocked = [clip(1, 1, 0, BAR), clip(2, 1, BAR, BAR)];
         assert_eq!(duplicate_offset(&blocked, &[ClipId(1)]), None);
         assert_eq!(duplicate_offset(&blocked, &[ClipId(2)]), Some(BAR as i64));

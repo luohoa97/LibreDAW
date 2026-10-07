@@ -21,7 +21,7 @@ use protocol::ids::ChannelId;
 
 use crate::app::App;
 use crate::menus::{self, ROW_ACTIONS};
-use crate::step_logic::RULER_H;
+use crate::timeline_logic as tl;
 use crate::widgets::color_bar::ColorBar;
 use crate::widgets::rename_label::RenameLabel;
 
@@ -37,10 +37,10 @@ pub struct ChannelList {
 }
 
 /// What decides whether the rows must be rebuilt.
-pub fn signature(app: &App, row_h: u32, wide: bool) -> String {
+pub fn signature(app: &App, row_h: u32) -> String {
     let s = app.session.borrow();
     let p = &s.document().project;
-    let mut out = format!("{row_h}|{wide}|");
+    let mut out = format!("{row_h}|");
     for (i, c) in p.channels.iter().enumerate() {
         out.push_str(&format!(
             "{}:{}:{}:{}:{}:{};",
@@ -56,13 +56,13 @@ pub fn signature(app: &App, row_h: u32, wide: bool) -> String {
 }
 
 impl ChannelList {
-    pub fn new(app: &Rc<App>) -> Rc<ChannelList> {
+    pub fn new(app: &Rc<App>, vadj: &gtk::Adjustment) -> Rc<ChannelList> {
         let widget = gtk::Box::new(gtk::Orientation::Vertical, 0);
-        widget.set_valign(gtk::Align::Start);
+        widget.set_vexpand(true);
         widget.set_hexpand(false);
         widget.set_halign(gtk::Align::Start);
         let spacer = gtk::Box::new(gtk::Orientation::Vertical, 0);
-        spacer.set_height_request(RULER_H as i32);
+        spacer.set_height_request(tl::RULER_H as i32);
         widget.append(&spacer);
         // A stock list: hover and selection come from libadwaita.
         let rows = gtk::ListBox::new();
@@ -70,9 +70,17 @@ impl ChannelList {
         rows.add_css_class("ldaw-channel-list");
         rows.set_selection_mode(gtk::SelectionMode::Single);
         rows.set_activate_on_single_click(false);
-        rows.update_property(&[gtk::accessible::Property::Label("Channels")]);
+        rows.update_property(&[gtk::accessible::Property::Label("Instruments")]);
         rows.set_hexpand(false);
-        widget.append(&rows);
+        // Scrolled by the timeline: the names stay level with the lanes.
+        let scroller = gtk::ScrolledWindow::builder()
+            .child(&rows)
+            .vadjustment(vadj)
+            .hscrollbar_policy(gtk::PolicyType::Never)
+            .vscrollbar_policy(gtk::PolicyType::External)
+            .vexpand(true)
+            .build();
+        widget.append(&scroller);
         let l = Rc::new(ChannelList {
             widget,
             app: app.clone(),
@@ -155,16 +163,19 @@ impl ChannelList {
     }
 
     pub fn sync(self: &Rc<ChannelList>) {
-        let row_h = self.app.size_class().step_row_h();
-        let wide = self.app.size_class().step_name_col() >= 200;
-        let sig = signature(&self.app, row_h, wide);
+        let row_h = if self.app.size_class().touch() {
+            tl::ROW_H_TOUCH
+        } else {
+            tl::ROW_H
+        } as u32;
+        let sig = signature(&self.app, row_h);
         if *self.signature.borrow() != sig && self.editing.get() == 0 {
             *self.signature.borrow_mut() = sig;
             // Not inside the signal handler of a widget that is about to
             // be replaced (the mute button that caused this).
             let me = self.clone();
             gtk::glib::idle_add_local_once(move || {
-                me.rebuild(row_h, wide);
+                me.rebuild(row_h);
                 me.update_selection();
             });
         }
@@ -190,7 +201,7 @@ impl ChannelList {
         self.selecting.set(false);
     }
 
-    fn rebuild(self: &Rc<ChannelList>, row_h: u32, wide: bool) {
+    fn rebuild(self: &Rc<ChannelList>, row_h: u32) {
         // Keep the keyboard where it was: a rebuilt row takes the focus
         // back when the old one had it.
         let had_focus = self
@@ -227,7 +238,6 @@ impl ChannelList {
                 ch.choke_group,
                 miss,
                 row_h,
-                wide,
             );
             row.set_child(Some(&content));
             self.rows.append(&row);
@@ -249,7 +259,6 @@ impl ChannelList {
         choke: u8,
         sample_missing: bool,
         row_h: u32,
-        wide: bool,
     ) -> gtk::Box {
         let content = gtk::Box::new(gtk::Orientation::Horizontal, 4);
         content.add_css_class("ldaw-channel-row");
@@ -275,9 +284,9 @@ impl ChannelList {
         mute.set_valign(gtk::Align::Center);
         mute.set_active(muted);
         mute.set_tooltip_text(Some(if muted {
-            "Unmute Channel"
+            "Unmute Instrument"
         } else {
-            "Mute Channel"
+            "Mute Instrument"
         }));
         mute.update_property(&[gtk::accessible::Property::Label(&format!("Mute {name}"))]);
         {
@@ -335,23 +344,6 @@ impl ChannelList {
             )]);
             content.append(&w);
         }
-
-        // Wide windows also show the notes button itself (docs 3.3); the
-        // menu, a double-click, and Return do the same everywhere.
-        if wide {
-            let notes = gtk::Button::from_icon_name("document-edit-symbolic");
-            notes.add_css_class("flat");
-            notes.add_css_class("circular");
-            notes.set_valign(gtk::Align::Center);
-            notes.set_tooltip_text(Some("Edit Notes"));
-            notes.update_property(&[gtk::accessible::Property::Label(&format!(
-                "Edit notes of {name}"
-            ))]);
-            let a = self.app.clone();
-            notes.connect_clicked(move |_| a.edit_notes(Some(id)));
-            content.append(&notes);
-        }
-
         // A click anywhere on the row plays the channel's sound (the list
         // selects it).
         let click = gtk::GestureClick::new();

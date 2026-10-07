@@ -86,7 +86,12 @@ pub const SHORTCUTS: &[Shortcut] = &[
         "Show or hide Inspector",
         "View",
     ),
-    s("win.view-pattern", &["<Control>1"], "Go to Pattern", "View"),
+    s(
+        "win.view-timeline",
+        &["<Control>1"],
+        "Go to Timeline",
+        "View",
+    ),
     s("win.view-mixer", &["<Control>2"], "Go to Mixer", "View"),
     s(
         "win.zoom-in",

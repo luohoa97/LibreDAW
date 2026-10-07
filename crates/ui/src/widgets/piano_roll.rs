@@ -412,7 +412,7 @@ impl PianoRoll {
         let revision = s.document().revision;
         let p = &s.document().project;
         let pid = app.current_pattern()?;
-        let cid = app.current_channel()?;
+        let cid = p.pattern(pid)?.instrument;
         if let Some(v) = self.imp().view_cache.borrow().as_ref()
             && v.revision == revision
             && v.pattern == pid
@@ -427,7 +427,7 @@ impl PianoRoll {
             pattern: pid,
             channel: cid,
             root_key: ch.root_key,
-            notes: pat.notes_of(cid).to_vec(),
+            notes: pat.notes.to_vec(),
             len_ticks: pat.length_ticks(),
             step_ticks: pat.step_ticks,
             bar_ticks: protocol::model::ticks_per_bar(p.time_sig_num),
@@ -691,7 +691,6 @@ impl PianoRoll {
                     imp.in_gesture.set(true);
                     let r = app.gesture_edit(vec![Edit::AddNotes {
                         pattern: v.pattern,
-                        channel: v.channel,
                         notes: vec![NewNote {
                             start: tick,
                             len: snap,
@@ -909,7 +908,6 @@ impl PianoRoll {
             .collect();
         if let Some(a) = self.app().edit(vec![Edit::AddNotes {
             pattern: v.pattern,
-            channel: v.channel,
             notes: copies,
         }]) {
             *self.imp().selection.borrow_mut() = a.created.iter().map(|i| NoteId(*i)).collect();
@@ -1013,7 +1011,6 @@ impl PianoRoll {
                     None => {
                         if let Some(a) = app.edit_quiet(vec![Edit::AddNotes {
                             pattern: v.pattern,
-                            channel: v.channel,
                             notes: vec![NewNote {
                                 start: t,
                                 len: snap as u32,

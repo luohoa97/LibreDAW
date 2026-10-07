@@ -23,10 +23,10 @@ use crate::files;
 use crate::help;
 use crate::mixer::Mixer;
 use crate::palette;
-use crate::pattern_page::{self, PatternPage};
 use crate::prefs;
 use crate::shortcuts::{self, SHORTCUTS};
 use crate::size_class::{self, SizeClass};
+use crate::timeline_page::{self, TimelinePage};
 use crate::transport::Transport;
 use crate::{browser, export, inspector};
 use doc::bundle::{AutosaveDebounce, AutosaveWorker};
@@ -75,7 +75,7 @@ struct Ui {
     redo: gtk::Button,
     narrow_title: adw::WindowTitle,
     transport: Rc<Transport>,
-    pattern: PatternPage,
+    timeline: TimelinePage,
     mixer: Rc<Mixer>,
 }
 
@@ -153,13 +153,13 @@ pub fn build(gapp: &adw::Application, app: Rc<App>) -> adw::ApplicationWindow {
     header.pack_end(&inspector_toggle);
     header.pack_end(&agent_btn);
 
-    let pattern = pattern_page::build(&window, &app);
+    let timeline = timeline_page::build(&app);
     let mixer = Mixer::new(app.clone());
     stack.add_titled_with_icon(
-        &pattern.widget,
-        Some("pattern"),
-        "Pattern",
-        "view-list-symbolic",
+        &timeline.widget,
+        Some("timeline"),
+        "Timeline",
+        "view-continuous-symbolic",
     );
     stack.add_titled_with_icon(
         &mixer.widget(),
@@ -265,7 +265,7 @@ pub fn build(gapp: &adw::Application, app: Rc<App>) -> adw::ApplicationWindow {
         redo,
         narrow_title: narrow_title.clone(),
         transport: transport.clone(),
-        pattern,
+        timeline,
         mixer: mixer.clone(),
         banner: banner.clone(),
         agent_btn: agent_btn.clone(),
@@ -299,7 +299,7 @@ pub fn build(gapp: &adw::Application, app: Rc<App>) -> adw::ApplicationWindow {
             }
             UiCommand::AgentChanged => update_agent_ui(&u, &a2),
             UiCommand::EditNotes => {}
-            UiCommand::RenameChannel(id) => u.pattern.channels.rename(id),
+            UiCommand::RenameChannel(id) => u.timeline.channels.rename(id),
         });
     }
     {
@@ -327,7 +327,7 @@ pub fn build(gapp: &adw::Application, app: Rc<App>) -> adw::ApplicationWindow {
             let u = u.clone();
             glib::idle_add_local_once(move || {
                 if gtk::prelude::GtkWindowExt::focus(&u.window).is_none() {
-                    u.pattern.grid.grab_focus();
+                    u.timeline.timeline.grab_focus();
                 }
             });
         });
@@ -338,7 +338,7 @@ pub fn build(gapp: &adw::Application, app: Rc<App>) -> adw::ApplicationWindow {
 }
 
 /// Debug aids for screenshots without a screenshot tool:
-/// `LIBREDAW_PAGE=pattern|song|mixer` picks the page,
+/// `LIBREDAW_PAGE=timeline|mixer` picks the page,
 /// `LIBREDAW_THEME=light|dark` the color scheme, and
 /// `LIBREDAW_SHOT=/path.png` writes the window to a PNG a moment after it
 /// is shown and quits. `LIBREDAW_SIZE=360x640` sets the size, and
@@ -664,7 +664,7 @@ fn page_name(ui: &Ui) -> String {
     ui.stack
         .visible_child_name()
         .map(|s| s.to_string())
-        .unwrap_or_else(|| "pattern".into())
+        .unwrap_or_else(|| "timeline".into())
 }
 
 fn sync_header(ui: &Ui, app: &App) {
@@ -702,7 +702,26 @@ fn sync_header(ui: &Ui, app: &App) {
 }
 
 fn go_to_page(ui: &Ui, page: &str) {
+    // Older view files name the "pattern" page: the timeline replaced it.
+    let page = if ui.stack.child_by_name(page).is_some() {
+        page
+    } else {
+        "timeline"
+    };
     ui.stack.set_visible_child_name(page);
+}
+
+/// Ctrl++ / Ctrl+- / Ctrl+0: the piano roll when it has the keyboard,
+/// else the timeline. `factor == 0` resets.
+fn zoom(ui: &Ui, factor: f64) {
+    let roll = &ui.timeline.editor.roll;
+    let in_roll = roll.has_focus();
+    match (in_roll, factor == 0.0) {
+        (true, true) => roll.reset_zoom(),
+        (true, false) => roll.zoom_x(factor),
+        (false, true) => ui.timeline.timeline.reset_zoom(),
+        (false, false) => ui.timeline.timeline.zoom_x(factor),
+    }
 }
 
 /// `win.*` and `app.*` actions.
@@ -778,19 +797,16 @@ fn install_actions(gapp: &adw::Application, ui: &Rc<Ui>, app: &Rc<App>) {
             }
         }),
     );
-    for (name, page) in [("view-pattern", "pattern"), ("view-mixer", "mixer")] {
+    for (name, page) in [("view-timeline", "timeline"), ("view-mixer", "mixer")] {
         let u = ui.clone();
         add(name, Box::new(move || go_to_page(&u, page)));
     }
     let u = ui.clone();
-    add("zoom-in", Box::new(move || u.pattern.roll.zoom_x(1.3)));
+    add("zoom-in", Box::new(move || zoom(&u, 1.3)));
     let u = ui.clone();
-    add(
-        "zoom-out",
-        Box::new(move || u.pattern.roll.zoom_x(1.0 / 1.3)),
-    );
+    add("zoom-out", Box::new(move || zoom(&u, 1.0 / 1.3)));
     let u = ui.clone();
-    add("zoom-reset", Box::new(move || u.pattern.roll.reset_zoom()));
+    add("zoom-reset", Box::new(move || zoom(&u, 0.0)));
     let a = app.clone();
     add("edit-notes", Box::new(move || a.edit_notes(None)));
 
@@ -803,7 +819,7 @@ fn install_actions(gapp: &adw::Application, ui: &Rc<Ui>, app: &Rc<App>) {
             if page_name(&u) == "mixer" {
                 u.mixer.rename_selected();
             } else {
-                u.pattern.channels.rename_selected();
+                u.timeline.channels.rename_selected();
             }
         }),
     );
@@ -995,7 +1011,8 @@ fn install_view_hooks(ui: &Rc<Ui>, app: &Rc<App>) {
     let (u1, u2) = (ui.clone(), ui.clone());
     app.set_view_hooks(
         move || {
-            let (px_per_tick, row_h, scroll_x, scroll_y, snap) = u1.pattern.roll.view_params();
+            let (px_per_tick, row_h, scroll_x, scroll_y, snap) =
+                u1.timeline.editor.roll.view_params();
             ViewState {
                 px_per_tick,
                 row_h,
@@ -1009,16 +1026,17 @@ fn install_view_hooks(ui: &Rc<Ui>, app: &Rc<App>) {
             }
         },
         move |v| {
-            u2.pattern.roll.set_view_params(
+            u2.timeline.editor.roll.set_view_params(
                 v.px_per_tick,
                 v.row_h,
                 v.scroll_x,
                 v.scroll_y,
                 v.snap as usize,
             );
-            u2.pattern
+            u2.timeline
+                .editor
                 .snap
-                .set_selected(u2.pattern.roll.snap_index() as u32);
+                .set_selected(u2.timeline.editor.roll.snap_index() as u32);
             go_to_page(&u2, &v.page);
             u2.sounds_toggle.set_active(v.sounds_open);
             u2.inspector_toggle.set_active(v.inspector_open);

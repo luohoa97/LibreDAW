@@ -311,11 +311,6 @@ pub fn open_path(app: &Rc<App>, path: PathBuf) {
                     a.notify();
                     recovered_toast(&a, rec.modified);
                 }
-                // A project always has a pattern: an old one without any
-                // gets "Pattern 1" as one undoable edit.
-                if a.ensure_pattern().is_some() {
-                    a.notify();
-                }
                 let _ = LastSession {
                     path: Some(path),
                     note: None,
@@ -357,7 +352,6 @@ pub fn open_recovery_bundle(app: &Rc<App>, bundle_dir: PathBuf, modified: System
                 a.ui.borrow_mut().pattern = None;
                 a.reset_selection();
                 a.notify();
-                a.ensure_pattern();
                 recovered_toast(&a, modified);
                 // The old recovery bundle goes away once this session has
                 // written its own.

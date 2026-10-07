@@ -9,7 +9,7 @@ use std::rc::Rc;
 use protocol::beats::{SampleMode, SamplerParam};
 use protocol::consts::MAX_TRACKS;
 use protocol::edit::{Edit, MixValue, NewInstrument};
-use protocol::ids::{ChannelId, TrackId};
+use protocol::ids::{ChannelId, PatternId, TrackId};
 use protocol::model::{SampleRef, SynthParams};
 
 use crate::app::App;
@@ -158,10 +158,7 @@ pub fn add(app: &Rc<App>, what: NewChannel) -> Option<ChannelId> {
         (name, instrument, root_key, room)
     };
     let fallback = app.ui.borrow().track;
-    let grouped = app.gesture_begin("Add channel");
-    // A project always has a pattern: the first channel creates one in the
-    // same undo step, so its steps are there to click.
-    app.ensure_pattern();
+    let grouped = app.gesture_begin("Add instrument");
     let run = |e: Vec<Edit>| {
         if grouped {
             app.gesture_edit(e)
@@ -197,12 +194,13 @@ pub fn add(app: &Rc<App>, what: NewChannel) -> Option<ChannelId> {
     Some(id)
 }
 
-/// The starter beat of a new project: "Pattern 1" (one bar) with Kick,
-/// Snare, Hat and Bass channels, each on its own track, and a plain steady
-/// pattern so Play already sounds like something. One undo step. Nothing
-/// plays until the user presses Play.
+/// The starter beat of a new project (SPEC 20.3): Kick, Snare, Hat and 808
+/// rows, each on its own mixer track with a one-bar clip repeated as linked
+/// copies over four bars, and the loop region on those bars, so Space plays
+/// a beat at once. One undo step. Nothing plays until the user presses Play.
 pub fn add_starter_beat(app: &Rc<App>) {
     let grouped = app.gesture_begin("New project");
+    let bar = protocol::model::ticks_per_bar(app.session.borrow().document().project.time_sig_num);
     let run = |e: Vec<Edit>| {
         if grouped {
             app.gesture_edit(e)
@@ -210,7 +208,6 @@ pub fn add_starter_beat(app: &Rc<App>) {
             app.edit(e)
         }
     };
-    let pattern = app.ensure_pattern();
     let preset = |name: &str| {
         presets::presets()
             .into_iter()
@@ -254,7 +251,7 @@ pub fn add_starter_beat(app: &Rc<App>) {
             80,
         ),
         (
-            "Bass",
+            "808",
             (NewInstrument::Bass808 { mono: true }, 36),
             vec![0, 10],
             100,
@@ -276,19 +273,40 @@ pub fn add_starter_beat(app: &Rc<App>) {
             continue;
         };
         first.get_or_insert(ch);
-        if let Some(pattern) = pattern {
-            run(steps
-                .into_iter()
-                .map(|step| Edit::SetStep {
-                    pattern,
-                    channel: ch,
-                    step,
-                    on: true,
-                    vel: Some(vel),
-                })
-                .collect());
-        }
+        // A one-bar clip with the steps, then linked copies over bars 2 to
+        // 4: editing any of them edits all (SPEC 20.3).
+        let Some(made) = run(vec![Edit::AddClip {
+            instrument: ch,
+            pattern: None,
+            start: 0,
+            len: bar,
+        }]) else {
+            continue;
+        };
+        let pattern = PatternId(made.created[0]);
+        run(steps
+            .into_iter()
+            .map(|step| Edit::SetStep {
+                pattern,
+                step,
+                on: true,
+                vel: Some(vel),
+            })
+            .collect());
+        run((1..STARTER_BARS)
+            .map(|b| Edit::AddClip {
+                instrument: ch,
+                pattern: Some(pattern),
+                start: b * bar,
+                len: bar,
+            })
+            .collect());
     }
+    run(vec![Edit::SetLoopRegion {
+        start: 0,
+        end: STARTER_BARS * bar,
+        enabled: true,
+    }]);
     if grouped {
         app.gesture_end();
     }
@@ -296,6 +314,9 @@ pub fn add_starter_beat(app: &Rc<App>) {
         app.select_channel(c);
     }
 }
+
+/// Bars of the starter beat (and of its loop region).
+pub const STARTER_BARS: u32 = 4;
 
 /// Where the channels of a kit go.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -344,7 +365,6 @@ pub fn add_kit_as(
     if !grouped && !user {
         return None;
     }
-    app.ensure_pattern();
     let run = |e: Vec<Edit>| {
         if grouped {
             app.gesture_edit(e)
@@ -592,66 +612,64 @@ mod tests {
     }
 
     #[test]
-    fn the_first_channel_creates_pattern_1_in_the_same_undo_step() {
+    fn a_new_instrument_is_an_empty_row() {
         let a = app();
-        assert_eq!(pattern_count(&a), 0);
         let id = add(&a, NewChannel::Preset("Kick".into())).unwrap();
-        assert_eq!(pattern_count(&a), 1);
-        assert!(a.current_pattern().is_some(), "and it is selected");
         assert_eq!(a.current_channel(), Some(id));
+        assert_eq!(pattern_count(&a), 0, "no clip until the user adds one");
         a.undo();
-        assert_eq!(pattern_count(&a), 0, "one step undoes the pattern too");
-        assert_eq!(counts(&a), (0, 1));
-        a.redo();
-        assert_eq!((pattern_count(&a), counts(&a)), (1, (1, 2)));
-        // A second channel does not add another pattern.
-        add(&a, NewChannel::Bass808).unwrap();
-        assert_eq!(pattern_count(&a), 1);
+        assert_eq!(counts(&a), (0, 1), "one step undoes the row and its track");
     }
 
     #[test]
-    fn the_starter_beat_is_one_pattern_four_channels_and_one_undo_step() {
+    fn the_starter_beat_is_four_rows_of_linked_clips_and_one_undo_step() {
         let a = app();
         add_starter_beat(&a);
-        let names: Vec<String> = {
-            let s = a.session.borrow();
-            s.document()
-                .project
-                .channels
-                .iter()
-                .map(|c| c.name.clone())
-                .collect()
-        };
-        assert_eq!(names, ["Kick", "Snare", "Hat", "Bass"]);
-        assert_eq!(counts(&a), (4, 5), "each channel has a track of its own");
-        assert_eq!(pattern_count(&a), 1);
-        {
-            let s = a.session.borrow();
-            let p = &s.document().project;
-            let pat = &p.patterns[0];
-            assert_eq!(pat.length_steps, 16);
-            for c in &p.channels {
-                assert!(
-                    !pat.notes_of(c.id).is_empty(),
-                    "{} has steps to see",
-                    c.name
-                );
-            }
+        let s = a.session.borrow();
+        let p = &s.document().project;
+        let names: Vec<&str> = p.channels.iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(names, ["Kick", "Snare", "Hat", "808"]);
+        assert_eq!(p.tracks.len(), 5, "each instrument has a track of its own");
+        assert_eq!(p.patterns.len(), 4, "one content per instrument");
+        assert_eq!(p.clips.len(), 16, "four linked clips per row");
+        for c in &p.channels {
+            let pat = p.patterns.iter().find(|x| x.instrument == c.id).unwrap();
+            assert!(!pat.notes.is_empty(), "{} has steps to hear", c.name);
+            assert!(
+                p.clips
+                    .iter()
+                    .filter(|cl| cl.instrument == c.id)
+                    .all(|cl| cl.pattern == pat.id),
+                "linked copies"
+            );
         }
-        assert!(a.current_pattern().is_some() && a.current_channel().is_some());
+        assert!(p.loop_region.enabled);
+        assert_eq!(p.loop_region.end, STARTER_BARS * 3840);
+        drop(s);
         assert!(!a.ui.borrow().playing, "nothing plays until Play");
         a.undo();
         assert_eq!((counts(&a), pattern_count(&a)), ((0, 1), 0));
     }
 
     #[test]
-    fn edit_notes_selects_makes_a_pattern_and_asks_the_page_to_show_it() {
+    fn edit_notes_opens_the_rows_clip() {
         use crate::app::UiCommand;
         use std::cell::Cell;
         let a = app();
-        let id = add(&a, NewChannel::Preset("Kick".into())).unwrap();
-        let other = add(&a, NewChannel::Preset("Snare".into())).unwrap();
-        assert_eq!(a.current_channel(), Some(other));
+        add_starter_beat(&a);
+        let (kick, first) = {
+            let s = a.session.borrow();
+            let p = &s.document().project;
+            let k = p.channels[0].id;
+            let c = p
+                .clips
+                .iter()
+                .filter(|c| c.instrument == k)
+                .min_by_key(|c| c.start)
+                .unwrap()
+                .id;
+            (k, c)
+        };
         let got = Rc::new(Cell::new(0));
         let g = got.clone();
         a.on_command(move |c| {
@@ -659,43 +677,14 @@ mod tests {
                 g.set(g.get() + 1);
             }
         });
-        a.edit_notes(Some(id));
-        assert_eq!(a.current_channel(), Some(id));
+        a.edit_notes(Some(kick));
+        assert_eq!(a.current_clip(), Some(first));
         assert_eq!(got.get(), 1);
-        // No channel named: the selected one.
-        a.edit_notes(None);
-        assert_eq!(a.current_channel(), Some(id));
-        assert_eq!(got.get(), 2);
-        // With the pattern gone it is made again, as part of the call.
-        let p = a.current_pattern().unwrap();
-        a.edit(vec![Edit::RemovePattern { pattern: p }]);
-        assert_eq!(pattern_count(&a), 0);
-        a.edit_notes(Some(other));
-        assert_eq!(pattern_count(&a), 1);
-        assert_eq!(a.current_channel(), Some(other));
-        assert!(a.current_pattern().is_some());
-        // Nothing to edit: a toast, no command.
-        let empty = {
-            let s = Session::new(
-                Document::new(),
-                true,
-                EngineLink::stub(48000.0),
-                Registry::new(Vec::new(), 48000.0),
-            );
-            App::with_dirs(
-                s,
-                Dirs {
-                    music: std::env::temp_dir(),
-                    data: std::env::temp_dir(),
-                    config: std::env::temp_dir(),
-                },
-            )
-        };
-        let n = Rc::new(Cell::new(0));
-        let n2 = n.clone();
-        empty.on_command(move |_| n2.set(n2.get() + 1));
-        empty.edit_notes(None);
-        assert_eq!(n.get(), 0);
+        // A row without clips: no editor, a toast.
+        let empty = add(&a, NewChannel::Bass808).unwrap();
+        a.edit_notes(Some(empty));
+        assert_eq!(got.get(), 1);
+        assert_eq!(a.current_channel(), Some(empty));
     }
 
     #[test]

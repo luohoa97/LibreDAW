@@ -792,16 +792,25 @@ fn execute(app: &Rc<App>, ticket: Ticket, author: &Author, req: Request) -> Opti
                 Err(f) => err(map_failure(f)),
             }
         }
-        RequestBody::NotesList { pattern, channel } => {
+        // The change tree and versions (15.11, 15.12) follow BRIDGE.md in
+        // the next build; until then they answer plainly.
+        RequestBody::HistoryTree { .. }
+        | RequestBody::HistoryDiff { .. }
+        | RequestBody::VersionSave { .. }
+        | RequestBody::BranchCreate { .. }
+        | RequestBody::BranchSwitch { .. }
+        | RequestBody::BranchList
+        | RequestBody::BranchRename { .. }
+        | RequestBody::BranchArchive { .. }
+        | RequestBody::VersionRestore { .. } => bad("versions are not available in this build yet"),
+        RequestBody::NotesList { pattern } => {
             let s = app.session.borrow();
             match s.document().project.pattern(pattern) {
-                Some(p) if s.document().project.channel(channel).is_some() => {
-                    ok(ReplyBody::Notes {
-                        notes: p.notes_of(channel).to_vec(),
-                    })
-                }
-                _ => err(ControlError::NotFound {
-                    what: "pattern or channel".into(),
+                Some(p) => ok(ReplyBody::Notes {
+                    notes: p.notes.clone(),
+                }),
+                None => err(ControlError::NotFound {
+                    what: "clip content".into(),
                 }),
             }
         }
@@ -813,29 +822,13 @@ fn execute(app: &Rc<App>, ticket: Ticket, author: &Author, req: Request) -> Opti
             app.stop();
             ok(ReplyBody::Done)
         }
-        RequestBody::SetPlayingPattern { pattern } => {
-            if app
-                .session
-                .borrow()
-                .document()
-                .project
-                .pattern(pattern)
-                .is_none()
-            {
-                return Some(err(ControlError::NotFound {
-                    what: "pattern".into(),
-                }));
-            }
-            app.select_pattern(pattern);
-            ok(ReplyBody::Done)
-        }
         RequestBody::TransportState => {
             let s = app.session.borrow();
             ok(ReplyBody::Transport {
                 playing: app.ui.borrow().playing,
                 tick: app.playhead_tick(),
                 tempo_bpm: s.document().project.tempo_bpm,
-                pattern: app.current_pattern(),
+                loop_region: s.document().project.loop_region,
             })
         }
         RequestBody::Undo => undo_redo(app, author, true),
@@ -844,35 +837,29 @@ fn execute(app: &Rc<App>, ticket: Ticket, author: &Author, req: Request) -> Opti
             entries: app.session.borrow().editor.history().infos(),
         }),
         RequestBody::ExportWav {
-            pattern,
-            loops,
             format,
-        } => {
-            return Some(start_job(
-                app,
-                JobTarget::Pattern { pattern, loops },
-                Some(format),
-            ));
-        }
-        RequestBody::ExportSongWav {
-            format,
+            start,
+            end,
             tail_seconds,
         } => {
             return Some(start_job(
                 app,
-                JobTarget::Song { tail: tail_seconds },
+                JobTarget {
+                    range: range_of(start, end),
+                    tail: tail_seconds,
+                },
                 Some(format),
             ));
         }
-        RequestBody::AnalyzeSong => {
-            return Some(start_job(app, JobTarget::Song { tail: 2.0 }, None));
-        }
-        RequestBody::SetTransportMode { mode, loop_song } => {
-            app.set_transport_mode(mode, loop_song);
-            ok(ReplyBody::Done)
-        }
-        RequestBody::Analyze { pattern, loops } => {
-            return Some(start_job(app, JobTarget::Pattern { pattern, loops }, None));
+        RequestBody::Analyze { start, end } => {
+            return Some(start_job(
+                app,
+                JobTarget {
+                    range: range_of(start, end),
+                    tail: 2.0,
+                },
+                None,
+            ));
         }
         RequestBody::JobStatus { job } => {
             let guard = app.bridge.borrow();
@@ -1004,47 +991,44 @@ pub fn on_done(app: &Rc<App>, done: Vec<Done>) {
     }
 }
 
-/// What an export or analysis job renders.
+/// What an export or analysis job renders: a range of the timeline
+/// (`None`: the loop region when it is on, else the whole arrangement)
+/// plus a tail in seconds (SPEC 20).
 #[derive(Clone, Copy)]
-enum JobTarget {
-    Pattern {
-        pattern: protocol::ids::PatternId,
-        loops: u32,
-    },
-    /// The whole playlist plus a tail in seconds (15.6).
-    Song { tail: f64 },
+struct JobTarget {
+    range: Option<(u32, u32)>,
+    tail: f64,
+}
+
+/// A range from optional ends: both or neither.
+fn range_of(start: Option<u32>, end: Option<u32>) -> Option<(u32, u32)> {
+    match (start, end) {
+        (Some(s), Some(e)) => Some((s, e)),
+        (Some(s), None) => Some((s, u32::MAX)),
+        (None, Some(e)) => Some((0, e)),
+        (None, None) => None,
+    }
 }
 
 fn start_job(app: &Rc<App>, target: JobTarget, fmt: Option<WavFormat>) -> Outcome {
-    let (pattern, loops, song_tail) = match target {
-        JobTarget::Pattern { pattern, loops } => {
-            if !(1..=64).contains(&loops) {
-                return bad("loops must be between 1 and 64");
-            }
-            (pattern, loops, None)
-        }
-        JobTarget::Song { tail } => {
-            if !(0.0..=30.0).contains(&tail) {
-                return bad("tail_seconds must be between 0 and 30");
-            }
-            (protocol::ids::PatternId(0), 1, Some(tail))
-        }
-    };
-    let (project, slots, rate, rev, store) = {
+    if !(0.0..=30.0).contains(&target.tail) {
+        return bad("tail_seconds must be between 0 and 30");
+    }
+    let (project, slots, rate, rev, store, range) = {
         let s = app.session.borrow();
-        if song_tail.is_none() && s.document().project.pattern(pattern).is_none() {
-            return err(ControlError::NotFound {
-                what: "pattern".into(),
-            });
-        }
-        if song_tail.is_some()
-            && s.document()
-                .project
-                .playlist
-                .iter()
-                .all(|t| t.clips.is_empty())
+        let p = &s.document().project;
+        let song_end = p.clips.iter().map(|c| c.end()).max().unwrap_or(0);
+        let range = target.range.map(|(a, b)| (a, b.min(song_end.max(a + 1))));
+        if let Some((a, b)) = range
+            && a >= b
         {
-            return bad("the song has no clips");
+            return bad("the range is empty");
+        }
+        if range.is_none()
+            && !(p.loop_region.enabled && p.loop_region.end > p.loop_region.start)
+            && song_end == 0
+        {
+            return bad("the timeline has no clips");
         }
         (
             s.document().project.clone(),
@@ -1052,6 +1036,7 @@ fn start_job(app: &Rc<App>, target: JobTarget, fmt: Option<WavFormat>) -> Outcom
             s.link.sample_rate().round() as u32,
             s.document().revision,
             s.store.clone(),
+            range,
         )
     };
     let exports = app.dirs.projects().join("exports");
@@ -1086,10 +1071,9 @@ fn start_job(app: &Rc<App>, target: JobTarget, fmt: Option<WavFormat>) -> Outcom
             let frames = engine_adapter::render(
                 RenderJob {
                     project,
-                    pattern,
-                    loops,
+                    range,
+                    tail_seconds: target.tail,
                     sample_rate: rate,
-                    song_tail,
                     store: Some(store),
                 },
                 &slots,
@@ -1364,7 +1348,7 @@ mod tests {
             &rig,
             "agent",
             vec![
-                r#"{"id":1,"body":{"op":"set_activity","text":"Writing the hats\u0007","focus":{"kind":"channel","id":4}}}"#.into(),
+                r#"{"id":1,"body":{"op":"set_activity","text":"Writing the hats\u0007","focus":{"kind":"instrument","id":4}}}"#.into(),
             ],
         );
         assert!(out[1].contains("\"status\":\"ok\""), "{}", out[1]);

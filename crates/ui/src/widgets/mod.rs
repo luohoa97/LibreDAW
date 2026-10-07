@@ -8,3 +8,4 @@ pub mod meter;
 pub mod piano_roll;
 pub mod rename_label;
 pub mod step_grid;
+pub mod timeline;

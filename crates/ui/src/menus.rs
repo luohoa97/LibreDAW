@@ -23,11 +23,13 @@ use crate::channels;
 use doc::presets;
 
 /// Actions of a channel row (`row.*`), registered for each row.
-pub const ROW_ACTIONS: &[&str] = &["sound", "notes", "rename", "remove", "choke"];
+pub const ROW_ACTIONS: &[&str] = &["sound", "rename", "remove", "choke"];
 /// Actions of the note menu in the piano roll (`roll.*`).
 pub const ROLL_ACTIONS: &[&str] = &["delete", "duplicate"];
 /// Actions of a mixer track (`strip.*`).
 pub const STRIP_ACTIONS: &[&str] = &["rename", "reset", "remove"];
+/// Actions of a clip on the timeline (`clip.*`).
+pub const CLIP_ACTIONS: &[&str] = &["edit", "duplicate", "unique", "split", "mute", "delete"];
 /// Actions of a built-in sound in the sound browser (`sound.*`).
 pub const SOUND_ACTIONS: &[&str] = &["add", "replace"];
 /// Window actions (`win.*`) that menus name.
@@ -111,7 +113,6 @@ pub fn channel_menu() -> gio::Menu {
     let menu = gio::Menu::new();
     let first = gio::Menu::new();
     first.append(Some("Edit _Sound"), Some("row.sound"));
-    first.append(Some("Edit _Notes"), Some("row.notes"));
     menu.append_section(None, &first);
     // Channels in the same choke group cut each other off (15.1).
     let choke = gio::Menu::new();
@@ -128,7 +129,7 @@ pub fn channel_menu() -> gio::Menu {
     menu.append_section(None, &grouping);
     let second = gio::Menu::new();
     second.append(Some("_Rename"), Some("row.rename"));
-    second.append(Some("Remove _Channel"), Some("row.remove"));
+    second.append(Some("Remove _Instrument"), Some("row.remove"));
     menu.append_section(None, &second);
     menu
 }
@@ -138,6 +139,25 @@ pub fn roll_menu() -> gio::Menu {
     let menu = gio::Menu::new();
     menu.append(Some("_Delete"), Some("roll.delete"));
     menu.append(Some("D_uplicate"), Some("roll.duplicate"));
+    menu
+}
+
+/// The menu of the selected clips on the timeline (SPEC 20.3). Shortcuts
+/// in the labels' tooltips: Return, Ctrl+D, S, 0, Delete.
+pub fn clip_menu() -> gio::Menu {
+    let menu = gio::Menu::new();
+    let first = gio::Menu::new();
+    first.append(Some("_Edit Clip"), Some("clip.edit"));
+    menu.append_section(None, &first);
+    let second = gio::Menu::new();
+    second.append(Some("_Duplicate"), Some("clip.duplicate"));
+    second.append(Some("Make _Unique"), Some("clip.unique"));
+    second.append(Some("_Split at Playhead"), Some("clip.split"));
+    second.append(Some("_Mute"), Some("clip.mute"));
+    menu.append_section(None, &second);
+    let third = gio::Menu::new();
+    third.append(Some("De_lete"), Some("clip.delete"));
+    menu.append_section(None, &third);
     menu
 }
 
@@ -190,7 +210,7 @@ pub fn perform_row_action(app: &Rc<App>, id: ChannelId, action: &str, target: Op
             app.select_channel(id);
             app.command(UiCommand::ShowSound);
         }
-        "notes" => app.edit_notes(Some(id)),
+
         "rename" => {
             app.select_channel(id);
             app.command(UiCommand::RenameChannel(id));
@@ -237,6 +257,7 @@ mod tests {
         walk(&roll_menu(), "roll", ROLL_ACTIONS);
         walk(&strip_menu(), "strip", STRIP_ACTIONS);
         walk(&sound_menu(), "sound", SOUND_ACTIONS);
+        walk(&clip_menu(), "clip", CLIP_ACTIONS);
         // The primary and Add Channel menus mix window and app actions.
         for menu in [main_menu(), add_channel_menu()] {
             for (action, _) in items_of(menu.upcast_ref()) {
@@ -266,6 +287,7 @@ mod tests {
         let strips = include_str!("mixer.rs");
         assert!(strips.contains("STRIP_ACTIONS"));
         assert!(include_str!("browser.rs").contains("SOUND_ACTIONS"));
+        assert!(include_str!("widgets/timeline.rs").contains("CLIP_ACTIONS"));
         let roll = include_str!("widgets/piano_roll.rs");
         assert!(roll.contains("ROLL_ACTIONS"));
     }
@@ -317,11 +339,6 @@ mod tests {
         perform_row_action(&a, kick, "sound", None);
         assert_eq!(a.current_channel(), Some(kick));
         assert_eq!(seen.borrow().last(), Some(&UiCommand::ShowSound));
-
-        // Edit Notes: selects and shows the notes.
-        perform_row_action(&a, snare, "notes", None);
-        assert_eq!(a.current_channel(), Some(snare));
-        assert_eq!(seen.borrow().last(), Some(&UiCommand::EditNotes));
 
         // Rename: asks to rename that channel, and changes nothing yet.
         let name_before = a

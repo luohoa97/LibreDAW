@@ -234,7 +234,7 @@ impl LaneEditor {
     fn apply_size_class(&self) {
         let c = self.app().size_class();
         self.imp().touch.set(c.touch());
-        self.imp().row_h.set(c.step_row_h() as f64);
+        self.imp().row_h.set(logic::row_h(c.touch()));
         self.queue_resize();
         self.queue_draw();
     }
@@ -276,7 +276,7 @@ impl LaneEditor {
         let s = app.session.borrow();
         let p = &s.document().project;
         let pat = p.pattern(app.current_pattern()?)?;
-        let ch = p.channel(app.current_channel()?)?;
+        let ch = p.channel(pat.instrument)?;
         let rv = logic::row_view(pat, ch);
         Some(Data {
             pattern: pat.id,
@@ -305,7 +305,6 @@ impl LaneEditor {
         };
         Edit::SetStepLanes {
             pattern: d.pattern,
-            channel: d.channel,
             step: step as u8,
             vel,
             off,

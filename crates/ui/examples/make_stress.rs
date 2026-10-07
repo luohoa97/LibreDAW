@@ -17,23 +17,37 @@ fn main() {
     };
     let (d, ids) = apply_batch(
         &Document::new(),
-        &[
-            Edit::AddPattern {
-                name: "Stress".into(),
-                length_steps: 64,
+        &[Edit::AddChannel {
+            name: "Notes".into(),
+            instrument: NewInstrument::Synth {
+                params: SynthParams::default(),
             },
-            Edit::AddChannel {
-                name: "Notes".into(),
-                instrument: NewInstrument::Synth {
-                    params: SynthParams::default(),
-                },
-                root_key: 60,
-                track: TrackId::MASTER,
-            },
-        ],
+            root_key: 60,
+            track: TrackId::MASTER,
+        }],
     )
     .expect("setup");
-    let (pattern, channel) = (PatternId(ids[0]), ChannelId(ids[1]));
+    let channel = ChannelId(ids[0]);
+    // One four-bar clip whose content is 64 steps long.
+    let (d, ids) = apply_batch(
+        &d,
+        &[Edit::AddClip {
+            instrument: channel,
+            pattern: None,
+            start: 0,
+            len: 15_360,
+        }],
+    )
+    .expect("clip");
+    let pattern = PatternId(ids[0]);
+    let (d, _) = apply_batch(
+        &d,
+        &[Edit::SetPatternLength {
+            pattern,
+            length_steps: 64,
+        }],
+    )
+    .expect("length");
     // 64 steps of 240 ticks: 15,360 ticks. 2,000 short notes spread over
     // 100 keys and the whole length.
     let notes: Vec<NewNote> = (0..2000u32)
@@ -44,15 +58,7 @@ fn main() {
             vel: 60 + (i % 60) as u8,
         })
         .collect();
-    let (d, _) = apply_batch(
-        &d,
-        &[Edit::AddNotes {
-            pattern,
-            channel,
-            notes,
-        }],
-    )
-    .expect("notes");
+    let (d, _) = apply_batch(&d, &[Edit::AddNotes { pattern, notes }]).expect("notes");
     bundle::save(std::path::Path::new(&path), &d).expect("save");
     // All 2,000 notes in view at 1920 x 1080.
     let view = ViewState {

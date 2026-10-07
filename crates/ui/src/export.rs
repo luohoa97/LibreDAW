@@ -48,8 +48,16 @@ pub fn has_plugins(p: &protocol::model::Project) -> bool {
 }
 
 pub fn show(window: &adw::ApplicationWindow, app: &Rc<App>) {
-    let Some(pattern) = app.current_pattern() else {
-        app.toast("Add a pattern before exporting");
+    let (song_end, loop_on) = {
+        let s = app.session.borrow();
+        let p = &s.document().project;
+        (
+            p.clips.iter().map(|c| c.end()).max().unwrap_or(0),
+            p.loop_region.enabled && p.loop_region.end > p.loop_region.start,
+        )
+    };
+    if song_end == 0 && !loop_on {
+        app.toast("Add a clip to the timeline before exporting");
         return;
     };
     let plugins = has_plugins(&app.session.borrow().document().project);
@@ -77,9 +85,19 @@ pub fn show(window: &adw::ApplicationWindow, app: &Rc<App>) {
     format.set_title("Format");
     format.set_subtitle("WAV file");
     format.set_model(Some(&gtk::StringList::new(&names)));
-    let repeats = adw::SpinRow::with_range(1.0, 16.0, 1.0);
-    repeats.set_title("Repeats");
-    repeats.set_subtitle("How many times the pattern plays");
+    // What to render: the whole song, or the loop region when it is on.
+    let what = adw::ComboRow::new();
+    what.set_title("What to Export");
+    let mut choices = vec!["Whole Song"];
+    if loop_on {
+        choices.push("Loop Region");
+    }
+    what.set_model(Some(&gtk::StringList::new(&choices)));
+    what.set_sensitive(choices.len() > 1);
+    if song_end == 0 {
+        what.set_selected(1);
+    }
+    let repeats = what;
     group.add(&format);
     group.add(&repeats);
     body.append(&group);
@@ -117,7 +135,9 @@ pub fn show(window: &adw::ApplicationWindow, app: &Rc<App>) {
             return;
         }
         let fmt = FORMATS[(format.selected() as usize).min(FORMATS.len() - 1)].1;
-        let loops = repeats.value() as u32;
+        // "Whole Song": from the start to the end of the last clip; "Loop
+        // Region": the engine renders the loop when no range is given.
+        let range = (repeats.selected() == 0 && song_end > 0).then_some((0, song_end));
         let name = files::display_name(&app2.ui.borrow().path);
         let dialog = gtk::FileDialog::builder()
             .title("Export Audio")
@@ -137,8 +157,8 @@ pub fn show(window: &adw::ApplicationWindow, app: &Rc<App>) {
             let Ok(file) = res else { return };
             let Some(path) = file.path() else { return };
             start(
-                &app3, &dlg2, &btn2, &progress2, &cancel2, &running2, &format2, &repeats2, pattern,
-                loops, fmt, path,
+                &app3, &dlg2, &btn2, &progress2, &cancel2, &running2, &format2, &repeats2, range,
+                fmt, path,
             );
         });
     });
@@ -154,9 +174,8 @@ fn start(
     cancel: &Arc<AtomicBool>,
     running: &Rc<std::cell::Cell<bool>>,
     format: &adw::ComboRow,
-    repeats: &adw::SpinRow,
-    pattern: protocol::ids::PatternId,
-    loops: u32,
+    repeats: &adw::ComboRow,
+    range: Option<(u32, u32)>,
     fmt: WavFormat,
     path: PathBuf,
 ) {
@@ -201,10 +220,9 @@ fn start(
             let frames = engine_adapter::render(
                 RenderJob {
                     project,
-                    pattern,
-                    loops,
+                    range,
+                    tail_seconds: 2.0,
                     sample_rate: rate,
-                    song_tail: None,
                     store: Some(store),
                 },
                 &slots,
