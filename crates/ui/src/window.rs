@@ -186,7 +186,10 @@ pub fn build(gapp: &adw::Application, app: Rc<App>) -> adw::ApplicationWindow {
     center.add_top_bar(&transport.bar);
     center.add_top_bar(&audio_banner);
     center.add_top_bar(&banner);
-    center.set_content(Some(&toasts));
+    // The pill sits over the pages, below the header.
+    let content_overlay = gtk::Overlay::new();
+    content_overlay.set_child(Some(&toasts));
+    center.set_content(Some(&content_overlay));
     center.add_bottom_bar(&switcher_bar);
 
     // ---- side panes ----
@@ -225,6 +228,7 @@ pub fn build(gapp: &adw::Application, app: Rc<App>) -> adw::ApplicationWindow {
     let overlay = gtk::Overlay::new();
     overlay.set_child(Some(&browser_split));
     overlay.add_overlay(&palette::install());
+    crate::presence_ui::install(&app, &window, &overlay, &content_overlay);
     window.set_content(Some(&overlay));
     {
         // One toast per message: a repeat of a toast that is showing is

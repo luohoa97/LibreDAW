@@ -262,6 +262,7 @@ impl ChannelList {
     ) -> gtk::Box {
         let content = gtk::Box::new(gtk::Orientation::Horizontal, 4);
         content.add_css_class("ldaw-channel-row");
+        crate::presence_ui::tag(&content, protocol::control::Focus::Channel(id));
         content.set_hexpand(false);
         if muted {
             content.add_css_class("muted");

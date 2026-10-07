@@ -30,6 +30,7 @@ use protocol::edit::{Edit, NewInstrument};
 use crate::app::{App, UiCommand};
 use crate::engine_adapter::{self, RenderJob};
 use crate::files;
+use crate::presence;
 use crate::settings::{BUFFER_SIZES, ColorScheme};
 use doc::history::{Author, Done, EditFailure, HistoryError, Scope, Submitted, describe_edit};
 
@@ -48,6 +49,8 @@ pub struct Activity {
     pub text: String,
     pub author: String,
     pub unix_s: u64,
+    /// What the entry changed; hovering it glows these (18.1).
+    pub focus: Vec<Focus>,
 }
 
 /// What the banner, the indicator, and the Agent page show.
@@ -240,10 +243,21 @@ pub fn start_in(dir: PathBuf, agent_request: bool) -> (Option<Bridge>, Option<St
 impl Bridge {
     pub fn set_enabled(&mut self, on: bool) {
         self.server.set_agents_enabled(on);
+        presence::on_enabled(on);
         self.ui.enabled = on;
         if on {
             self.ui.wants_control = false;
         }
+    }
+
+    /// The hard stop (Escape, the pill): no more agent requests, nothing
+    /// held or queued for them.
+    pub fn stop_agents(&mut self) {
+        self.set_enabled(false);
+        self.held.clear();
+        self.queued.clear();
+        self.ui.pending.clear();
+        self.ui.activity = None;
     }
 
     pub fn server_clients(&self) -> Vec<ClientInfo> {
@@ -263,6 +277,14 @@ impl Bridge {
 
 fn changed(app: &App) {
     app.command(UiCommand::AgentChanged);
+}
+
+/// Stops every agent (the pill's Stop, Escape): see `Bridge::stop_agents`.
+pub fn stop_agents(app: &App) {
+    if let Some(b) = app.bridge.borrow_mut().as_mut() {
+        b.stop_agents();
+    }
+    changed(app);
 }
 
 /// Called from the 10 ms tick.
@@ -365,6 +387,10 @@ fn reply(app: &App, ticket: Ticket, outcome: Outcome) {
 
 /// First look at a request: PRIVILEGED ones wait for the human.
 fn handle(app: &Rc<App>, inc: Incoming) {
+    if presence::refuse(&inc.client) {
+        reply(app, inc.ticket, bad(presence::STOPPED));
+        return;
+    }
     // Scripts do not run in the Flatpak build (SPEC 19.3); they get a
     // clear answer instead of a silent failure.
     if inc.client.transport == Transport::Script && in_flatpak() {
@@ -578,12 +604,13 @@ fn set_setting(app: &Rc<App>, s: Setting, author: &Author) -> Outcome {
     ok(ReplyBody::Done)
 }
 
-fn note_activity(app: &App, author: &Author, edits: &[Edit]) {
+fn note_activity(app: &App, author: &Author, edits: &[Edit], created: &[u32]) {
     let text = match edits {
         [] => return,
         [one] => describe_edit(one),
         [first, rest @ ..] => format!("{} and {} more", describe_edit(first), rest.len()),
     };
+    let focus = presence::foci_of_edits(edits, created, &app.session.borrow().document().project);
     if let Some(b) = app.bridge.borrow_mut().as_mut() {
         b.ui.recent.insert(
             0,
@@ -594,6 +621,7 @@ fn note_activity(app: &App, author: &Author, edits: &[Edit]) {
                     .duration_since(UNIX_EPOCH)
                     .map(|d| d.as_secs())
                     .unwrap_or(0),
+                focus,
             },
         );
         b.ui.recent.truncate(30);
@@ -602,6 +630,7 @@ fn note_activity(app: &App, author: &Author, edits: &[Edit]) {
 
 /// An agent declares (or ends, with `None` text) what it is doing (18.2).
 pub fn set_activity(app: &App, author: &Author, text: Option<&str>, focus: Option<Focus>) {
+    presence::on_activity(author, text.and_then(activity_text), focus);
     let client = match author {
         Author::Agent(tag) => tag
             .rsplit('-')
@@ -626,11 +655,11 @@ pub fn set_activity(app: &App, author: &Author, text: Option<&str>, focus: Optio
         b.ui.activity = new;
     }
     if let Some(text) = log {
-        push_activity(app, author, text);
+        push_activity(app, author, text, focus.into_iter().collect());
     }
 }
 
-fn push_activity(app: &App, author: &Author, text: String) {
+fn push_activity(app: &App, author: &Author, text: String, focus: Vec<Focus>) {
     if let Some(b) = app.bridge.borrow_mut().as_mut() {
         b.ui.recent.insert(
             0,
@@ -641,6 +670,7 @@ fn push_activity(app: &App, author: &Author, text: String) {
                     .duration_since(UNIX_EPOCH)
                     .map(|d| d.as_secs())
                     .unwrap_or(0),
+                focus,
             },
         );
         b.ui.recent.truncate(30);
@@ -701,7 +731,10 @@ fn kit_add(
                     &a,
                     &author,
                     agent_string(&format!("Added the {} kit", kit.title)),
+                    Vec::new(),
                 );
+                let created: Vec<u32> = ids.iter().map(|c| c.0).collect();
+                presence::on_applied(&a, &author, &created, "Adding a drum kit");
                 ok(ReplyBody::Applied(protocol::edit::Applied {
                     revision: revision(&a),
                     created: ids.iter().map(|c| c.0).collect(),
@@ -736,7 +769,9 @@ fn execute(app: &Rc<App>, ticket: Ticket, author: &Author, req: Request) -> Opti
             projects: list_projects(app),
         }),
         RequestBody::ProjectNew { .. } => {
+            let previous = app.ui.borrow().path.clone();
             files::fresh_project(app);
+            presence::on_project_changed(app, author, "a new project", previous);
             ok(ReplyBody::Done)
         }
         RequestBody::ProjectOpen { path } => {
@@ -746,7 +781,13 @@ fn execute(app: &Rc<App>, ticket: Ticket, author: &Author, req: Request) -> Opti
                     what: "project in the projects folder".into(),
                 }));
             }
+            let previous = app.ui.borrow().path.clone();
+            let name = p
+                .file_stem()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_default();
             files::open_path(app, p);
+            presence::on_project_changed(app, author, &name, previous);
             ok(ReplyBody::Done)
         }
         RequestBody::ProjectSave => {
@@ -778,7 +819,8 @@ fn execute(app: &Rc<App>, ticket: Ticket, author: &Author, req: Request) -> Opti
                 .submit(author.clone(), None, edits.clone(), token);
             match r {
                 Ok(Submitted::Applied(a)) => {
-                    note_activity(app, author, &edits);
+                    note_activity(app, author, &edits, &a.created);
+                    presence::on_edit(app, author, &edits, &a.created);
                     app.notify();
                     ok(ReplyBody::Applied(wire(a)))
                 }
@@ -984,7 +1026,7 @@ pub fn on_done(app: &Rc<App>, done: Vec<Done>) {
         };
         let outcome = match d.result {
             Ok(a) => {
-                note_activity(app, &author, &[]);
+                presence::on_applied(app, &author, &a.created, "Editing the project");
                 ok(ReplyBody::Applied(wire(a)))
             }
             Err(f) => err(map_failure(f)),
