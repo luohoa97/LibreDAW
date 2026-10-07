@@ -11,5 +11,6 @@ name = "doc"
 
 [dependencies]
 libredaw-protocol = { path = "../protocol" }
+libredaw-audiofile = { path = "../audiofile" }
 serde = { version = "1", features = ["derive"] }
 toml = "1"
