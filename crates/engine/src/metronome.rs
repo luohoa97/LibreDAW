@@ -206,10 +206,13 @@ impl Metronome {
 
 /// Everything one audio callback does. The live stream and the offline tests
 /// both call `process`, so the tests cover the real callback path.
+/// Callback index at which the scheduling policy is read.
+const SCHED_PROBE_AFTER: u32 = 100;
+
 pub struct CallbackState {
     metronome: Metronome,
     recorder: Arc<Recorder>,
-    sched_probed: bool,
+    sched_calls: u32,
 }
 
 impl CallbackState {
@@ -217,7 +220,7 @@ impl CallbackState {
         CallbackState {
             metronome,
             recorder,
-            sched_probed: false,
+            sched_calls: 0,
         }
     }
 
@@ -229,9 +232,10 @@ impl CallbackState {
         let frames = (data.len() / self.metronome.channels()) as u32;
         self.recorder
             .push_callback(self.recorder.elapsed_ns(), stream_ns, frames);
-        if !self.sched_probed {
-            // Once, measurement only: two scheduler queries on the callback thread.
-            self.sched_probed = true;
+        // Once, measurement only. Backends promote the thread asynchronously
+        // (cpal does it from a helper thread), so probe after a warm-up.
+        self.sched_calls = self.sched_calls.saturating_add(1);
+        if self.sched_calls == SCHED_PROBE_AFTER {
             self.recorder.set_sched(crate::rt::thread_sched());
         }
         self.metronome.render(data);

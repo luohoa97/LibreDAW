@@ -212,7 +212,8 @@ pub fn analyze(info: RunInfo, rec: &Recorder) -> Report {
 }
 
 pub fn sched_name(policy: i32) -> &'static str {
-    match policy {
+    // SCHED_RESET_ON_FORK (0x40000000) is OR-ed in by rtkit; ignore it.
+    match policy & !0x4000_0000 {
         0 => "OTHER",
         1 => "FIFO",
         2 => "RR",
