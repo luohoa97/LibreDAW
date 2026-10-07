@@ -157,7 +157,7 @@ pub fn emit(p: &Project, next_id: u32) -> Result<String, ValidationError> {
             w.push_str("\n[[tracks.inserts]]\n");
             match ins {
                 Insert::Clap(r) => emit_clap(w, r),
-                Insert::Builtin { instance, fx } => emit_builtin(w, *instance, fx),
+                Insert::Builtin { instance, fx, .. } => emit_builtin(w, *instance, fx),
             }
         }
     }

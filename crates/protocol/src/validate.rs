@@ -235,7 +235,7 @@ pub fn validate(p: &Project) -> Result<(), ValidationError> {
         for ins in &t.inserts {
             match ins {
                 Insert::Clap(r) => check_clap(r, &mut ids)?,
-                Insert::Builtin { instance, fx } => {
+                Insert::Builtin { instance, fx, .. } => {
                     unique(&mut ids, instance.0)?;
                     check_fx(fx)?;
                 }

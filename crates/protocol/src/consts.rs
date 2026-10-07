@@ -62,7 +62,7 @@ pub const MAX_EDITS_PER_REQUEST: usize = 10_000;
 pub const MAX_AGENT_STRING_CHARS: usize = 64;
 
 /// Project file format version (7.3). Bump on any schema change.
-pub const FORMAT_VERSION: u32 = 3;
+pub const FORMAT_VERSION: u32 = 4;
 
 const _: () = assert!(RETIRE_RING_CAP > STATE_RING_CAP);
 

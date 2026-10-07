@@ -32,7 +32,16 @@ id_type!(
     InstanceId,
     /// A clip on an instrument's row of the timeline (20.2).
     ClipId,
+    /// A pattern: a named group of clips across rows (20.7).
+    GroupId,
+    /// A shape: an automation curve (24.2-1).
+    ShapeId,
 );
+
+impl PatternId {
+    /// The content of an audio clip, which has no notes (21.1).
+    pub const NONE: PatternId = PatternId(0);
+}
 
 impl TrackId {
     /// The master track always has id 0; the id counter starts at 1.

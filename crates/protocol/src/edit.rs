@@ -10,7 +10,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::beats::{Bass808Param, BuiltinFxKind, SampleMode, SamplerParam, SaturatorCurve};
-use crate::ids::{ChannelId, ClipId, InstanceId, NoteId, PatternId, TrackId};
+use crate::ids::{ChannelId, ClipId, GroupId, InstanceId, NoteId, PatternId, ShapeId, TrackId};
 use crate::model::{Mix, SampleRef, SynthParam, SynthParams, Wave};
 use crate::validate::ValidationError;
 
@@ -63,6 +63,8 @@ pub enum NewInstrument {
     Bass808 {
         mono: bool,
     },
+    /// An audio row for audio clips (21.1).
+    Audio,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -391,6 +393,59 @@ pub enum Edit {
         start: u32,
         end: u32,
         enabled: bool,
+    },
+    /// An audio clip of a sample already in the project (21.1), on an
+    /// Audio row. `offset` trims the start; `len` the visible length.
+    AddAudioClip {
+        instrument: ChannelId,
+        sample: crate::model::SampleHash,
+        start: u32,
+        len: u32,
+        offset: u32,
+    },
+    SetClipAudio {
+        clip: ClipId,
+        /// Gain in thousandths of a dB.
+        gain_mdb: i32,
+        fade_in: u32,
+        fade_out: u32,
+    },
+    /// Groups clips (one or more per row) into a new pattern instance
+    /// (20.7). They are moved to share the earliest start.
+    MakePattern {
+        clips: Vec<ClipId>,
+        name: String,
+    },
+    /// Places another instance of a pattern at `start`: linked copies of
+    /// the members of its first instance.
+    PlacePattern {
+        group: GroupId,
+        start: u32,
+    },
+    /// Removes clips from their pattern instance (they stay on the rows).
+    Ungroup {
+        clips: Vec<ClipId>,
+    },
+    RenameGroup {
+        group: GroupId,
+        name: String,
+    },
+    AddShape {
+        target: crate::model::ShapeTarget,
+        points: Vec<crate::model::ShapePoint>,
+    },
+    /// Replaces all points; they are sorted by tick.
+    SetShapePoints {
+        shape: ShapeId,
+        points: Vec<crate::model::ShapePoint>,
+    },
+    RemoveShape {
+        shape: ShapeId,
+    },
+    SetInsertBypass {
+        track: TrackId,
+        instance: InstanceId,
+        bypass: bool,
     },
 }
 

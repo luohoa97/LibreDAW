@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::beats::{Bass808, BuiltinFx, Sampler};
 use crate::consts::{DEFAULT_STEP_TICKS, PPQ};
-use crate::ids::{ChannelId, ClipId, InstanceId, NoteId, PatternId, TrackId};
+use crate::ids::{ChannelId, ClipId, GroupId, InstanceId, NoteId, PatternId, ShapeId, TrackId};
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Project {
@@ -34,6 +34,12 @@ pub struct Project {
     /// Loop region of the timeline (20.2).
     #[serde(default)]
     pub loop_region: LoopRegion,
+    /// Patterns (20.7).
+    #[serde(default)]
+    pub groups: Vec<PatternGroup>,
+    /// Automation curves (24.2-1), sorted by id.
+    #[serde(default)]
+    pub shapes: Vec<Shape>,
 }
 
 impl Project {
@@ -55,6 +61,8 @@ impl Project {
             samples: Vec::new(),
             clips: Vec::new(),
             loop_region: LoopRegion::default(),
+            groups: Vec::new(),
+            shapes: Vec::new(),
         }
     }
 
@@ -166,6 +174,8 @@ pub enum Instrument {
     Clap(ClapRef),
     Sampler(Sampler),
     Bass808(Bass808),
+    /// An audio row: plays the audio clips on it (21.1).
+    Audio,
 }
 
 /// A CLAP plugin instance as stored in the document (5.1, 7.5, 17.1).
@@ -497,7 +507,13 @@ pub struct Track {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Insert {
     Clap(ClapRef),
-    Builtin { instance: InstanceId, fx: BuiltinFx },
+    Builtin {
+        instance: InstanceId,
+        fx: BuiltinFx,
+        /// Skipped by the engine when true (24.1).
+        #[serde(default)]
+        bypass: bool,
+    },
 }
 
 impl Insert {
@@ -547,6 +563,132 @@ pub struct Clip {
     pub offset: u32,
     #[serde(default)]
     pub muted: bool,
+    /// Set for an audio clip (21.1); then `pattern` is `PatternId::NONE`.
+    #[serde(default)]
+    pub audio: Option<AudioSource>,
+    /// Set when the clip belongs to a pattern instance (20.7).
+    #[serde(default)]
+    pub group: Option<ClipGroup>,
+}
+
+/// What an audio clip plays (21.1). Offsets and lengths are ticks on the
+/// timeline; the engine converts with the tempo, without stretching.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AudioSource {
+    /// A sample in `Project::samples`.
+    pub sample: SampleHash,
+    /// Gain in thousandths of a dB (an integer keeps `Clip` `Eq`).
+    #[serde(default)]
+    pub gain_mdb: i32,
+    #[serde(default)]
+    pub fade_in: u32,
+    #[serde(default)]
+    pub fade_out: u32,
+}
+
+/// SHA-256 of a sample; serialized as 64 lowercase hex digits, like
+/// `SampleRef::hash`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct SampleHash(pub [u8; 32]);
+
+impl SampleHash {
+    pub fn parse(hex: &str) -> Option<SampleHash> {
+        if hex.len() != 64 {
+            return None;
+        }
+        let mut out = [0u8; 32];
+        for (i, b) in out.iter_mut().enumerate() {
+            *b = u8::from_str_radix(hex.get(i * 2..i * 2 + 2)?, 16).ok()?;
+        }
+        Some(SampleHash(out))
+    }
+
+    pub fn to_hex(&self) -> String {
+        self.0.iter().map(|b| format!("{b:02x}")).collect()
+    }
+}
+
+impl Serialize for SampleHash {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_str(&self.to_hex())
+    }
+}
+
+impl<'de> Deserialize<'de> for SampleHash {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<SampleHash, D::Error> {
+        let s = String::deserialize(d)?;
+        SampleHash::parse(&s).ok_or_else(|| serde::de::Error::custom("sample hash must be 64 hex digits"))
+    }
+}
+
+/// Membership of a clip in one placed instance of a pattern (20.7).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ClipGroup {
+    pub group: GroupId,
+    /// Which placement of the pattern; unique per group.
+    pub instance: u32,
+}
+
+/// A named group of clips across rows, placed as one block (20.7).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PatternGroup {
+    pub id: GroupId,
+    pub name: String,
+    /// 0xRRGGBB.
+    pub color: u32,
+}
+
+/// What a shape controls (24.2-1).
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ShapeTarget {
+    /// Track volume in dB (-60..+6).
+    Volume { track: TrackId },
+    /// Track pan (-1..1).
+    Pan { track: TrackId },
+    /// Instrument pitch offset in semitones (-24..24).
+    Pitch { instrument: ChannelId },
+    /// Instrument low-pass cutoff, 0..1 (closed..open).
+    Filter { instrument: ChannelId },
+    /// A built-in effect parameter, in its own range.
+    FxParam { track: TrackId, instance: InstanceId, param: u16 },
+}
+
+/// How a shape moves from one point to the next (24.2-1).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Curve {
+    #[default]
+    Smooth,
+    Linear,
+    Hold,
+    Stairs,
+    Pulse,
+    Wave,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ShapePoint {
+    /// Ticks on the timeline.
+    pub tick: u32,
+    pub value: f32,
+    /// Shape of the segment that starts at this point.
+    #[serde(default)]
+    pub curve: Curve,
+}
+
+/// An automation curve on the timeline (24.2-1). Points are sorted by
+/// tick; before the first and after the last the value holds.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Shape {
+    pub id: ShapeId,
+    pub target: ShapeTarget,
+    pub points: Vec<ShapePoint>,
 }
 
 impl Clip {
