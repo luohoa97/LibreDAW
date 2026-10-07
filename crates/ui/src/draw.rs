@@ -11,15 +11,7 @@
 use gtk::prelude::*;
 use gtk::{gdk, graphene, gsk, pango};
 
-fn rgba(r: f32, g: f32, b: f32, a: f32) -> gdk::RGBA {
-    gdk::RGBA::new(r, g, b, a)
-}
-
-/// A named theme color, if the theme defines it.
-#[allow(deprecated)]
-fn named(w: &impl IsA<gtk::Widget>, name: &str) -> Option<gdk::RGBA> {
-    w.style_context().lookup_color(name)
-}
+use crate::palette::{self, Role};
 
 /// `t` of the way from `bg` to `c`, opaque.
 pub fn mix(c: &gdk::RGBA, bg: &gdk::RGBA, t: f32) -> gdk::RGBA {
@@ -69,24 +61,21 @@ pub struct Palette {
 }
 
 impl Palette {
-    /// The palette for the theme `w` is drawn in.
-    pub fn of(w: &impl IsA<gtk::Widget>) -> Palette {
-        let dark = adw::StyleManager::default().is_dark();
-        let bg = named(w, "view_bg_color").unwrap_or(if dark {
-            rgba(0.118, 0.118, 0.118, 1.0)
-        } else {
-            rgba(1.0, 1.0, 1.0, 1.0)
-        });
-        let fg = named(w, "view_fg_color").unwrap_or(if dark {
-            rgba(1.0, 1.0, 1.0, 1.0)
-        } else {
-            rgba(0.0, 0.0, 0.0, 0.8)
-        });
-        let fg = with_alpha(&fg, 1.0);
-        let accent = named(w, "accent_bg_color").unwrap_or(rgba(0.208, 0.518, 0.894, 1.0));
-        let ok = named(w, "success_color").unwrap_or(rgba(0.18, 0.76, 0.49, 1.0));
-        let warn = named(w, "warning_color").unwrap_or(rgba(0.96, 0.83, 0.18, 1.0));
-        let error = named(w, "error_color").unwrap_or(rgba(0.88, 0.11, 0.14, 1.0));
+    /// The palette for the current theme. `_w` is kept so call sites read
+    /// the same; the colors come from `palette::colors()` (probe widgets).
+    pub fn of(_w: &impl IsA<gtk::Widget>) -> Palette {
+        Palette::current()
+    }
+
+    /// The palette for the current theme.
+    pub fn current() -> Palette {
+        let c = palette::colors();
+        let bg = c.get(Role::ViewBg);
+        let fg = with_alpha(&c.get(Role::ViewFg), 1.0);
+        let accent = c.get(Role::AccentBg);
+        let ok = c.get(Role::Success);
+        let warn = c.get(Role::Warning);
+        let error = c.get(Role::Error);
         // Selected notes: the accent pushed toward the foreground.
         let note_sel = mix(&fg, &accent, 0.55);
         Palette {
@@ -101,7 +90,7 @@ impl Palette {
             text: fg,
             text_dim: mix(&fg, &bg, 0.6),
             accent,
-            accent_fg: named(w, "accent_fg_color").unwrap_or(rgba(1.0, 1.0, 1.0, 1.0)),
+            accent_fg: c.get(Role::AccentFg),
             note: accent,
             note_edge: mix(&bg, &accent, 0.45),
             note_sel,

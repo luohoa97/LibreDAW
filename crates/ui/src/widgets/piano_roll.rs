@@ -58,6 +58,10 @@ mod imp {
         pub pointer: Cell<(f64, f64)>,
         pub last_playhead: Cell<u64>,
         pub in_gesture: Cell<bool>,
+        /// Key held down on the keyboard column (sounds while held).
+        pub held_key: Cell<Option<u8>>,
+        /// Last pitch previewed during a note drag.
+        pub last_preview: Cell<Option<u8>>,
     }
 
     impl Default for PianoRoll {
@@ -77,6 +81,8 @@ mod imp {
                 pointer: Cell::new((100.0, 100.0)),
                 last_playhead: Cell::new(0),
                 in_gesture: Cell::new(false),
+                held_key: Cell::new(None),
+                last_preview: Cell::new(None),
             }
         }
     }
@@ -440,6 +446,18 @@ impl PianoRoll {
             return;
         }
 
+        // Keyboard column: the key sounds while the button is held.
+        if x < vp.key_w && y >= vp.grid_top() && y < vp.grid_bottom() {
+            let key = vp.y_to_key(y);
+            if (0..=127).contains(&key) {
+                imp.held_key.set(Some(key as u8));
+                imp.cursor.set((imp.cursor.get().0, key as u8));
+                app.preview_on(v.channel, key as u8, DEFAULT_STEP_VEL);
+            }
+            self.after_input();
+            return;
+        }
+
         if vp.in_vel_lane(x, y) {
             if let Some(id) = hit_stem(&v.notes, &vp, x, y) {
                 let sel = {
@@ -499,6 +517,8 @@ impl PianoRoll {
                 }
                 if let Some(n) = v.notes.iter().find(|n| n.id == id) {
                     imp.cursor.set((n.start, n.key));
+                    imp.last_preview.set(Some(n.key));
+                    app.preview_pulse(v.channel, n.key, n.vel, 300);
                 }
             }
             None if shift => {
@@ -529,6 +549,13 @@ impl PianoRoll {
                     if let Some(a) = r {
                         let id = NoteId(a.created[0]);
                         *imp.selection.borrow_mut() = vec![id];
+                        imp.last_preview.set(Some(key as u8));
+                        app.preview_pulse(
+                            v.channel,
+                            key as u8,
+                            DEFAULT_STEP_VEL,
+                            self.hold_ms(snap),
+                        );
                         let made = Note {
                             id,
                             start: tick,
@@ -559,8 +586,30 @@ impl PianoRoll {
         }
     }
 
+    /// How long a preview of a note of `ticks` sounds: its length, at most
+    /// 500 ms and at least 80 ms.
+    fn hold_ms(&self, ticks: u32) -> u64 {
+        let bpm = self.app().session.borrow().document().project.tempo_bpm;
+        let ms = ticks as f64 / protocol::consts::PPQ as f64 * 60_000.0 / bpm.max(1.0);
+        (ms as u64).clamp(80, 500)
+    }
+
     fn drag_to(&self, x: f64, y: f64) {
         let imp = self.imp();
+        if let Some(held) = imp.held_key.get() {
+            // Sliding over the keyboard plays each key it reaches.
+            let vp = imp.vp.get();
+            let key = vp.y_to_key(y).clamp(0, 127) as u8;
+            if key != held
+                && let Some(v) = self.view()
+            {
+                imp.held_key.set(Some(key));
+                imp.cursor.set((imp.cursor.get().0, key));
+                self.app().preview_on(v.channel, key, DEFAULT_STEP_VEL);
+                self.after_input();
+            }
+            return;
+        }
         if let Some(((x0, y0), _)) = imp.marquee.get() {
             imp.marquee.set(Some(((x0, y0), (x, y))));
             if let Some(v) = self.view() {
@@ -580,6 +629,11 @@ impl PianoRoll {
                     .and_then(|v| v.notes.into_iter().find(|n| n.id == d.ids[0]))
             {
                 imp.cursor.set((n.start, n.key));
+                // Each new pitch of a dragged note sounds once.
+                if imp.last_preview.get() != Some(n.key) {
+                    imp.last_preview.set(Some(n.key));
+                    self.app().preview_pulse(v.channel, n.key, n.vel, 300);
+                }
             }
             *imp.drag.borrow_mut() = Some(d);
         }
@@ -590,6 +644,12 @@ impl PianoRoll {
         let imp = self.imp();
         imp.marquee.set(None);
         imp.drag.borrow_mut().take();
+        // Letting go ends a held key. Pulses (new notes, dragged notes)
+        // end on their own timer, so a quick click is still heard.
+        if imp.held_key.take().is_some() {
+            self.app().preview_off();
+        }
+        imp.last_preview.set(None);
         if imp.in_gesture.replace(false) {
             self.app().gesture_end();
         }
@@ -707,6 +767,12 @@ impl PianoRoll {
                             }],
                         }]) {
                             *imp.selection.borrow_mut() = vec![NoteId(a.created[0])];
+                            app.preview_pulse(
+                                v.channel,
+                                k,
+                                DEFAULT_STEP_VEL,
+                                self.hold_ms(snap as u32),
+                            );
                         }
                     }
                 }

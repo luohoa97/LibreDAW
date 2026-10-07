@@ -219,6 +219,24 @@ impl StepGrid {
         } else {
             self.app().edit_quiet(e);
         }
+        if on {
+            self.preview_row(row);
+        }
+    }
+
+    /// Plays the channel's root key (a step plays that key, 5.2).
+    fn preview_row(&self, row: usize) {
+        let Some(channel) = self.channel_at(row) else {
+            return;
+        };
+        let app = self.app();
+        let key = {
+            let s = app.session.borrow();
+            s.document().project.channel(channel).map(|c| c.root_key)
+        };
+        if let Some(key) = key {
+            app.preview_pulse(channel, key, crate::document::DEFAULT_STEP_VEL, 250);
+        }
     }
 
     fn press(&self, x: f64, y: f64) {
@@ -231,6 +249,7 @@ impl StepGrid {
                 if let Some(c) = self.channel_at(row) {
                     self.imp().cursor.set((row, self.imp().cursor.get().1));
                     self.app().select_channel(c);
+                    self.preview_row(row);
                 }
             }
             Hit::Cell { row, step } => {
