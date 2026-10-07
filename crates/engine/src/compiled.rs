@@ -193,7 +193,9 @@ pub enum InstrumentC {
     /// Sample playback (15.1); silent until the sampler lands.
     Sampler,
     /// 808 bass (15.2); silent until the 808 lands.
-    Bass808 { mono: bool },
+    Bass808 {
+        mono: bool,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]

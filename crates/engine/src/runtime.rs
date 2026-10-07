@@ -3,6 +3,7 @@
 //! once, sized to the fixed maxima, never reallocated while the stream runs.
 //! The live callback and the offline renderer call the same `process_*`.
 
+use crate::bass808::{Bass808, BassCtl};
 use crate::compiled::{Compiled, InstrumentC};
 use crate::metronome::Click;
 use crate::mixer::{Fader, MuteSolo, SMOOTH_SECONDS, resolve_solo};
@@ -11,7 +12,7 @@ use crate::plugins::{
 };
 use crate::preview::{PREVIEW_CAP, PreviewNote, Previews, TAIL_SECONDS, insert_sorted};
 use crate::rt::{RtGuard, enter_rt_fp_mode, restore_fp_mode};
-use crate::sequencer::{BEAT_CAP, Beat, EVENT_CAP, SeqEvent, Sequencer, TraceEvent};
+use crate::sequencer::{BEAT_CAP, Beat, ChokeEvent, EVENT_CAP, SeqEvent, Sequencer, TraceEvent};
 use crate::synth::{Synth, SynthCtl};
 use protocol::consts::{
     COMMAND_RING_CAP, EVENT_RING_CAP, MAX_BLOCK, MAX_CHANNELS, MAX_INSERTS, MAX_TEMPO_BPM,
@@ -26,6 +27,9 @@ use rtrb::{Consumer, Producer, RingBuffer};
 use std::sync::Arc;
 use std::sync::atomic::Ordering::Relaxed;
 use std::time::Instant;
+
+/// Choke triggers per sub-block (more are dropped).
+const CHOKE_CAP: usize = 256;
 
 /// The atomics shared with the GTK thread (SPEC 4.3, 4.4, 17.1).
 #[derive(Clone)]
@@ -297,6 +301,8 @@ pub struct Runtime {
     track_gen: [SlotGen; TRACK_SLOTS],
     seq: Sequencer,
     synths: Vec<Synth>,
+    bass: Vec<Bass808>,
+    chokes: Vec<ChokeEvent>,
     chan_fader: Vec<Fader>,
     track_fader: Vec<Fader>,
     plug: PluginState,
@@ -340,6 +346,8 @@ impl Runtime {
             chan_gen: [0; MAX_CHANNELS],
             track_gen: [0; TRACK_SLOTS],
             synths: vec![Synth::new(); MAX_CHANNELS],
+            bass: vec![Bass808::new(); MAX_CHANNELS],
+            chokes: Vec::with_capacity(CHOKE_CAP),
             chan_fader: vec![Fader::default(); MAX_CHANNELS],
             track_fader: vec![Fader::default(); TRACK_SLOTS],
             plug: PluginState::new(),
@@ -496,7 +504,8 @@ impl Runtime {
     }
 
     pub fn active_voices(&self, slot: ChannelSlot) -> usize {
-        self.synths[slot.0 as usize].active_voices()
+        let s = slot.0 as usize;
+        self.synths[s].active_voices() + self.bass[s].active_voices()
     }
 
     pub fn has_compiled(&self) -> bool {
@@ -524,6 +533,7 @@ impl Runtime {
                 self.release_previews(Some(s as u16));
                 self.preview_tail[s] = 0;
                 self.synths[s].reset();
+                self.bass[s].reset();
                 self.chan_fader[s].reset();
                 self.chan_gen[s] = new.channel_gen[s];
             }
@@ -711,9 +721,35 @@ impl Runtime {
             }
         }
         let mut ev_mask = 0u64;
+        self.chokes.clear();
         for e in &self.events {
             ev_mask |= 1u64 << e.slot;
+            // A note-on in a choke group stops the group's other channels.
+            if e.on
+                && let Some(ch) = c.channels[e.slot as usize]
+                && ch.choke_group != 0
+                && self.chokes.len() < self.chokes.capacity()
+            {
+                self.chokes.push(ChokeEvent {
+                    offset: e.offset,
+                    group: ch.choke_group,
+                    source: e.slot,
+                });
+            }
         }
+        // A choke wakes the channels of its group so they can fade out.
+        let mut choke_mask = 0u64;
+        for k in &self.chokes {
+            for s in 0..MAX_CHANNELS {
+                if let Some(ch) = c.channels[s]
+                    && ch.choke_group == k.group
+                    && s as u16 != k.source
+                {
+                    choke_mask |= 1u64 << s;
+                }
+            }
+        }
+        ev_mask |= choke_mask;
 
         self.read_mixer(&c);
 
@@ -755,7 +791,34 @@ impl Runtime {
                     }
                     self.track_dirty[t] = true;
                 }
-                InstrumentC::Sampler | InstrumentC::Bass808 { .. } => {}
+                InstrumentC::Bass808 { mono } => {
+                    let has_events = ev_mask & (1u64 << s) != 0;
+                    if !has_events && !self.bass[s].is_active() {
+                        continue;
+                    }
+                    let bctl = BassCtl::read(&self.shared.params, cs, self.sample_rate);
+                    self.mono[..n].fill(0.0);
+                    self.bass[s].render(
+                        &bctl,
+                        mono,
+                        self.sample_rate,
+                        s as u16,
+                        ch.choke_group,
+                        &self.events,
+                        &self.chokes,
+                        &mut self.mono[..n],
+                    );
+                    let f = &mut self.chan_fader[s];
+                    f.set(vol, pan, audible, true, self.ramp);
+                    let (bl, br) = self.buses.lr(t, n);
+                    for i in 0..n {
+                        let x = self.mono[i];
+                        bl[i] += x * f.l.tick();
+                        br[i] += x * f.r.tick();
+                    }
+                    self.track_dirty[t] = true;
+                }
+                InstrumentC::Sampler => {}
                 InstrumentC::Clap => {
                     let ps = PluginSlot::Instrument(cs);
                     if !self.plug.attached(ps) {

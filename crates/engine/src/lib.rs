@@ -3,6 +3,7 @@
 //! stream, offline render and WAV writer.
 
 pub mod api;
+pub mod bass808;
 pub mod compiled;
 pub mod groove;
 pub mod live;
@@ -18,6 +19,8 @@ pub mod runtime;
 pub mod sequencer;
 pub mod synth;
 pub mod tables;
+#[cfg(test)]
+mod testutil;
 pub mod transport;
 pub mod wav;
 
@@ -28,6 +31,6 @@ pub use plugins::PluginApi;
 pub use recorder::Recorder;
 pub use render::{RenderRequest, render_offline};
 pub use runtime::{RtEnds, Runtime, Shared, UiEnds, rings};
-pub use tables::{write_controls, write_synth_params};
+pub use tables::{write_bass808_params, write_controls, write_synth_params};
 pub use transport::{MAX_BLOCK, PPQ, Transport};
 pub use wav::write_wav;

@@ -109,13 +109,21 @@ fn ratchets_follow_the_swing_of_their_step() {
     let starts: Vec<u32> = got.iter().map(|n| n.0).collect();
     assert_eq!(
         starts,
-        vec![STEP + 120, STEP + 120 + 60, STEP + 120 + 120, STEP + 120 + 180]
+        vec![
+            STEP + 120,
+            STEP + 120 + 60,
+            STEP + 120 + 120,
+            STEP + 120 + 180
+        ]
     );
 }
 
 #[test]
 fn a_pitch_lane_offset_keeps_the_note_a_step_note_for_swing() {
-    let got = compiled_notes(pat(500, vec![step_note(1, 1, 1, 5), step_note(2, 3, 1, -7)]));
+    let got = compiled_notes(pat(
+        500,
+        vec![step_note(1, 1, 1, 5), step_note(2, 3, 1, -7)],
+    ));
     assert_eq!(got[0], (STEP + 120, 2 * STEP + 120, 1, 65));
     assert_eq!(got[1], (3 * STEP + 120, 4 * STEP + 120, 2, 53));
 }
@@ -170,23 +178,23 @@ fn ratchet_8_plays_at_exact_samples_through_the_sequencer() {
     for cb in [37usize, 256, 1000] {
         let mut r = rig(&pr, 48000.0, true);
         r.run(48000, cb);
-        let mut ons: Vec<u64> = r
-            .rt
-            .trace()
-            .iter()
-            .filter(|e| e.on)
-            .map(|e| e.sample)
-            .collect();
+        let mut ons: Vec<u64> =
+            r.rt.trace()
+                .iter()
+                .filter(|e| e.on)
+                .map(|e| e.sample)
+                .collect();
         ons.sort();
-        let want: Vec<u64> = (0..8).map(|i| ideal_sample(i * 30, 48000, 120, 1)).collect();
-        assert_eq!(&ons[..8], &want[..], "callback {cb}");
-        let mut offs: Vec<u64> = r
-            .rt
-            .trace()
-            .iter()
-            .filter(|e| !e.on)
-            .map(|e| e.sample)
+        let want: Vec<u64> = (0..8)
+            .map(|i| ideal_sample(i * 30, 48000, 120, 1))
             .collect();
+        assert_eq!(&ons[..8], &want[..], "callback {cb}");
+        let mut offs: Vec<u64> =
+            r.rt.trace()
+                .iter()
+                .filter(|e| !e.on)
+                .map(|e| e.sample)
+                .collect();
         offs.sort();
         let want_off: Vec<u64> = (0..8)
             .map(|i| ideal_sample(i * 30 + 27, 48000, 120, 1))
