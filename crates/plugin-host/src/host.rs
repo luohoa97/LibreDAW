@@ -391,10 +391,14 @@ pub struct Instance {
     _lib: Rc<LoadedLib>,
 }
 
+/// Port layout the host accepts: output port 0 is stereo (the sound), at
+/// most one input port that is stereo. Extra output ports (Surge XT has
+/// per-scene outputs) are fed scratch buffers and ignored. Returns whether
+/// there is an input and the channel counts of the extra outputs.
 fn check_ports(
     plugin: *const clap_plugin,
     ap: *const clap_plugin_audio_ports,
-) -> Result<bool, HostError> {
+) -> Result<(bool, Vec<u32>), HostError> {
     if ap.is_null() {
         return Err(HostError::PortLayout("no audio-ports extension".into()));
     }
@@ -402,28 +406,32 @@ fn check_ports(
     unsafe {
         let (count, get) = ((*ap).count.unwrap(), (*ap).get.unwrap());
         let (n_in, n_out) = (count(plugin, true), count(plugin, false));
-        if n_out != 1 || n_in > 1 {
+        if n_out < 1 || n_in > 1 {
             return Err(HostError::PortLayout(format!(
                 "{n_in} input and {n_out} output ports"
             )));
         }
+        let mut extra = Vec::new();
         for is_in in [true, false] {
-            if (is_in && n_in == 0) || (!is_in && n_out == 0) {
-                continue;
-            }
-            let mut info: clap_audio_port_info = std::mem::zeroed();
-            if !get(plugin, 0, is_in, &mut info) {
-                return Err(HostError::PortLayout("cannot query port 0".into()));
-            }
-            if info.channel_count != 2 {
-                return Err(HostError::PortLayout(format!(
-                    "{} port has {} channels",
-                    if is_in { "input" } else { "output" },
-                    info.channel_count
-                )));
+            let n = if is_in { n_in } else { n_out };
+            for i in 0..n {
+                let mut info: clap_audio_port_info = std::mem::zeroed();
+                if !get(plugin, i, is_in, &mut info) {
+                    return Err(HostError::PortLayout(format!("cannot query port {i}")));
+                }
+                if i == 0 && info.channel_count != 2 {
+                    return Err(HostError::PortLayout(format!(
+                        "{} port has {} channels",
+                        if is_in { "input" } else { "output" },
+                        info.channel_count
+                    )));
+                }
+                if !is_in && i > 0 {
+                    extra.push(info.channel_count);
+                }
             }
         }
-        Ok(n_in == 1)
+        Ok((n_in == 1, extra))
     }
 }
 
@@ -479,9 +487,8 @@ impl Instance {
             timer: get_ext(plugin, CLAP_EXT_TIMER_SUPPORT),
             fd: get_ext(plugin, CLAP_EXT_POSIX_FD_SUPPORT),
         });
-        let has_input = check_ports(plugin, me.inner.exts.get().audio_ports)?;
-        // SAFETY: not shared with any thread yet.
-        unsafe { (*me.inner.rt.get()).has_input = has_input };
+        let (has_input, extra) = check_ports(plugin, me.inner.exts.get().audio_ports)?;
+        me.inner.set_ports(has_input, &extra);
         Ok(me)
     }
 

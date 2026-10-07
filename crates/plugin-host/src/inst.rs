@@ -25,6 +25,7 @@ use clap_sys::ext::timer_support::*;
 use clap_sys::host::clap_host;
 use clap_sys::plugin::clap_plugin;
 use clap_sys::version::CLAP_VERSION;
+use protocol::consts::MAX_BLOCK;
 use std::cell::{Cell, RefCell, UnsafeCell};
 use std::ffi::{CStr, c_char, c_void};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering::*};
@@ -80,7 +81,11 @@ pub(crate) struct RtState {
     pub in_list: clap_input_events,
     pub out_list: clap_output_events,
     pub in_buf: AudioBuf,
-    pub out_buf: AudioBuf,
+    /// Output port 0 (the stereo main output) first, then any extra ports,
+    /// which the host feeds scratch buffers and discards.
+    pub out_bufs: Box<[AudioBuf]>,
+    pub extra_ptrs: Box<[*mut f32]>,
+    pub scratch: Box<[f32]>,
     pub in_ptrs: [*mut f32; 2],
     pub out_ptrs: [*mut f32; 2],
     pub has_input: bool,
@@ -287,7 +292,9 @@ impl Inner {
                     try_push: Some(out_push),
                 },
                 in_buf: null_buf,
-                out_buf: null_buf,
+                out_bufs: vec![null_buf].into_boxed_slice(),
+                extra_ptrs: Box::new([]),
+                scratch: Box::new([]),
                 in_ptrs: [std::ptr::null_mut(); 2],
                 out_ptrs: [std::ptr::null_mut(); 2],
                 has_input,
@@ -307,6 +314,46 @@ impl Inner {
             (*rt).out_list.ctx = rt as *mut c_void;
         }
         b
+    }
+
+    /// Record the port layout (before the instance is shared with a thread).
+    pub fn set_ports(&self, has_input: bool, extra_outputs: &[u32]) {
+        let total: usize = extra_outputs.iter().map(|&c| c as usize).sum();
+        let mut scratch = vec![0.0f32; total * MAX_BLOCK].into_boxed_slice();
+        let mut ptrs = vec![std::ptr::null_mut::<f32>(); total].into_boxed_slice();
+        for (k, p) in ptrs.iter_mut().enumerate() {
+            *p = scratch[k * MAX_BLOCK..].as_mut_ptr();
+        }
+        let base = ptrs.as_mut_ptr();
+        let mut bufs = vec![self.null_buf()];
+        let mut at = 0;
+        for &c in extra_outputs {
+            let mut b = self.null_buf();
+            b.channel_count = c;
+            // SAFETY: `at` stays within `ptrs`, which is kept in `rt` below.
+            b.data32 = unsafe { base.add(at) };
+            bufs.push(b);
+            at += c as usize;
+        }
+        // SAFETY: not shared with any thread yet; the boxes keep their
+        // addresses when moved into `rt`.
+        unsafe {
+            let rt = self.rt.get();
+            (*rt).has_input = has_input;
+            (*rt).scratch = scratch;
+            (*rt).extra_ptrs = ptrs;
+            (*rt).out_bufs = bufs.into_boxed_slice();
+        }
+    }
+
+    fn null_buf(&self) -> AudioBuf {
+        AudioBuf {
+            data32: std::ptr::null_mut(),
+            data64: std::ptr::null_mut(),
+            channel_count: 2,
+            latency: 0,
+            constant_mask: 0,
+        }
     }
 
     pub fn on_audio_thread(&self) -> bool {

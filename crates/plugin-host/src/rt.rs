@@ -179,7 +179,7 @@ pub unsafe fn process(h: PluginHandle, block: &mut RtBlock, out: &mut RtEventSin
             (*rt).in_buf.data32 = (*rt).in_ptrs.as_mut_ptr();
         }
         (*rt).out_ptrs = [block.outputs[0].as_mut_ptr(), block.outputs[1].as_mut_ptr()];
-        (*rt).out_buf.data32 = (*rt).out_ptrs.as_mut_ptr();
+        (*rt).out_bufs[0].data32 = (*rt).out_ptrs.as_mut_ptr();
         (*rt).n_events = 0;
         (*rt).n_out = 0;
 
@@ -232,14 +232,18 @@ pub unsafe fn process(h: PluginHandle, block: &mut RtBlock, out: &mut RtEventSin
             });
         }
 
+        let (out_bufs, n_out_bufs) = {
+            let b = &mut (*rt).out_bufs;
+            (b.as_mut_ptr(), b.len() as u32)
+        };
         let pr = clap_process {
             steady_time: block.steady_time as i64,
             frames_count: block.frames,
             transport: std::ptr::null(),
             audio_inputs: std::ptr::addr_of!((*rt).in_buf),
-            audio_outputs: std::ptr::addr_of_mut!((*rt).out_buf),
+            audio_outputs: out_bufs,
             audio_inputs_count: u32::from((*rt).has_input),
-            audio_outputs_count: 1,
+            audio_outputs_count: n_out_bufs,
             in_events: std::ptr::addr_of!((*rt).in_list),
             out_events: std::ptr::addr_of!((*rt).out_list),
         };
