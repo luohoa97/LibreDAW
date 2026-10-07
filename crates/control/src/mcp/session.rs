@@ -19,12 +19,16 @@ pub const MIXER_URI: &str = "libredaw://mixer";
 pub const SONG_URI: &str = "libredaw://song";
 pub const SUGGESTIONS_URI: &str = "libredaw://suggestions_pending";
 pub const PATTERN_URI_PREFIX: &str = "libredaw://pattern/";
+pub const HISTORY_URI: &str = "libredaw://history";
 
 #[derive(Default)]
 struct Inner {
     initialized: bool,
     sampling: bool,
     revision: Option<u64>,
+    /// Lowest id the document counter can be at: above every id this
+    /// agent saw created (`ids.rs`).
+    id_floor: Option<u32>,
     last_notified: Option<u64>,
     subs: HashSet<String>,
     /// MCP logging level rank (debug 0 .. emergency 7); `None` = no
@@ -130,8 +134,14 @@ impl Session {
                 ReplyBody::Analysis(a) => Some(a.revision),
                 _ => None,
             };
+            let mut i = lock(&self.inner);
             if rev.is_some() {
-                lock(&self.inner).revision = rev;
+                i.revision = rev;
+            }
+            if let ReplyBody::Applied(a) = body
+                && let Some(max) = a.created.iter().max()
+            {
+                i.id_floor = Some(i.id_floor.unwrap_or(0).max(max.saturating_add(1)));
             }
         }
         match lock(&self.waiting).remove(&request_id) {
@@ -145,8 +155,18 @@ impl Session {
         lock(&self.inner).revision
     }
 
+    /// A new document resets what was seen, numbering included.
     pub fn set_revision(&self, r: Option<u64>) {
-        lock(&self.inner).revision = r;
+        let mut i = lock(&self.inner);
+        i.revision = r;
+        if r.is_none() {
+            i.id_floor = None;
+        }
+    }
+
+    /// See `ids.rs`.
+    pub fn id_floor(&self) -> Option<u32> {
+        lock(&self.inner).id_floor
     }
 
     /// The connection ended: wakes every waiting worker.
@@ -169,6 +189,7 @@ impl Session {
         uri == PROJECT_URI
             || uri == MIXER_URI
             || uri == SONG_URI
+            || uri == HISTORY_URI
             || uri.starts_with(PATTERN_URI_PREFIX)
     }
 

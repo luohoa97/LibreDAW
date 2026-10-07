@@ -858,6 +858,7 @@ dependencies = [
 name = "libredaw-control"
 version = "0.0.0"
 dependencies = [
+ "libredaw-doc",
  "libredaw-protocol",
  "libredaw-script",
  "serde",
@@ -912,6 +913,7 @@ dependencies = [
  "glib",
  "libloading 0.8.9",
  "libredaw-protocol",
+ "toml",
  "x11rb",
 ]
 

@@ -422,3 +422,80 @@ fn timer_fd_and_main_thread_callbacks_run_on_glib_sources() {
     })
     .unwrap();
 }
+
+fn mkdirs(root: &Path, rels: &[&str]) {
+    for r in rels {
+        std::fs::create_dir_all(root.join(r)).unwrap();
+    }
+}
+
+fn fresh(tag: &str) -> PathBuf {
+    let d =
+        PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("{tag}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&d);
+    std::fs::create_dir_all(&d).unwrap();
+    d
+}
+
+#[test]
+fn installed_flatpak_extensions_are_found_newest_branch_only() {
+    let arch = std::env::consts::ARCH;
+    let user = fresh("fp-user");
+    let sys = fresh("fp-sys");
+    let ext = |n: &str, b: &str| {
+        format!("runtime/org.freedesktop.LinuxAudio.Plugins.{n}/{arch}/{b}/active/files/clap")
+    };
+    mkdirs(
+        &user,
+        &[
+            &ext("Surge-XT", "25.08"),
+            &ext("Surge-XT", "24.08"),
+            &ext("Odin2", "25.08"),
+        ],
+    );
+    mkdirs(&sys, &[&ext("Dexed", "25.08")]);
+    // Not a LinuxAudio plugin extension, and one without a clap dir.
+    mkdirs(
+        &user,
+        &[&format!(
+            "runtime/org.gnome.Platform/{arch}/49/active/files/clap"
+        )],
+    );
+    mkdirs(
+        &sys,
+        &[&format!(
+            "runtime/org.freedesktop.LinuxAudio.Plugins.swh/{arch}/25.08/active/files/lv2"
+        )],
+    );
+    let got = plugin_host::host::installed_extension_dirs(&[
+        user.clone(),
+        sys.clone(),
+        "/nonexistent".into(),
+    ]);
+    assert_eq!(
+        got,
+        [
+            user.join(ext("Odin2", "25.08")),
+            user.join(ext("Surge-XT", "25.08")),
+            sys.join(ext("Dexed", "25.08")),
+        ]
+    );
+}
+
+#[test]
+fn mounted_flatpak_extensions_cover_clap_and_lib_clap() {
+    let root = fresh("fp-mount");
+    mkdirs(
+        &root,
+        &["lib/clap", "Surge-XT/clap", "Other/lib/clap", "Empty/share"],
+    );
+    let got = plugin_host::host::mounted_extension_dirs(&root);
+    assert_eq!(
+        got,
+        [
+            root.join("lib/clap"),
+            root.join("Other/lib/clap"),
+            root.join("Surge-XT/clap"),
+        ]
+    );
+}
