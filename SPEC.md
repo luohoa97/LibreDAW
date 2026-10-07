@@ -204,6 +204,9 @@ Disposal thread: drops
 
 ### 4.3 Control values (fast path)
 
+(Amended by 17.1: native instrument parameters use a `ParamTable` of the
+same kind.)
+
 Continuously changing values do not live in `Compiled`:
 volume, pan, mute, solo (per channel and track), metronome gain, tempo.
 They live in a `ControlTable`: a fixed array of `AtomicU32` (f32 bits),
@@ -858,6 +861,8 @@ and C are planned after Milestone A is approved, with their own review.
 
 ## 15. Beat-making features (Milestones B, C, and D)
 
+(Amended by 17.2 to 17.5.)
+
 Status: approved scope, design not yet adversarially reviewed. These
 sections get the same review process as sections 3 to 12 before
 Milestone B starts.
@@ -1102,6 +1107,9 @@ in the project, content-addressed like git:
 
 ## 16. Agent control (LibreDAW MCP)
 
+(Amended by 17.1: trust model, settings, concurrency, jobs, startup. Where
+this section says `confirm: true`, read "PRIVILEGED, human approval".)
+
 Status: approved scope (Amendment 6), not yet adversarially reviewed.
 
 Goal: AI agents can operate the DAW: change settings, install packs, add
@@ -1183,6 +1191,221 @@ plugins, edit everything a user can edit, and make beats.
 - Validator test: an agent session with only the MCP tools builds a
   4-bar beat (kick, snare or clap, hats with a roll, 808 line) from an empty
   project and exports it, with `analyze` reporting no clipping.
+
+## 17. Review 2 resolutions (binding)
+
+The adversarial review of sections 13, 15, and 16 (see changelog, Review 2)
+produced the rules below. Where a rule conflicts with earlier text in
+sections 4, 8, 15, or 16, this section wins. 17.1 applies to Milestone A;
+17.2 to 17.5 apply when the named milestone starts.
+
+### 17.1 Milestone A
+
+- **Instrument parameters (rt-1).** Native instrument parameters (synth
+  now; sampler, 808, and built-in effects later) live in a `ParamTable`
+  next to the `ControlTable` (4.3): a fixed array of `AtomicU32` (f32
+  bits) indexed by (channel slot, parameter index), `MAX_PARAMS_PER_SLOT =
+  64`, written only by the GTK thread and rewritten from `Document` after
+  every document replacement, read once per sub-block. `Compiled` holds
+  only structure (instrument kind, waveform choices, voice count, sample
+  references). Moving a knob never recompiles. CLAP parameter values: the
+  `Document` keeps the last known value per (instance, param id) (the
+  record from 4.4); undo replays the differences as `PluginEventRing`
+  parameter events, never `state.load` while processing.
+- **Active notes (rt-2).** The active-note table entry is keyed by
+  (channel slot, key) and stores the id of the note that owns it. A
+  note-off only releases the voice if its note id matches the owner, so an
+  overlapping same-key note is never cut by an older note's note-off. On a
+  same-key retrigger the old voice is released first. Offline test:
+  overlapping same-key notes produce the closed-form gate lengths.
+- **IDs across history (fmt-2).** `next_id` is written as a top-level key
+  in `project.toml` and in every history commit. On open:
+  `next_id = max(project.toml, all commit headers, max id seen + 1)`. On
+  any restore: `next_id = max(current, max id in restored root + 1)`.
+  Property test: random edits, save, reopen, restore, edit; all ids unique.
+- **Control request handling (mcp-7, rt-8).** A control I/O thread (added
+  to 3.1) reads requests with a 1 MiB line limit and at most 10,000 edits
+  per request, parses them, and hands validated `Vec<Edit>` to the GTK
+  thread over a GLib channel. Fixed maxima added to 4.1:
+  `MAX_NOTES_PER_PATTERN = 100_000`, `MAX_NOTES_PER_PROJECT = 500_000`,
+  checked in `apply()` before any clone. `export_wav` and `analyze` are
+  jobs: the call returns `{job_id, revision}` at once, renders a pinned
+  `Document` revision on the export thread (one job at a time, others
+  queued), and supports `job_status`, `job_result`, `job_cancel`. Plugin
+  instantiation for a job is sliced across GLib idle callbacks, one plugin
+  per callback.
+- **Trust model (mcp-1, ux-1).** The agent never supplies consent:
+  `confirm` is removed. A closed set of PRIVILEGED requests needs a human
+  click in the LibreDAW window: `plugin_add` (first load of a plugin by
+  agents), `library_add_folder`, `pack_install`, `pack_remove`,
+  `project_open` or `project_new` while the document has unsaved changes,
+  any write outside the projects and exports folders, `version_restore`,
+  and project deletion. The approval UI is a non-modal banner plus a row in
+  the Agent activity panel. The request waits up to 60 s and then returns
+  a typed `needs_user_approval` or `denied` error. Rule 15.8.6 now reads
+  "no modal dialogs except these approvals". Each transport has a
+  capability mask enforced in the DAW (the Deno bridge gets only the
+  section 10 list). Agent control is enabled per session, not
+  permanently.
+- **Settings (mcp-2).** `settings_set` takes a closed Rust enum of keys:
+  audio device (from the enumerated list), buffer size in {64, 128, 256,
+  512, 1024}, theme, metronome. Anything that touches a path, URL, or
+  executable is not settable through the control API.
+- **Concurrency with the human (mcp-5).** Every request that reads or
+  writes the document carries `base_revision`; if the touched pattern,
+  channel, or track changed since, the reply is `Stale { current }`. A
+  request queued behind an open gesture waits at most 10 s and then
+  returns `Busy`. Every commit records its author (15.11); MCP `undo` and
+  `redo` only move over that agent session's own commits and return an
+  error otherwise.
+- **Startup and socket (mcp-8).** If no DAW is running, `libredaw-mcp`
+  starts it with `--agent-request`; the DAW shows a per-session "An agent
+  wants to control LibreDAW" banner; `libredaw-mcp` retries for 30 s and
+  then returns "waiting for the user in LibreDAW". The socket directory is
+  created with mode 0700 and guarded by an `flock`ed lock file so only one
+  DAW serves it; a stale socket is detected through the lock. Never
+  `/tmp`. Untrusted text (names, tags from packs and presets) is returned
+  only in structured fields, capped at 64 characters, control characters
+  removed; prompt injection is contained by the PRIVILEGED rule, not by
+  sanitizing. One MCP protocol revision is pinned in `crates/mcp`.
+- **Dirty document (fmt-8).** `project_open` and `project_new` with
+  unsaved changes are PRIVILEGED and autosave first.
+
+### 17.2 Milestone B
+
+- **Ratchets and 808 (rt-2, rt-3).** Ratchet sub-notes are generated by the
+  compiler as ordinary notes at `start + floor(i * step_len / repeat)`,
+  length `min(len, step_len / repeat)` minus 10 percent. `apply()` rejects
+  `repeat` values that do not divide `step_len`. 808 mono mode: last-note
+  priority; a new note while the gate is open is legato (no envelope
+  retrigger, glide); a note-off for a non-current note is ignored.
+  Offline tests for ratchet 8 and overlapping 808 notes.
+- **Swing (rt-3).** Swing is a `Pattern` field stored as an integer in
+  1/1000 units, applied by the compiler with integer rounding through one
+  pure function that the grid UI also calls. Slider drags are coalesced
+  by the compiler (4.2). Only step notes on odd steps are swung.
+- **Step notes with pitch (fmt-3).** `Note` gets `off: i8` (-24..24, 0 =
+  none) for step notes. A step note is `start % step_len == 0 && len ==
+  step_len && key == root_key + off && repeat` divides `step_len`.
+  Toggle-off removes step notes at that step regardless of `off`.
+  `SetRootKey` rewrites `key = new_root + off`. Piano-roll move or resize
+  of a step note clears `off` and makes it a piano-roll note.
+- **Choke (rt-4).** The sub-block is split at choke trigger frames; choked
+  voices fade out over 1.5 ms. Choke group ids are in `Compiled` and
+  copied to `Runtime` at swap. Offline test: a closed hat at frame 100
+  silences the open hat by frame 100 + fade.
+- **Samples in memory (rt-5).** A GTK-owned `SampleStore` keyed by sample
+  hash holds decoded `Arc<[f32]>`, filled by a dedicated loader thread
+  (not the compiler), with a byte budget (default 1 GiB, shown in the UI).
+  Samples are resampled once at load to the stream rate, and again on a
+  4.7 rate change. A sample not yet decoded compiles as silence and the
+  loader requests a recompile when done.
+- **Samples on disk (fmt-4, license-1).** Bundle samples are
+  content-addressed and immutable: `samples/<hash>.wav`, written with the
+  7.4 procedure, never overwritten; `project.toml` stores
+  `{hash, orig_name, size, local_only}`. Autosave and history reference the
+  same files. `samples/` and `history/` are in the 7.4 GC mark set.
+  `local_only` samples are never copied into the bundle: they are
+  referenced by hash plus a per-machine path stored outside the bundle
+  (`~/.local/share/libredaw/local-samples.toml`), and the bundle gets a
+  generated `.gitignore`. A missing sample plays silence, shows a toast,
+  and the project still loads and saves. Validator test: Save, history
+  commits, and Export for sharing contain no byte of a local_only file.
+  15.1 "self-contained project" excludes local_only samples.
+- **Routing (rt-6).** One edge list in `Document` covers sends and
+  sidechains; `apply()` rejects cycles over all edges plus the implicit
+  track-to-master edges. `Compiled` stores the topological order.
+  Sidechain taps are pre-fader and ignore mute and solo. Return tracks
+  count against `MAX_TRACKS`. The built-in limiter has zero latency.
+  Sidechain from a track with CLAP inserts is marked "latency not
+  compensated" in the UI.
+- **Effect memory (rt-7).** Built-in effects use typed pools in `Runtime`
+  with fixed counts (16 delays, 16 reverbs, 32 EQs, 32 compressors, 32
+  saturators), sized for the current stream rate; delay maximum 4 s.
+  `apply()` rejects edits beyond the pool counts. A newly assigned pool
+  entry is cleared on the audio thread in 256-frame chunks while its
+  input is faded in; delay-time changes are smoothed.
+- **Preset chains (rt-8, fmt-7).** `LoadPreset` is one atomic `Edit`: it
+  checks insert counts before creating anything; plugin instances are
+  created and attached before the swap that references them.
+- **Measurable UX rules (ux-4).** Each 15.8 rule is tagged with its
+  milestone. Click budgets are counted UI actions in an action log, run by
+  a scripted test driver; "hearing" means the master meter is above -40
+  dBFS. Rule 7 is measured before the limiter. Milestone B includes a
+  minimal "Add channel from kit" menu and one built-in default template so
+  it can be tested without Milestone C.
+- **Audition (ux-5).** A dedicated preview slot in `Compiled` with its own
+  preallocated voices, fed by an SPSC preview queue, never an `Edit`.
+  Default output: master, before the limiter; routing to the channel's
+  track is optional. Debounce 150 ms; 200 rapid row changes cause at most
+  2 swaps.
+
+### 17.3 Milestone D presets
+
+- **Macros on CLAP plugins (ux-2, fmt-7).** Macros are ordinary channel
+  values written to their targets through an `Edit`. Each target records
+  plugin id, plugin version, param id, param name, and range; on load,
+  targets are checked against `clap_param_info`, and mismatched macros are
+  disabled with a toast. Preset state blobs are referenced by hash, never
+  embedded in TOML.
+- **Generic controls (ux-3, minor; split verdict, kept).** A GTK parameter
+  panel built from `clap_params` (search plus sliders) is the "More
+  controls" view and the fallback when no X11 connection is possible. The
+  plugin's own GUI is the "Expert" button.
+- **Level matching (ux-6).** Per role: a reference note at velocity 100
+  rendered offline; short-term K-weighted loudness for tonal roles, peak
+  and RMS for percussive one-shots; stored as `trim_db`; tolerance +/-2
+  dB; reference presets tested in CI.
+- **Tonal or percussive (ux-7).** Channels have `pitch_role: Tonal |
+  Percussive` derived from the role tag. Key lock and key-based audition
+  apply only to tonal channels. Detected key is `Option<Key>` with a
+  confidence threshold; transposing to the project key is a suggestion,
+  never automatic.
+- **Analysis cache (fmt-8).** Keyed by (path, size, mtime); user role
+  edits stored in `~/.local/share/libredaw/user-metadata.toml`.
+
+### 17.4 Packs, libraries, and licensing
+
+- **pack_install (mcp-3).** HTTPS only, system trust store, compiled-in
+  index URL. The index lists name, version, size, SHA-256, and license
+  per pack. Caps: index 1 MiB, pack 512 MiB unpacked, 20,000 files. Our
+  own flat-archive reader rejects symlinks, hard links, absolute paths,
+  and `..`, and allows only `.wav` and `.toml`. Hash verified before
+  extracting into a temp directory, then renamed into place. Index
+  signing is optional later hardening (needs a justified dependency).
+- **library_add_folder (mcp-4, license-6).** The folder is chosen by the
+  human in a portal file chooser, with the vendor-terms notice as a
+  per-folder consent stored in settings. `$HOME` and `/` are rejected;
+  depth at most 8, at most 50,000 files, symlinks not followed. Agents get
+  pack ids, role counts, and sample ids, not file names, unless the user
+  allows it. Analysis runs on a worker thread with a per-file time budget.
+  Scanning common install locations is a user-initiated suggestion.
+- **Companion plugin package (license-2).** 12.3 is amended: this
+  repository and its release artifacts contain no third-party plugins. A
+  companion package of libre plugins is a separate artifact with its own
+  GPL source-offer checklist; pointing users at distro packages is
+  preferred.
+- **Presets with plugin state (license-3).** A preset that contains a
+  plugin state blob records its origin and license in the
+  `libredaw-sounds` manifest; CI rejects one without. Our own presets are
+  authored from the plugin's init state.
+- **Attribution (license-4).** The built-in browser offers CC0 content
+  only, so beginners owe nothing. Other accepted licenses (CC-BY-4.0, and
+  others only after review; never ShareAlike or NonCommercial) carry
+  source, author, and license per sample into project data, and "Export"
+  can generate a credits text.
+- **libredaw-sounds licensing (license-7).** Tools (including `kitgen`)
+  are GPL-3.0-or-later; content is CC0-1.0 or per file as recorded in the
+  manifest; SPDX headers; contributor sign-off. Generated WAVs are
+  program output, not derived works of `kitgen`.
+
+### 17.5 History files (fmt-6)
+
+History objects and commits carry `format_version`; they are migrated in
+memory when read and never rewritten. Named versions are refs whose file
+name is an opaque counter; the human name is a string inside the file.
+Restore loads through the 7.3 migrate and validate path and `apply()`
+range checks.
 ---
 
 ## Owner decisions (approved 2026-10-07)
@@ -1196,6 +1419,55 @@ plugins, edit everything a user can edit, and make beats.
 ---
 
 ## Changelog
+
+### Review 2 (2026-10-07): sections 13, 15, 16
+
+Process as in draft 2: four area reviewers plus a license auditor, each
+finding judged by two reviewers from other areas. 37 findings; 5 refuted
+by both judges and dropped; 1 split verdict kept by the orchestrator;
+32 fixed. All fixes are in section 17.
+
+| ID | Sev | Found | Resolution |
+|---|---|---|---|
+| rt-1 | major | Macros and native instrument knobs had no engine path. | ParamTable (17.1); CLAP undo replays param events. |
+| rt-2 | major | Per-key active-note table broke ratchets, glide, overlapping notes. | Owner note id per entry (17.1); ratchet and 808 rules (17.2). |
+| rt-3 | minor | Swing at compile time vs live knob; ratchet rounding undefined. | Integer swing, coalesced compile, ratchet divisors (17.2). |
+| rt-4 | major | Choke not sample-accurate, no fade. | Sub-block split at choke frames, 1.5 ms fade (17.2). |
+| rt-5 | major | Sample decode on compile path, no memory budget. | SampleStore with loader thread and budget (17.2). |
+| rt-6 | major | Sidechain edges missing from cycle check; solo silenced key. | One edge list, pre-fader key, zero-latency limiter (17.2). |
+| rt-7 | major | Effect buffers sized for max rate; clearing on audio thread. | Typed pools, chunked clearing behind fade (17.2). |
+| rt-8 | major | Long operations on GTK thread; analyze plugin instances undefined. | Jobs on export thread, idle-sliced instantiation (17.1). |
+| mcp-1 | major | Any same-user process trusted; agent supplied its own confirm. | PRIVILEGED set with human approval, capability masks (17.1). |
+| mcp-2 | critical | settings_set could redirect URLs, paths, executables. | Closed enum of settings (17.1). |
+| mcp-3 | major | pack_install had no integrity or archive safety. | HTTPS, SHA-256, caps, safe flat reader (17.4). |
+| mcp-4 | major | Agent could scan ~ or / and send file names to a remote LLM. | Human folder choice, limits, ids not names (17.4). |
+| mcp-5 | major | Agent undo and restore interleaved with human edits. | base_revision, Stale, Busy, author-scoped undo (17.1). |
+| mcp-7 | major | Huge requests and long tools blocked the GTK thread. | Control I/O thread, caps, jobs (17.1). |
+| mcp-8 | major | Startup contradiction, socket races, untrusted text. | --agent-request banner, flock, structured fields (17.1). |
+| ux-1 | major | "No modal dialogs" contradicted approvals; no timeout. | Non-modal approval banner, 60 s typed errors (17.1). |
+| ux-2 | major | Macros broke silently on plugin updates. | Targets validated against param info (17.3). |
+| ux-3 | minor | Plugin GUI a dead end without XWayland. (Split verdict.) | Generic parameter panel (17.3). |
+| ux-4 | major | UX rules not measurable; B depended on C. | Action-count driver, meter threshold, minimal B menu (17.2). |
+| ux-5 | major | Audition had no engine path. | Preview slot and queue (17.2). |
+| ux-6 | major | Level matching undefined for tonal and velocity-dependent sounds. | Per-role measurement, trim_db, CI (17.3). |
+| ux-7 | minor | Key lock ignored drums and atonal samples. | Tonal/percussive role, key suggestion only (17.3). |
+| fmt-2 | critical | next_id not persisted across history and restore. | Written in project.toml and commits, max rule (17.1). |
+| fmt-3 | major | Step-note predicate with pitch offset ambiguous. | Explicit `off: i8` on notes (17.2). |
+| fmt-4 | major | Sample name collisions, unloadable projects, non-atomic copies. | Content-addressed immutable samples (17.2). |
+| fmt-6 | major | Version files outside migration and path-safety rules. | Versioned objects, opaque ref names (17.5). |
+| fmt-7 | major | Preset blobs and macro mappings had two sources of truth. | Blob by hash, atomic LoadPreset (17.2, 17.3). |
+| fmt-8 | minor | Analysis cache unkeyed; project_open could discard work. | Cache key, PRIVILEGED open with autosave (17.1, 17.3). |
+| license-1 | major | local_only samples leaked into bundles and git. | Never copied; per-machine path; .gitignore; test (17.2). |
+| license-2 | major | 12.3 "no third-party plugins" vs Surge XT companion package. | 12.3 amended; separate artifact with source offer (17.4). |
+| license-3 | major | Presets embedding plugin state cannot be CC0 by default. | Origin and license per preset, CI check (17.4). |
+| license-4 | major | No CC-BY attribution mechanism. | CC0-only built-in browser; credits for others (17.4). |
+| license-6 | major | Vendor-terms warning weak; agent could bypass. | Per-folder human consent (17.4). |
+| license-7 | minor | Tools and content licensing mixed in the sounds repo. | Split licenses, sign-off (17.4). |
+
+Dropped (refuted by both judges): mcp-6, fmt-1 (version GC hole) and ux-8,
+fmt-5 (history memory bounds), all already resolved by Amendment 8's
+persisted, content-addressed history; license-5 (trademark naming), since
+nominative use in a folder-scan feature does not copy a product name.
 
 ### Amendment 8 (2026-10-07, owner)
 
