@@ -1832,6 +1832,45 @@ up a DAW." The UI assumes the user has never used a DAW.
     kick quieter, add a melody, make the song longer, export it.
   - Any step that needs a DAW term or a guess fails the gate.
 
+### 20.7 Patterns on the timeline (Amendment 29)
+
+Owner: "Patterns should be able to go into the timeline like FL Studio.
+We'll need to be as good as FL Studio." FL's strength is writing one beat
+across many instruments, then placing it as a single block. Oto keeps
+one model (rows and clips) and adds grouping on top. It does not bring
+back a channel rack or a second song view.
+
+- **Pattern:** a named group of clips, one per instrument row, that
+  share a start and a length. For example, "Beat A" holds the Kick,
+  Snare, Hat and 808 clips of one bar. A pattern instance is the set of
+  member clips placed together.
+- **Patterns lane:** a slim lane at the top of the timeline, just under
+  the ruler, shows each pattern instance as one block with the
+  pattern's name and colour.
+  - Moving, copying (Ctrl+D, which makes linked copies), resizing (which
+    loops), splitting, muting or deleting a block does the same to every
+    member clip, in one undo step.
+  - Member clips stay visible on their rows, with a matching tint.
+  - Editing one member alone detaches it from that instance; there is
+    an Undo.
+- **Making patterns:**
+  - Select clips on several rows, then choose Make Pattern (Ctrl+G).
+  - Or choose New Pattern in the lane's menu. That makes an empty
+    one-bar pattern with a clip on every drum row.
+  - The Patterns list (the lane header's dropdown) shows every pattern.
+    Drag one onto the lane to place another instance at that spot.
+- **Editing a pattern:** double-click a block to open the Grid editor
+  for all its rows at once, one row per instrument. This gives FL's
+  step-sequencer view of that beat. Piano opens per row as usual.
+- **Model:** `Project.groups: Vec<PatternGroup{id, name, color,
+  contents: Vec<(ChannelId, PatternId)>}>`, and `Clip.group:
+  Option<(GroupId, InstanceId)>`. This is format v4, together with 21.6,
+  and v3 files load with no groups.
+- **MCP:** pattern_make, pattern_place, pattern_list and pattern_edit
+  use the same bridge operations. An agent can write "Verse beat" once
+  and place it 8 times.
+- **Plain language:** "Pattern" is shown with the tooltip "A beat or
+  section made of several instruments, placed as one block" (20.6).
 ## 21. Voice: recording, hum to notes, and lyrics (Amendment 20)
 
 Owner direction: "hum a beat ... it turns into MIDI and Claude does the
@@ -2276,6 +2315,12 @@ feature is an MCP tool (Amendment 19).
 ---
 
 ## Changelog
+
+### Amendment 29 (2026-10-07, owner)
+
+- Added 20.7: patterns on the timeline as named groups of clips across
+  rows. A Patterns lane places, moves and copies them as one block, and
+  double-click opens a multi-row Grid. Format v4. MCP tools added.
 
 ### Amendment 28 (2026-10-07, owner)
 
