@@ -7,7 +7,7 @@
 //! (file, role, root key, choke group, gain, pan). Roots are searched in
 //! `$XDG_DATA_DIRS/libredaw/sounds/`, `~/.local/share/libredaw/sounds/`
 //! (`$XDG_DATA_HOME`), and for development the directory named by
-//! `LIBREDAW_SOUNDS_DIR`. A user folder of WAV files becomes one kit whose
+//! `LIBREDAW_SOUNDS_DIR`. A user folder of audio files becomes one kit whose
 //! pieces are `local_only` (17.2): they are never copied into a project.
 
 use std::collections::HashMap;
@@ -333,7 +333,7 @@ pub fn guess_role(file_stem: &str) -> String {
     "perc".to_string()
 }
 
-/// A user folder of WAV files as one kit (search depth: the folder and its
+/// A user folder of audio files as one kit (search depth: the folder and its
 /// direct subfolders). `None` if there is no WAV file.
 pub fn scan_folder(dir: &Path) -> Option<Kit> {
     let mut files: Vec<PathBuf> = Vec::new();
@@ -346,7 +346,7 @@ pub fn scan_folder(dir: &Path) -> Option<Kit> {
             let p = e.path();
             if p.is_dir() && depth < 1 {
                 stack.push((p, depth + 1));
-            } else if p.extension().is_some_and(|x| x.eq_ignore_ascii_case("wav")) && p.is_file() {
+            } else if crate::samples_ui::is_audio_file(&p) && p.is_file() {
                 files.push(p);
             }
         }
@@ -594,10 +594,17 @@ role = "kick"
         fs::create_dir_all(root.join("sub")).unwrap();
         fs::write(root.join("Big Kick.WAV"), b"x").unwrap();
         fs::write(root.join("sub/hat 1.wav"), b"x").unwrap();
+        fs::write(root.join("Snare.MP3"), b"x").unwrap();
+        fs::write(root.join("sub/ride.flac"), b"x").unwrap();
         fs::write(root.join("notes.txt"), b"x").unwrap();
         let k = scan_folder(&root).unwrap();
         assert_eq!(k.source, Source::UserFolder);
-        assert_eq!(k.pieces.len(), 2);
+        assert_eq!(k.pieces.len(), 4);
+        assert!(
+            k.pieces
+                .iter()
+                .any(|p| p.path.extension().is_some_and(|e| e == "MP3"))
+        );
         let kick = k.pieces.iter().find(|p| p.name == "Big Kick").unwrap();
         assert_eq!(kick.role, "kick");
         assert!(k.pieces.iter().any(|p| p.role == "hat_closed"));

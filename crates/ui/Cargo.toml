@@ -12,6 +12,7 @@ name = "ui"
 [dependencies]
 libredaw-protocol = { path = "../protocol" }
 libredaw-doc = { path = "../doc" }
+libredaw-audiofile = { path = "../audiofile" }
 libredaw-plugin-host = { path = "../plugin-host" }
 libredaw-engine = { path = "../engine" }
 libredaw-control = { path = "../control" }
