@@ -9,3 +9,4 @@ pub mod presets;
 pub mod samples;
 pub mod sha256;
 pub mod starter;
+pub mod store;

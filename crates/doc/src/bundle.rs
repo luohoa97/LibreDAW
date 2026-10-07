@@ -201,7 +201,7 @@ fn is_ours_to_delete(n: &str) -> bool {
 
 /// Calls `f` on every CLAP reference in the project, cloning only the
 /// channels and tracks that hold one.
-fn for_each_clap_mut(p: &mut Project, mut f: impl FnMut(&mut protocol::model::ClapRef)) {
+pub(crate) fn for_each_clap_mut(p: &mut Project, mut f: impl FnMut(&mut protocol::model::ClapRef)) {
     for c in &mut p.channels {
         if matches!(c.instrument, Instrument::Clap(_))
             && let Instrument::Clap(r) = &mut Arc::make_mut(c).instrument
@@ -219,7 +219,7 @@ fn for_each_clap_mut(p: &mut Project, mut f: impl FnMut(&mut protocol::model::Cl
     }
 }
 
-fn for_each_clap(p: &Project, mut f: impl FnMut(&protocol::model::ClapRef)) {
+pub(crate) fn for_each_clap(p: &Project, mut f: impl FnMut(&protocol::model::ClapRef)) {
     for c in &p.channels {
         if let Instrument::Clap(r) = &c.instrument {
             f(r);
