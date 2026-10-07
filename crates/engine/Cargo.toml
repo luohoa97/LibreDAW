@@ -11,6 +11,7 @@ name = "engine"
 
 [dependencies]
 libredaw-protocol = { path = "../protocol" }
+libredaw-audiofile = { path = "../audiofile" }
 libredaw-plugin-host = { path = "../plugin-host" }
 cpal = { version = "0.18", default-features = false, features = ["jack", "pipewire", "realtime-dbus"] }
 # Wait-free SPSC rings for the state, command, event and retire rings (SPEC 4.2, 4.4).

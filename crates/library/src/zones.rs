@@ -12,14 +12,15 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use serde::{Deserialize, Serialize};
 
-use crate::header::Format;
 use crate::index::{LibraryIndex, SoundEntry};
 use crate::pitch::estimate_root;
 
+/// With `decode` false the audio is not read: sets that need it stay unplaced
+/// (`root_source` empty) until a scan with `decode` true.
 /// Fills `root_note` for tonal multisamples that have none. Returns how
 /// many roots were estimated from audio. Entries already decided keep
 /// their root, so a warm scan does no work here.
-pub fn assign_roots(entries: &mut [SoundEntry]) -> usize {
+pub fn assign_roots(entries: &mut [SoundEntry], decode: bool) -> usize {
     let mut groups: BTreeMap<String, Vec<usize>> = BTreeMap::new();
     for (i, e) in entries.iter().enumerate() {
         if let Some(g) = &e.group {
@@ -43,14 +44,12 @@ pub fn assign_roots(entries: &mut [SoundEntry]) -> usize {
             if keyboard && let Some(s) = entries[i].seq {
                 entries[i].root_note = Some(20 + s as u8);
                 entries[i].root_source = Some("keyboard-order".into());
-            } else if entries[i].format == Format::Wav {
-                to_pitch.push(i);
             } else {
-                entries[i].root_source = Some("unknown".into());
+                to_pitch.push(i);
             }
         }
     }
-    if to_pitch.is_empty() {
+    if to_pitch.is_empty() || !decode {
         return 0;
     }
     let next = AtomicUsize::new(0);
@@ -63,7 +62,7 @@ pub fn assign_roots(entries: &mut [SoundEntry]) -> usize {
                 loop {
                     let k = next.fetch_add(1, Ordering::Relaxed);
                     let Some(p) = paths.get(k) else { break };
-                    local.push((k, estimate_root(p).ok().flatten()));
+                    local.push((k, estimate_root(p)));
                 }
                 if let Ok(mut o) = out.lock() {
                     o.extend(local);

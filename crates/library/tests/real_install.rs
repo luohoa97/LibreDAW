@@ -28,6 +28,12 @@ fn index_real_install() {
 
     let cache = std::env::temp_dir().join(format!("libredaw-library-real-{}", std::process::id()));
     let src = Source::fl_studio(inst);
+    let fast_cache = cache.join("fast");
+    let fast = library::scan_with(&src, &fast_cache, false).unwrap();
+    println!(
+        "cold, headers only (no pitch decode): {:?}",
+        fast.stats.elapsed
+    );
     let cold = scan(&src, &cache).unwrap();
     println!("cold: {:?} {:?}", cold.stats.elapsed, cold.stats);
     let warm = scan(&src, &cache).unwrap();
@@ -97,7 +103,7 @@ fn index_real_install() {
         .iter()
         .filter(|e| e.root_source.as_deref() == Some("name"))
     {
-        if let Ok(Some(p)) = library::pitch::estimate_root(&e.path) {
+        if let Some(p) = library::pitch::estimate_root(&e.path) {
             *offsets
                 .entry(i32::from(p) - i32::from(e.root_note.unwrap_or(0)))
                 .or_default() += 1;

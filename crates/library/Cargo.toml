@@ -13,5 +13,6 @@ name = "library"
 libredaw-protocol = { path = "../protocol" }
 # SHA-256 of sample bytes, the same hash the bundle uses (SPEC 17.2 fmt-4).
 libredaw-doc = { path = "../doc" }
+libredaw-audiofile = { path = "../audiofile" }
 serde = { version = "1", features = ["derive"] }
 toml = "1"
