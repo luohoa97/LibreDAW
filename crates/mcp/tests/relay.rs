@@ -40,6 +40,7 @@ fn daw(dir: &Path, agents: bool) -> FakeUi {
             body: ReplyBody::Project {
                 revision: 1,
                 project: Arc::new(Project::empty()),
+                next_id: 1,
             },
         }),
         _ => Action::Reply(Outcome::Ok {

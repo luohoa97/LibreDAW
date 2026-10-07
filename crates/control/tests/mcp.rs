@@ -932,17 +932,48 @@ fn sounds_are_searched_then_added_by_id() {
     c.ok("sound_add", json!({"id": surge}));
     let reqs = rig.ui.requests();
     assert!(reqs.iter().any(|q| matches!(&q.body,
-        RequestBody::SoundSearch { tags, .. }
-            if tags.contains(&"kick".to_string())
-                && tags.contains(&"source:FL Studio".to_string())
-                && tags.contains(&"offset:20".to_string()))));
+        RequestBody::SoundSearch { query, source, offset: 20, .. }
+            if query.as_deref() == Some("kick") && source.as_deref() == Some("FL Studio"))));
     assert!(reqs.iter().any(|q| matches!(&q.body,
-        RequestBody::KitAdd { pack, kit, .. } if pack == "@sound" && kit == "fl:sound:abc")));
+        RequestBody::SoundAdd { id, .. } if id == "fl:sound:abc")));
     assert!(reqs.iter().any(|q| matches!(&q.body,
         RequestBody::Edit { edits } if edits.iter().any(|e| matches!(e,
             Edit::AddChannel { instrument: protocol::edit::NewInstrument::Clap { preset: Some(_), .. }, .. })))));
     let e = c.err("sound_add", json!({"id": "surge:nope/none"}));
     assert!(e.contains("sound_search"), "{e}");
+}
+
+#[test]
+fn kit_get_asks_for_one_kit_and_sound_search_filters_by_kit() {
+    let rig = rig(true, |_| {});
+    let mut c = Mcp::connect(&rig);
+    c.init();
+    c.ok("sound_search", json!({"kit": "909", "source": "FL Studio"}));
+    c.ok("kit_get", json!({"id": "fl:kit:abc"}));
+    let reqs = rig.ui.requests();
+    assert!(reqs.iter().any(|q| matches!(&q.body,
+        RequestBody::SoundSearch { kit, .. } if kit.as_deref() == Some("909"))));
+    assert!(reqs.iter().any(|q| matches!(&q.body,
+        RequestBody::SoundSearch { kit, .. } if kit.as_deref() == Some("fl:kit:abc"))));
+}
+
+#[test]
+fn seek_goes_to_a_bar() {
+    let rig = rig(true, |_| {});
+    let mut c = Mcp::connect(&rig);
+    c.init();
+    c.ok("seek", json!({"position": 8}));
+    c.ok("seek", json!({"position": "1/4"}));
+    let ticks: Vec<u64> = rig
+        .ui
+        .requests()
+        .iter()
+        .filter_map(|q| match q.body {
+            RequestBody::Seek { tick } => Some(tick),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(ticks, [8 * 3840, 960]);
 }
 
 #[test]

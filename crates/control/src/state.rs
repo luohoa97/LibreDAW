@@ -382,6 +382,7 @@ impl Shared {
 
     /// A validated request from client `id`. `Err` carries the outcome to
     /// answer with at once.
+    #[allow(clippy::result_large_err)]
     pub fn submit(&self, client: u64, request: Request) -> Result<(), Outcome> {
         let mut s = self.lock();
         let Some(slot) = s.clients.get(&client) else {

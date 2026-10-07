@@ -84,6 +84,9 @@ impl SoundEntry {
             tags: self.tags.clone(),
             pack: self.pack.clone(),
             kit: self.kit.clone(),
+            source: String::new(),
+            kind: "single sound".into(),
+            kit_name: None,
         }
     }
 }

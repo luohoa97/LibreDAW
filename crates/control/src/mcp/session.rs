@@ -138,6 +138,12 @@ impl Session {
             if rev.is_some() {
                 i.revision = rev;
             }
+            // The project reply names the counter exactly (SPEC 18.7).
+            if let ReplyBody::Project { next_id, .. } = body
+                && *next_id > 0
+            {
+                i.id_floor = Some(*next_id);
+            }
             if let ReplyBody::Applied(a) = body
                 && let Some(max) = a.created.iter().max()
             {

@@ -18,6 +18,7 @@ pub mod fxpresets;
 pub mod hum;
 pub mod mcp;
 mod socket;
+pub mod song_map;
 mod state;
 pub mod suggest;
 

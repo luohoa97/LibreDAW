@@ -15,10 +15,7 @@ use std::rc::Rc;
 
 use adw::prelude::*;
 
-use protocol::model::Instrument;
-
 use crate::app::App;
-use crate::channels::{self, NewChannel};
 use crate::samples_ui;
 use crate::sound_picker;
 use crate::soundlib::{self, Kit, Piece, Source};
@@ -119,10 +116,6 @@ struct State {
 
 /// What `apply` toggles: a plain row, or a kit with its piece rows.
 enum Entry {
-    Preset {
-        row: adw::ActionRow,
-        index: usize,
-    },
     Sound {
         row: adw::ActionRow,
         index: usize,
@@ -206,18 +199,9 @@ pub fn build(app: &Rc<App>) -> gtk::Widget {
         move || {
             let s = state.borrow();
             let searching = !s.search.trim().is_empty();
-            let all = drum_presets();
             let mut shown = 0;
             for e in entries.borrow().iter() {
                 match e {
-                    Entry::Preset { row, index } => {
-                        let ok = all
-                            .get(*index)
-                            .map(|p| matches(p, &s.search, s.role))
-                            .unwrap_or(false);
-                        row.set_visible(ok);
-                        shown += ok as usize;
-                    }
                     Entry::Sound { row, index } => {
                         let ok = sounds::sounds()
                             .get(*index)
@@ -265,18 +249,16 @@ pub fn build(app: &Rc<App>) -> gtk::Widget {
             }
             let fl_sec = crate::fl_browser::section(&app);
             list.append(fl_sec.offer_row());
-            for (i, p) in drum_presets().iter().enumerate() {
-                let row = preset_row(&app, p);
-                list.append(&row);
-                es.push(Entry::Preset { row, index: i });
-            }
             let have = sound_picker::installed(&app);
             for (i, s) in sounds::sounds().iter().enumerate() {
                 let row = sound_row(&app, s, have);
                 list.append(&row);
                 es.push(Entry::Sound { row, index: i });
             }
-            for kit in samples_ui::library(&app) {
+            for kit in samples_ui::library(&app)
+                .into_iter()
+                .filter(|k| k.source == Source::UserFolder)
+            {
                 let (expander, rows) = kit_rows(&app, &kit);
                 list.append(&expander);
                 es.push(Entry::Kit {
@@ -435,73 +417,6 @@ fn more_row() -> adw::ActionRow {
         let _ = r.activate_action("win.add-instrument", None);
     });
     row
-}
-
-fn preset_row(app: &Rc<App>, p: &Preset) -> adw::ActionRow {
-    let row = adw::ActionRow::new();
-    row.set_title(p.name);
-    row.set_subtitle(&format!("{} · Oto Kit", role_label(p.role)));
-    row.set_activatable(true);
-    row.set_tooltip_text(Some("Add to Project"));
-    let add_btn = gtk::Button::from_icon_name("list-add-symbolic");
-    add_btn.add_css_class("flat");
-    add_btn.set_valign(gtk::Align::Center);
-    add_btn.set_tooltip_text(Some("Add to Project"));
-    add_btn.update_property(&[gtk::accessible::Property::Label(&format!(
-        "Add {} to the project",
-        p.name
-    ))]);
-    row.add_suffix(&add_btn);
-    // The row's menu (menus::sound_menu): add, or replace the sound of the
-    // selected channel.
-    let group = gtk::gio::SimpleActionGroup::new();
-    for n in crate::menus::SOUND_ACTIONS {
-        let act = gtk::gio::SimpleAction::new(n, None);
-        let (a, name, params, n) = (app.clone(), p.name.to_string(), p.params, *n);
-        act.connect_activate(move |_, _| match n {
-            "add" => add_preset(&a, &name),
-            "replace" => replace_preset(&a, &params),
-            _ => {}
-        });
-        group.add_action(&act);
-    }
-    row.insert_action_group("sound", Some(&group));
-    add_btn.set_action_name(Some("sound.add"));
-    let a = app.clone();
-    let name = p.name.to_string();
-    row.connect_activated(move |_| add_preset(&a, &name));
-    crate::context_menu::attach(&row, &crate::menus::sound_menu(), |_| true);
-    row
-}
-
-/// A built-in sound as a new channel, with Undo in the toast.
-fn add_preset(a: &Rc<App>, name: &str) {
-    if channels::add(a, NewChannel::Preset(name.to_string())).is_some() {
-        let a2 = a.clone();
-        a.toast_action(&format!("Added {name}"), "Undo", move || a2.undo());
-    }
-}
-
-/// Gives the selected channel this built-in sound (built-in synth
-/// channels only).
-fn replace_preset(a: &Rc<App>, params: &protocol::model::SynthParams) {
-    let ch = a.current_channel();
-    let is_synth = ch
-        .and_then(|c| {
-            a.session
-                .borrow()
-                .document()
-                .project
-                .channel(c)
-                .map(|c| matches!(c.instrument, Instrument::Synth(_)))
-        })
-        .unwrap_or(false);
-    match ch {
-        Some(c) if is_synth => {
-            a.edit(presets::apply_edits(c, params));
-        }
-        _ => a.toast("Choose an instrument with a built-in sound first"),
-    }
 }
 
 /// The expander row of a kit and its piece rows.

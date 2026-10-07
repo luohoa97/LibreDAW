@@ -13,13 +13,13 @@ use std::time::{Duration, Instant};
 use protocol::control::{
     BranchInfo, ControlError, JobState, Outcome, ReplyBody, Request, RequestBody,
 };
-use protocol::edit::{Applied, Edit, EditError};
+use protocol::edit::{Applied, EditError};
 use protocol::model::{Project, ticks_per_bar};
 use protocol::validate::ValidationError;
 use serde_json::{Value, json};
 
 use super::build::{self, Target};
-use super::compose::Built;
+use super::compose::{self, Built};
 use super::ids::{self, IdGen};
 use super::notes;
 use super::sanitize::{clean_text, for_agent};
@@ -147,7 +147,9 @@ impl Exec {
     /// The current project and its revision.
     pub fn project(&self) -> Out<(u64, Arc<Project>)> {
         match self.body(RequestBody::ProjectGet, None)? {
-            ReplyBody::Project { revision, project } => Ok((revision, project)),
+            ReplyBody::Project {
+                revision, project, ..
+            } => Ok((revision, project)),
             _ => Err(unexpected("the project read")),
         }
     }
@@ -190,6 +192,7 @@ impl Exec {
             Plan::Inspect(a) => self.inspect(&a),
             Plan::ContentGet(t) => self.content_get(&t),
             Plan::Transport => self.transport(),
+            Plan::Seek(at) => self.seek(&at),
             Plan::Job(a) => self.job(&a),
             Plan::JobQuery { job, cancel } if job == crate::hum::JOB => self.hum_query(cancel),
             Plan::JobQuery { job, cancel } => self.job_query(job, cancel),
@@ -239,10 +242,6 @@ impl Exec {
                 }) => a,
                 Ok(Outcome::Ok { .. }) => return Err(unexpected("the edit")),
                 Ok(Outcome::Err { error }) => {
-                    if attempt == 0 && wrong_guess(&error, &built.predicted) {
-                        self.learn_counter(&built, rev)?;
-                        continue;
-                    }
                     return Err(edit_error_out(&error, &built.labels));
                 }
                 Err(e) => return Err(call_error_out(&e)),
@@ -260,24 +259,6 @@ impl Exec {
             }
         }
         unreachable!("the loop returns")
-    }
-
-    /// The batch referred to an id the counter had already passed. Applies
-    /// its first creating edit alone, which reveals the counter (`deliver`
-    /// raises the floor from `created`), and takes it back at once.
-    fn learn_counter(&self, built: &Built, rev: u64) -> Out<()> {
-        let Some(i) = built.edits.iter().position(creates) else {
-            return Err(unexpected("the edit"));
-        };
-        let probe = RequestBody::Edit {
-            edits: built.edits[..=i].to_vec(),
-        };
-        match self.body(probe, Some(rev))? {
-            ReplyBody::Applied(_) => {}
-            _ => return Err(unexpected("the edit")),
-        }
-        self.body(RequestBody::Undo, None)?;
-        Ok(())
     }
 
     fn composed_reply(&self, applied: Applied, built: Built) -> ToolOutput {
@@ -324,6 +305,7 @@ impl Exec {
             body,
             RequestBody::Edit { .. }
                 | RequestBody::KitAdd { .. }
+                | RequestBody::SoundAdd { .. }
                 | RequestBody::BranchSwitch { .. }
                 | RequestBody::VersionRestore { .. }
         );
@@ -347,12 +329,7 @@ impl Exec {
             _ => None,
         };
         let page = match &body {
-            RequestBody::SoundSearch { tags, limit, .. } => Some((
-                tags.iter()
-                    .find_map(|t| t.strip_prefix("offset:")?.trim().parse::<usize>().ok())
-                    .unwrap_or(0),
-                *limit as usize,
-            )),
+            RequestBody::SoundSearch { offset, .. } => Some(*offset as usize),
             _ => None,
         };
         let result = self.call(body, if needs_revision { base } else { None });
@@ -378,8 +355,16 @@ impl Exec {
                 if let ReplyBody::Branches { current, branches } = &body {
                     v = branches_json(current, branches);
                 }
-                if let (ReplyBody::Sounds { sounds }, Some((offset, limit))) = (&body, page) {
-                    v = sounds_json(sounds, offset, limit);
+                if let (
+                    ReplyBody::Sounds {
+                        sounds,
+                        total,
+                        notes,
+                    },
+                    Some(offset),
+                ) = (&body, page)
+                {
+                    v = sounds_json(sounds, *total, notes, offset);
                 }
                 for_agent(&mut v);
                 ToolOutput::ok(v)
@@ -543,6 +528,24 @@ impl Exec {
             value: json!({"revision": rev, "contents": items}),
             text: Some(text),
         })
+    }
+
+    fn seek(&self, at: &Value) -> Out<ToolOutput> {
+        let (_, project) = self.project()?;
+        let tpb = ticks_per_bar(project.time_sig_num);
+        let tick = match compose::ticks_of(at, tpb, "position") {
+            Ok(t) => t,
+            Err(m) => return Ok(ToolOutput::error("bad_arguments", &m)),
+        };
+        self.body(
+            RequestBody::Seek {
+                tick: u64::from(tick),
+            },
+            None,
+        )?;
+        Ok(ToolOutput::ok(
+            json!({"position": notes::fraction(tick, tpb), "tick": tick}),
+        ))
     }
 
     fn transport(&self) -> Out<ToolOutput> {
@@ -772,6 +775,9 @@ impl Exec {
     fn job_result(&self, job: u64) -> Out<ToolOutput> {
         let body = self.body(RequestBody::JobResult { job }, None)?;
         let mut v = serde_json::to_value(&body).unwrap_or(Value::Null);
+        if let ReplyBody::Analysis(a) = &body {
+            v["bars"] = json!(bar_table(&a.bars));
+        }
         for_agent(&mut v);
         v["job"] = json!(job);
         v["state"] = json!("done");
@@ -978,31 +984,45 @@ fn instrument_sounds() -> Value {
     Value::Array(roles)
 }
 
-/// The sound list as an agent reads it: id, name, role, tags, source and
-/// kind; messages from the DAW (ids starting `note:`) as `notes`. The DAW
-/// sends the kind first in `tags` and the source in `pack`.
-fn sounds_json(sounds: &[protocol::control::SoundInfo], offset: usize, limit: usize) -> Value {
-    let mut notes = Vec::new();
-    let mut items = Vec::new();
-    for s in sounds {
-        if s.id.starts_with("note:") {
-            notes.push(json!(s.name));
-            continue;
+/// The sound list as an agent reads it: the DAW's fields, plus `kits`
+/// (sounds of one kit side by side, so a kick, snare and hat that go
+/// together can be picked from one kit), `total`, `notes` and
+/// `next_offset` when more match.
+fn sounds_json(
+    sounds: &[protocol::control::SoundInfo],
+    total: u32,
+    notes: &[String],
+    offset: usize,
+) -> Value {
+    let items: Vec<Value> = sounds
+        .iter()
+        .map(|s| {
+            let mut item = json!({"id": s.id, "name": s.name, "role": s.role, "tags": s.tags,
+                "source": s.source, "kind": s.kind, "family": s.genres.first()});
+            if let Some(id) = &s.kit {
+                item["kit"] = json!({"id": id, "name": s.kit_name});
+            }
+            item
+        })
+        .collect();
+    let mut kits: Vec<Value> = Vec::new();
+    for it in &items {
+        let Some(kit) = it.get("kit") else { continue };
+        let one = json!({"id": it["id"], "name": it["name"], "role": it["role"]});
+        match kits.iter().position(|k| k["kit"]["id"] == kit["id"]) {
+            Some(i) => kits[i]["sounds"].as_array_mut().unwrap().push(one),
+            None => kits.push(json!({"kit": kit, "sounds": [one]})),
         }
-        let (kind, tags) = s
-            .tags
-            .split_first()
-            .map_or(("", &[][..]), |(k, t)| (k.as_str(), t));
-        items.push(
-            json!({"id": s.id, "name": s.name, "role": s.role, "tags": tags,
-            "source": s.pack, "kind": kind, "family": s.genres.first()}),
-        );
     }
-    let mut v = json!({"sounds": items});
+    kits.retain(|k| k["sounds"].as_array().is_some_and(|s| s.len() > 1));
+    let mut v = json!({"sounds": items, "total": total});
+    if !kits.is_empty() {
+        v["kits"] = json!(kits);
+    }
     if !notes.is_empty() {
         v["notes"] = json!(notes);
     }
-    if items.len() >= limit {
+    if offset + items.len() < total as usize {
         v["next_offset"] = json!(offset + items.len());
     }
     v
@@ -1113,36 +1133,23 @@ pub fn control_error_out(e: &ControlError) -> ToolOutput {
     }
 }
 
-/// Edits that allocate ids.
-fn creates(e: &Edit) -> bool {
-    matches!(
-        e,
-        Edit::AddTrack { .. }
-            | Edit::AddChannel { .. }
-            | Edit::AddClip { .. }
-            | Edit::AddPattern { .. }
-            | Edit::AddInsert { .. }
-            | Edit::AddBuiltinInsert { .. }
-    )
-}
-
-/// The batch failed on an id this server predicted: the guess was low.
-fn wrong_guess(e: &ControlError, predicted: &[u32]) -> bool {
-    let id = match e {
-        ControlError::Edit {
-            error: EditError::NotFound { id, .. },
-            ..
-        }
-        | ControlError::Edit {
-            error:
-                EditError::Invalid {
-                    reason: ValidationError::MissingRef { id, .. },
-                },
-            ..
-        } => *id,
-        _ => return false,
-    };
-    predicted.contains(&id)
+/// One short line per bar (bar numbers count from the song start, 0 =
+/// start, like every time in these tools): loudness, peak, low/mid/high
+/// share and the tracks with a clip playing.
+fn bar_table(bars: &[protocol::control::BarLevels]) -> String {
+    let mut out = String::from("bar | LUFS | peak dBFS | low/mid/high % | tracks playing\n");
+    for b in bars {
+        let [lo, mi, hi] = b.band_balance.map(|x| (x * 100.0).round() as i64);
+        let tracks: Vec<String> = b.active_tracks.iter().map(u32::to_string).collect();
+        out.push_str(&format!(
+            "{} | {:.1} | {:.1} | {lo}/{mi}/{hi} | {}\n",
+            b.bar,
+            b.lufs,
+            b.peak_dbfs,
+            tracks.join(",")
+        ));
+    }
+    out
 }
 
 fn hum_declined() -> ToolOutput {

@@ -232,11 +232,172 @@ pub fn add(app: &Rc<App>, what: NewChannel) -> Option<ChannelId> {
     Some(id)
 }
 
+/// One row of the starter beat.
+struct Part {
+    name: &'static str,
+    instrument: NewInstrument,
+    root_key: u8,
+    steps: Vec<u8>,
+    vel: u8,
+    /// A sample the row plays, registered before the row is made.
+    sample: Option<SampleRef>,
+    /// Turns the row's track down for sounds that peak above full scale.
+    gain_db: f64,
+}
+
+fn part(
+    name: &'static str,
+    (instrument, root_key): (NewInstrument, u8),
+    steps: &[u8],
+    vel: u8,
+) -> Part {
+    Part {
+        name,
+        instrument,
+        root_key,
+        steps: steps.to_vec(),
+        vel,
+        sample: None,
+        gain_db: 0.0,
+    }
+}
+
 /// The starter beat of a new project (SPEC 20.3): Kick, Snare, Hat and 808
 /// rows, each on its own mixer track with a one-bar clip repeated as linked
 /// copies over four bars, and the loop region on those bars, so Space plays
 /// a beat at once. One undo step. Nothing plays until the user presses Play.
 pub fn add_starter_beat(app: &Rc<App>) {
+    let preset = |name: &str, fallback: u8| {
+        presets::presets()
+            .into_iter()
+            .find(|p| p.name == name)
+            .map(|p| (NewInstrument::Synth { params: p.params }, p.root_key))
+            .unwrap_or((
+                NewInstrument::Synth {
+                    params: SynthParams::default(),
+                },
+                fallback,
+            ))
+    };
+    starter_beat(
+        app,
+        vec![
+            part("Kick", preset("Kick", 36), &[0, 4, 8, 12], 110),
+            part("Snare", preset("Snare", 38), &[4, 12], 100),
+            part("Hat", preset("Closed hat", 42), &[2, 6, 10, 14], 80),
+            part(
+                "808",
+                (NewInstrument::Bass808 { mono: true }, 36),
+                &[0, 10],
+                100,
+            ),
+        ],
+    );
+}
+
+/// The starter beat of a new project. When the user's FL Studio sounds are
+/// on, it plays FL's default kit and a Surge XT 808; the files are read in
+/// place. Otherwise (or when the kit cannot be read) it is the built-in
+/// beat. The FL one arrives a moment later, once the sounds are read, and
+/// only if the project is still empty.
+pub fn start_new_project_beat(app: &Rc<App>) {
+    use crate::fl_library::{self as fl, Status};
+    let Status::Ready(loaded) = fl::status() else {
+        return add_starter_beat(app);
+    };
+    let Some(kit) = library::default_kit(&loaded.kits) else {
+        return add_starter_beat(app);
+    };
+    let picks: Vec<(&'static str, library::index::SoundEntry)> = fl::kit_sounds(kit, &loaded.index)
+        .into_iter()
+        .filter(|(slot, _)| matches!(*slot, "kick" | "snare" | "hat"))
+        .map(|(slot, e)| (slot, e.clone()))
+        .collect();
+    if picks.len() < 3 {
+        return add_starter_beat(app);
+    }
+    let items = picks
+        .iter()
+        .map(|(_, e)| crate::samples_ui::ImportItem {
+            path: e.path.clone(),
+            local_only: true,
+            expect_sha256: None,
+        })
+        .collect();
+    let a = app.clone();
+    crate::samples_ui::import(app, items, move |results| {
+        let refs: Vec<SampleRef> = results.into_iter().filter_map(Result::ok).collect();
+        let empty = a.session.borrow().document().project.channels.is_empty();
+        if refs.len() < 3 || !empty {
+            if empty {
+                add_starter_beat(&a);
+                a.session.borrow_mut().editor.mark_saved();
+            }
+            return;
+        }
+        let row = |name: &'static str, i: usize, steps: &[u8], vel: u8| {
+            let mut p = part(
+                name,
+                (
+                    NewInstrument::Sampler {
+                        sample: Some(refs[i].hash.clone()),
+                        mode: SampleMode::OneShot,
+                    },
+                    picks[i].1.root_note.unwrap_or(60),
+                ),
+                steps,
+                vel,
+            );
+            p.sample = Some(refs[i].clone());
+            p
+        };
+        let bass = fl_808_part(&a);
+        starter_beat(
+            &a,
+            vec![
+                row("Kick", 0, &[0, 4, 8, 12], 110),
+                row("Snare", 1, &[4, 12], 100),
+                row("Hat", 2, &[2, 6, 10, 14], 80),
+                bass,
+            ],
+        );
+        a.session.borrow_mut().editor.mark_saved();
+    });
+}
+
+/// The 808 row: a Surge XT 808 sound when Surge XT is installed, the
+/// built-in 808 otherwise.
+fn fl_808_part(app: &Rc<App>) -> Part {
+    let surge = plugin_host::sounds::sounds()
+        .iter()
+        .find(|s| s.role == "808" && crate::sound_picker::available(app, s));
+    match surge.and_then(|s| Some((s, plugin_host::sounds::plugin_of(s)?))) {
+        Some((s, p)) => {
+            let mut part = part(
+                "808",
+                (
+                    NewInstrument::Clap {
+                        plugin_id: p.clap_id.clone(),
+                        preset: Some(s.preset.clone()),
+                    },
+                    s.note,
+                ),
+                &[0, 10],
+                100,
+            );
+            part.gain_db = s.gain_db;
+            part
+        }
+        None => part(
+            "808",
+            (NewInstrument::Bass808 { mono: true }, 36),
+            &[0, 10],
+            100,
+        ),
+    }
+}
+
+fn starter_beat(app: &Rc<App>, parts: Vec<Part>) {
     let grouped = app.gesture_begin("New project");
     let bar = protocol::model::ticks_per_bar(app.session.borrow().document().project.time_sig_num);
     let run = |e: Vec<Edit>| {
@@ -246,57 +407,20 @@ pub fn add_starter_beat(app: &Rc<App>) {
             app.edit(e)
         }
     };
-    let preset = |name: &str| {
-        presets::presets()
-            .into_iter()
-            .find(|p| p.name == name)
-            .map(|p| (NewInstrument::Synth { params: p.params }, p.root_key))
-    };
-    // (channel name, instrument and root key, steps, velocity)
-    type Part = (&'static str, (NewInstrument, u8), Vec<u8>, u8);
-    let parts: Vec<Part> = vec![
-        (
-            "Kick",
-            preset("Kick").unwrap_or((
-                NewInstrument::Synth {
-                    params: SynthParams::default(),
-                },
-                36,
-            )),
-            vec![0, 4, 8, 12],
-            110,
-        ),
-        (
-            "Snare",
-            preset("Snare").unwrap_or((
-                NewInstrument::Synth {
-                    params: SynthParams::default(),
-                },
-                38,
-            )),
-            vec![4, 12],
-            100,
-        ),
-        (
-            "Hat",
-            preset("Closed hat").unwrap_or((
-                NewInstrument::Synth {
-                    params: SynthParams::default(),
-                },
-                42,
-            )),
-            vec![2, 6, 10, 14],
-            80,
-        ),
-        (
-            "808",
-            (NewInstrument::Bass808 { mono: true }, 36),
-            vec![0, 10],
-            100,
-        ),
-    ];
     let mut first = None;
-    for (name, (instrument, root_key), steps, vel) in parts {
+    for Part {
+        name,
+        instrument,
+        root_key,
+        steps,
+        vel,
+        sample,
+        gain_db,
+    } in parts
+    {
+        if let Some(sample) = sample {
+            run(vec![Edit::AddSample { sample }]);
+        }
         let Some(t) = run(vec![Edit::AddTrack { name: name.into() }]) else {
             continue;
         };
@@ -311,6 +435,12 @@ pub fn add_starter_beat(app: &Rc<App>) {
             continue;
         };
         first.get_or_insert(ch);
+        if gain_db != 0.0 {
+            run(vec![Edit::SetTrackMix {
+                track,
+                value: MixValue::VolumeDb(gain_db),
+            }]);
+        }
         // A one-bar clip with the steps, then linked copies over bars 2 to
         // 4: editing any of them edits all (SPEC 20.3).
         let Some(made) = run(vec![Edit::AddClip {

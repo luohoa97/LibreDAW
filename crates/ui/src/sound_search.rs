@@ -79,6 +79,12 @@ pub fn search(
                 tags: vec![agent_string(soundlib::role_group(&p.role))],
                 pack: agent_string(&pack_of(kit)),
                 kit: Some(agent_string(&kit.title)),
+                source: match kit.source {
+                    Source::Pack => "Oto Kit".into(),
+                    Source::UserFolder => "Your Folder".into(),
+                },
+                kind: "single sound".into(),
+                kit_name: None,
             });
         }
     }

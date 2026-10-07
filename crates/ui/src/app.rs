@@ -702,6 +702,16 @@ impl App {
         self.notify();
     }
 
+    /// Moves the playhead; playing goes on from there (the timeline ruler's Seek).
+    pub fn seek(&self, tick: u64) {
+        let _ = self
+            .session
+            .borrow_mut()
+            .link
+            .command(protocol::engine::EngineCommand::Seek { tick });
+        self.notify();
+    }
+
     pub fn stop(&self) {
         let _ = self.session.borrow_mut().link.command(EngineCommand::Stop);
         self.ui.borrow_mut().playing = false;

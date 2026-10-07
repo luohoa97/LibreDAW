@@ -108,8 +108,14 @@ pub struct Bridge {
     approved_plugins: HashSet<String>,
     jobs: Rc<RefCell<HashMap<u64, Job>>>,
     next_job: u64,
+    /// The last analysis, for the revision, range and tail it was made for
+    /// (SPEC 18.7: cached per revision).
+    analysis_cache: Rc<RefCell<Option<(AnalysisKey, Analysis)>>>,
     pub ui: AgentUi,
 }
+
+/// Revision, range and tail (as bits) of an analysis.
+type AnalysisKey = (u64, Option<(u32, u32)>, u64);
 
 fn ok(body: ReplyBody) -> Outcome {
     Outcome::Ok { body }
@@ -229,6 +235,7 @@ pub fn start_in(dir: PathBuf, agent_request: bool) -> (Option<Bridge>, Option<St
                 approved_plugins: HashSet::new(),
                 jobs: Rc::new(RefCell::new(HashMap::new())),
                 next_job: 1,
+                analysis_cache: Rc::new(RefCell::new(None)),
                 ui: AgentUi {
                     wants_control: agent_request,
                     ..AgentUi::default()
@@ -727,84 +734,47 @@ fn kit_add(
     )
 }
 
-/// `KitAdd` with this `pack` adds one sound by catalogue id (`kit` is the
-/// id) instead of a kit.
-pub const SOUND_BY_ID: &str = "@sound";
-
-/// `SoundSearch` carries the catalogue's extra arguments in `tags`:
-/// `source:FL Studio` and `offset:40`; every other tag is a search word.
-/// A reply entry carries its kind first in `tags` and its source in `pack`;
-/// an entry whose id starts with `note:` is a message for the agent.
-fn sound_search(
-    app: &Rc<App>,
-    role: Option<&str>,
-    genre: Option<&str>,
-    tags: &[String],
-    limit: u32,
-) -> ReplyBody {
+/// `SoundSearch`: the catalogue (SPEC 15.3, 18.4), paged. A drum kit's
+/// pieces are the sounds whose `kit` is its id, so a search with `kit` set
+/// to a kit id lists the kit and its pieces. Messages for the agent (FL
+/// Studio off, still being read) go in `notes`.
+fn sound_search(app: &Rc<App>, q: crate::sound_catalog::Query) -> ReplyBody {
     use crate::sound_catalog as cat;
-    let mut q = cat::Query {
-        role: role.unwrap_or("").into(),
-        genre: genre.unwrap_or("").into(),
-        limit: limit.min(crate::sound_search::MAX_RESULTS) as usize,
-        ..cat::Query::default()
-    };
-    let mut words = Vec::new();
-    for t in tags {
-        if let Some(s) = t.strip_prefix("source:") {
-            q.source = s.into();
-        } else if let Some(n) = t.strip_prefix("offset:") {
-            q.offset = n.trim().parse().unwrap_or(0);
-        } else {
-            words.push(t.as_str());
-        }
-    }
-    q.text = words.join(" ");
     let fl = fl_state(app);
     let entries = catalogue(app, &fl);
     let (page, total) = cat::search(&entries, &q);
-    let mut sounds: Vec<protocol::control::SoundInfo> = page
+    let sounds = page
         .into_iter()
-        .map(|e| {
-            let mut tags = vec![e.kind.to_string()];
-            tags.extend(e.tags.iter().map(|t| agent_string(t)));
-            protocol::control::SoundInfo {
-                id: agent_string(&e.id),
-                name: agent_string(&e.name),
-                role: agent_string(&e.role),
-                genres: if e.family.is_empty() {
-                    Vec::new()
-                } else {
-                    vec![agent_string(&e.family)]
-                },
-                tags,
-                pack: e.source.to_string(),
-                kit: None,
-            }
+        .map(|e| protocol::control::SoundInfo {
+            id: agent_string(&e.id),
+            name: agent_string(&e.name),
+            role: agent_string(&e.role),
+            genres: if e.family.is_empty() {
+                Vec::new()
+            } else {
+                vec![agent_string(&e.family)]
+            },
+            tags: e.tags.iter().map(|t| agent_string(t)).collect(),
+            pack: e.source.to_string(),
+            kit: e.kit.as_ref().map(|(id, _)| agent_string(id)),
+            source: e.source.to_string(),
+            kind: e.kind.to_string(),
+            kit_name: e.kit.as_ref().map(|(_, name)| agent_string(name)),
         })
         .collect();
     let asks_fl = q.source.trim().is_empty() || q.source.to_lowercase().contains("fl");
-    if asks_fl && let Some(n) = cat::fl_note(&fl.status, fl.remembered) {
-        sounds.push(note(n));
-    }
-    if total > q.offset + sounds.iter().filter(|s| !s.id.starts_with("note:")).count() {
-        sounds.push(note(&format!(
-            "{total} sounds match; ask again with offset {} for the next ones.",
-            q.offset + q.limit
-        )));
-    }
-    ReplyBody::Sounds { sounds }
-}
-
-fn note(text: &str) -> protocol::control::SoundInfo {
-    protocol::control::SoundInfo {
-        id: "note:".into(),
-        name: text.into(),
-        role: String::new(),
-        genres: Vec::new(),
-        tags: Vec::new(),
-        pack: String::new(),
-        kit: None,
+    let notes = if asks_fl {
+        cat::fl_note(&fl.status, fl.remembered)
+            .map(str::to_string)
+            .into_iter()
+            .collect()
+    } else {
+        Vec::new()
+    };
+    ReplyBody::Sounds {
+        sounds,
+        total: total as u32,
+        notes,
     }
 }
 
@@ -1034,6 +1004,7 @@ fn execute(app: &Rc<App>, ticket: Ticket, author: &Author, req: Request) -> Opti
             ok(ReplyBody::Project {
                 revision: s.document().revision,
                 project: s.document().project.clone(),
+                next_id: s.document().next_id,
             })
         }
         RequestBody::ProjectInfo => ok(ReplyBody::ProjectInfo(project_info(app))),
@@ -1299,20 +1270,45 @@ fn execute(app: &Rc<App>, ticket: Ticket, author: &Author, req: Request) -> Opti
             genre,
             tags,
             limit,
-        } => ok(sound_search(
-            app,
-            role.as_deref(),
-            genre.as_deref(),
-            &tags,
-            limit,
-        )),
-        RequestBody::KitAdd { pack, kit, track } => {
+            query,
+            source,
+            kit,
+            offset,
+        } => {
+            let words: Vec<String> = query
+                .iter()
+                .map(String::as_str)
+                .chain(tags.iter().map(String::as_str))
+                .map(str::to_string)
+                .collect();
+            ok(sound_search(
+                app,
+                crate::sound_catalog::Query {
+                    text: words.join(" "),
+                    role: role.unwrap_or_default(),
+                    source: source.unwrap_or_default(),
+                    genre: genre.unwrap_or_default(),
+                    kit: kit.unwrap_or_default(),
+                    offset: offset as usize,
+                    limit: limit.min(crate::sound_search::MAX_RESULTS) as usize,
+                },
+            ))
+        }
+        RequestBody::SoundAdd { id, track } => {
             let current = revision(app);
             if is_stale(base_revision, current) {
                 return Some(err(ControlError::Stale { current }));
             }
-            if pack == SOUND_BY_ID {
-                return sound_add(app, ticket, author, &kit, track);
+            return sound_add(app, ticket, author, &id, track);
+        }
+        RequestBody::Seek { tick } => {
+            app.seek(tick);
+            ok(ReplyBody::Done)
+        }
+        RequestBody::KitAdd { pack, kit, track } => {
+            let current = revision(app);
+            if is_stale(base_revision, current) {
+                return Some(err(ControlError::Stale { current }));
             }
             return kit_add(app, ticket, author, &pack, &kit, track);
         }
@@ -1454,8 +1450,41 @@ fn start_job(app: &Rc<App>, target: JobTarget, fmt: Option<WavFormat>) -> Outcom
         );
         (id, b.jobs.clone(), progress, cancel)
     };
+    let key: AnalysisKey = (rev, range, target.tail.to_bits());
+    let cache = app
+        .bridge
+        .borrow()
+        .as_ref()
+        .map(|b| b.analysis_cache.clone())
+        .unwrap_or_default();
+    if fmt.is_none()
+        && let Some((k, a)) = cache.borrow().as_ref()
+        && *k == key
+    {
+        if let Some(j) = jobs.borrow_mut().get_mut(&id) {
+            j.state = JobState::Done;
+            j.result = Some(Ok(ReplyBody::Analysis(a.clone())));
+            j.progress.store(100, Ordering::Relaxed);
+        }
+        return ok(ReplyBody::Job {
+            job: id,
+            revision: rev,
+        });
+    }
+    let (start_tick, tempo_bpm) = {
+        let p = &project;
+        let loop_on = p.loop_region.enabled && p.loop_region.end > p.loop_region.start;
+        let start = match range {
+            Some((a, _)) => a,
+            None if loop_on => p.loop_region.start,
+            None => 0,
+        };
+        (start, p.tempo_bpm)
+    };
+    let song = project.clone();
     let (p2, c2) = (progress.clone(), cancel.clone());
     let jobs2 = jobs.clone();
+    let cache2 = cache.clone();
     app.tasks.spawn(
         "control-job",
         move || -> Result<ReplyBody, String> {
@@ -1490,6 +1519,11 @@ fn start_job(app: &Rc<App>, target: JobTarget, fmt: Option<WavFormat>) -> Outcom
                 None => {
                     let mut a: Analysis = control::analysis::analyze(&frames, rate, &[]);
                     a.revision = rev;
+                    let tpb = protocol::model::ticks_per_bar(song.time_sig_num);
+                    let per_bar = f64::from(tpb) * 60.0 / (tempo_bpm * 960.0) * f64::from(rate);
+                    a.bars =
+                        control::song_map::bars(&frames, rate, per_bar, start_tick / tpb, &song);
+                    a.sections = control::song_map::sections(&a.bars);
                     Ok(ReplyBody::Analysis(a))
                 }
             }
@@ -1498,6 +1532,9 @@ fn start_job(app: &Rc<App>, target: JobTarget, fmt: Option<WavFormat>) -> Outcom
             if let Some(j) = jobs2.borrow_mut().get_mut(&id) {
                 match r {
                     Ok(body) => {
+                        if let ReplyBody::Analysis(a) = &body {
+                            *cache2.borrow_mut() = Some((key, a.clone()));
+                        }
                         j.state = JobState::Done;
                         j.result = Some(Ok(body));
                     }
