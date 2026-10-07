@@ -67,10 +67,56 @@ impl ControlConfig {
 
     /// `$XDG_RUNTIME_DIR/libredaw`; `None` if the variable is unset (never
     /// `/tmp`, 17.1).
+    ///
+    /// Inside a Flatpak the directory is `$XDG_RUNTIME_DIR/app/$FLATPAK_ID/libredaw`:
+    /// each `flatpak run` gets its own private runtime dir, except that
+    /// `app/<id>` is shared by every instance of the app, so the DAW and a
+    /// `libredaw-mcp` started separately find the same socket.
     pub fn default_dir() -> Option<PathBuf> {
-        let d = std::env::var_os("XDG_RUNTIME_DIR").filter(|d| !d.is_empty())?;
-        Some(PathBuf::from(d).join("libredaw"))
+        let base = PathBuf::from(std::env::var_os("XDG_RUNTIME_DIR").filter(|d| !d.is_empty())?);
+        Some(dir_in(&base, std::env::var("FLATPAK_ID").ok().as_deref()))
     }
+}
+
+/// The socket directory under runtime dir `base` (see `default_dir`).
+fn dir_in(base: &Path, flatpak_id: Option<&str>) -> PathBuf {
+    if let Some(id) =
+        flatpak_id.filter(|id| !id.is_empty() && !id.contains('/') && !id.starts_with('.'))
+    {
+        let shared = base.join("app").join(id);
+        if shared.is_dir() {
+            return shared.join("libredaw");
+        }
+    }
+    base.join("libredaw")
+}
+
+#[cfg(test)]
+mod dir_tests {
+    use super::dir_in;
+
+    #[test]
+    fn flatpak_uses_the_shared_app_dir_when_it_exists() {
+        let base = std::env::temp_dir().join(format!("ldaw-dir-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(base.join("app/org.example.App")).unwrap();
+        assert_eq!(
+            dir_in(&base, Some("org.example.App")),
+            base.join("app/org.example.App/libredaw")
+        );
+        // Not in a Flatpak, no such app dir, or a hostile id: the plain path.
+        assert_eq!(dir_in(&base, None), base.join("libredaw"));
+        assert_eq!(dir_in(&base, Some("other.App")), base.join("libredaw"));
+        assert_eq!(dir_in(&base, Some("../x")), base.join("libredaw"));
+        assert_eq!(dir_in(&base, Some("")), base.join("libredaw"));
+        let _ = std::fs::remove_dir_all(&base);
+    }
+}
+
+/// The control socket of the running DAW, or `None` if `XDG_RUNTIME_DIR`
+/// is unset.
+pub fn default_socket_path() -> Option<PathBuf> {
+    ControlConfig::default_dir().map(|d| d.join(crate::socket::SOCKET_NAME))
 }
 
 #[derive(Debug)]

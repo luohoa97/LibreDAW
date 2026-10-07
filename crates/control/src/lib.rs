@@ -22,6 +22,7 @@ pub mod suggest;
 pub use mcp::PROTOCOL_VERSION;
 pub use state::{
     ClientInfo, ControlConfig, ControlServer, ControlStartError, Incoming, Polled, Ticket, UiEvent,
+    default_socket_path,
 };
 pub use suggest::{
     PendingSuggestion, SuggestError, Suggestion, SuggestionEvent, SuggestionId, SuggestionKind,

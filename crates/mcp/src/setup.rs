@@ -27,6 +27,24 @@ pub struct SetupEnv {
     pub path_dirs: Vec<PathBuf>,
     /// Absolute path of the `libredaw-mcp` binary to register.
     pub binary: PathBuf,
+    /// Running inside the LibreDAW Flatpak sandbox: the AI clients are on
+    /// the host, so setup prints the commands to run there and changes
+    /// nothing (`flatpak_instructions`).
+    pub flatpak: bool,
+}
+
+/// The Flatpak application id (decided by the owner).
+pub const FLATPAK_APP_ID: &str = "io.github.luohoa97.LibreDAW";
+
+/// The command AI clients on the host run to start the relay inside the
+/// Flatpak.
+pub const FLATPAK_COMMAND: &[&str] = &["flatpak", "run", "--command=libredaw-mcp", FLATPAK_APP_ID];
+
+/// Whether this process runs inside a Flatpak sandbox (`FLATPAK_ID` is set,
+/// or `/.flatpak-info` exists).
+pub fn in_flatpak() -> bool {
+    std::env::var_os("FLATPAK_ID").is_some_and(|v| !v.is_empty())
+        || Path::new("/.flatpak-info").exists()
 }
 
 impl SetupEnv {
@@ -50,6 +68,7 @@ impl SetupEnv {
             config_home,
             path_dirs,
             binary,
+            flatpak: in_flatpak(),
         })
     }
 
@@ -263,6 +282,9 @@ pub fn run(env: &SetupEnv, opts: &Options, input: &mut dyn BufRead, out: &mut dy
         let _ = write!(out, "{USAGE}");
         return 0;
     }
+    if env.flatpak {
+        return flatpak_instructions(opts, out);
+    }
     let detected = match detect(env) {
         Ok(d) => d,
         Err(e) => {
@@ -306,6 +328,66 @@ pub fn run(env: &SetupEnv, opts: &Options, input: &mut dyn BufRead, out: &mut dy
         }
     }
     i32::from(failed)
+}
+
+/// What the user runs on the host for one client, as text; `remove` gives
+/// the undo.
+fn host_step(client: ClientKind, remove: bool) -> String {
+    let cmd = FLATPAK_COMMAND.join(" ");
+    let args_json = json!(&FLATPAK_COMMAND[1..]);
+    match (client, remove) {
+        (ClientKind::ClaudeCode, false) => {
+            format!("claude mcp add --scope user {SERVER_NAME} -- {cmd}")
+        }
+        (ClientKind::ClaudeCode, true) => format!("claude mcp remove --scope user {SERVER_NAME}"),
+        (ClientKind::Codex, false) => format!("codex mcp add {SERVER_NAME} -- {cmd}"),
+        (ClientKind::Codex, true) => format!("codex mcp remove {SERVER_NAME}"),
+        (ClientKind::Cursor, false) => format!(
+            "add to ~/.cursor/mcp.json: {{\"mcpServers\":{{\"{SERVER_NAME}\":{{\"command\":\"flatpak\",\"args\":{args_json}}}}}}}"
+        ),
+        (ClientKind::Cursor, true) => {
+            format!("delete \"{SERVER_NAME}\" from \"mcpServers\" in ~/.cursor/mcp.json")
+        }
+        (ClientKind::VsCode, false) => format!(
+            "code --add-mcp '{{\"name\":\"{SERVER_NAME}\",\"command\":\"flatpak\",\"args\":{args_json}}}'"
+        ),
+        (ClientKind::VsCode, true) => {
+            format!("delete \"{SERVER_NAME}\" from \"servers\" in ~/.config/Code/User/mcp.json")
+        }
+        (ClientKind::GeminiCli, false) => format!("gemini mcp add -s user {SERVER_NAME} {cmd}"),
+        (ClientKind::GeminiCli, true) => format!("gemini mcp remove -s user {SERVER_NAME}"),
+        (ClientKind::Zed, false) => format!(
+            "add to ~/.config/zed/settings.json: \"context_servers\": {{\"{SERVER_NAME}\": {{\"command\": \"flatpak\", \"args\": {args_json}, \"env\": {{}}}}}}"
+        ),
+        (ClientKind::Zed, true) => format!(
+            "delete \"{SERVER_NAME}\" from \"context_servers\" in ~/.config/zed/settings.json"
+        ),
+    }
+}
+
+/// Inside the Flatpak sandbox: the AI clients (and their configs) live on
+/// the host, which this sandbox cannot run programs on or write to, so
+/// nothing is changed. Prints the exact steps for the user to run on the
+/// host instead; the server entry is
+/// `flatpak run --command=libredaw-mcp io.github.luohoa97.LibreDAW`.
+fn flatpak_instructions(opts: &Options, out: &mut dyn Write) -> i32 {
+    let _ = writeln!(
+        out,
+        "libredaw-mcp is running inside the LibreDAW Flatpak. AI clients live on your host system and this sandbox cannot run or configure them.\n\
+Run these on the host (a terminal outside Flatpak); the server starts as `{}`:",
+        FLATPAK_COMMAND.join(" ")
+    );
+    for c in ALL_CLIENTS {
+        if !(opts.only.is_empty() || opts.only.iter().any(|s| s == c.slug())) {
+            continue;
+        }
+        let _ = writeln!(out, "\n{}:\n  {}", c.title(), host_step(c, opts.remove));
+    }
+    let _ = writeln!(
+        out,
+        "\nNothing was changed. (`--yes` has no effect here: setup cannot reach the host.)"
+    );
+    0
 }
 
 fn confirm(input: &mut dyn BufRead, out: &mut dyn Write, verb: &str) -> bool {
