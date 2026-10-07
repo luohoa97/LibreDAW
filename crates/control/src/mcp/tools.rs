@@ -434,6 +434,7 @@ pub fn plan(name: &str, args: Value) -> Result<Plan, PlanError> {
         "project_new" => parse::<ProjectNewArgs>(args).map(|a| {
             changing(RequestBody::ProjectNew {
                 template: a.template,
+                name: None,
             })
         }),
         "project_open" => parse::<ProjectOpenArgs>(args)

@@ -22,11 +22,11 @@ release commit, with a clean tree.
 ## 2. Build the bundle (packaging)
 
 1. Set the version: `[workspace.package] version = "0.1.0"` in `Cargo.toml`, the
-   `<release>` entry in `data/io.github.luohoa97.LibreDAW.metainfo.xml`
+   `<release>` entry in `data/io.github.luohoa97.Oto.metainfo.xml`
    (version and date), `cargo update --workspace` offline check. Commit.
 2. Replace the local `libredaw-sounds` dir source in
-   `packaging/flatpak/io.github.luohoa97.LibreDAW.yml` with a public git URL, a
-   tag and the commit hash (`type: git`). Replace the `libredaw` dir source with
+   `packaging/flatpak/io.github.luohoa97.Oto.yml` with a public git URL, a
+   tag and the commit hash (`type: git`). Replace the `libredaw` (Oto) dir source with
    `type: git` at the release tag too, so the bundle is reproducible.
 3. Put the screenshots in `docs/screenshots/{home,pattern,mixer}.png`
    (main, after the UI gate), and check the URLs in the metainfo.
@@ -35,10 +35,10 @@ release commit, with a clean tree.
        fish packaging/flatpak/cargo-sources.fish
        flatpak-builder --user --install-deps-from=flathub --force-clean \
            --repo=packaging/flatpak/repo packaging/flatpak/build-dir \
-           packaging/flatpak/io.github.luohoa97.LibreDAW.yml
-       flatpak build-bundle packaging/flatpak/repo LibreDAW-0.1.0.flatpak \
-           io.github.luohoa97.LibreDAW
-       sha256sum LibreDAW-0.1.0.flatpak > LibreDAW-0.1.0.flatpak.sha256
+           packaging/flatpak/io.github.luohoa97.Oto.yml
+       flatpak build-bundle packaging/flatpak/repo Oto-0.1.0.flatpak \
+           io.github.luohoa97.Oto
+       sha256sum Oto-0.1.0.flatpak > Oto-0.1.0.flatpak.sha256
 
    For the offline check, run the second command a second time with the network
    disabled (`unshare -rn` or a firewalled VM) after sources were downloaded
@@ -46,13 +46,13 @@ release commit, with a clean tree.
 
 ## 3. Clean-install test (packaging)
 
-In a VM or container with only the GNOME 50 runtime (no other LibreDAW
+In a VM or container with only the GNOME 50 runtime (no other Oto
 dependencies):
 
-    flatpak install --user ./LibreDAW-0.1.0.flatpak
-    LIBREDAW_DEBUG=1 flatpak run io.github.luohoa97.LibreDAW
-    flatpak run --command=libredaw-mcp io.github.luohoa97.LibreDAW --version
-    flatpak uninstall --user io.github.luohoa97.LibreDAW
+    flatpak install --user ./Oto-0.1.0.flatpak
+    OTO_DEBUG=1 flatpak run io.github.luohoa97.Oto
+    flatpak run --command=oto-mcp io.github.luohoa97.Oto --version
+    flatpak uninstall --user io.github.luohoa97.Oto
 
 Check: the Home page opens, a template plays sound through PipeWire, the debug
 output reports real-time priority (or the documented fallback), scripting shows
@@ -62,15 +62,15 @@ its "not available in the Flatpak" message.
 
 1. Merge all branches to `main`; confirm gate rows 1 to 8 are recorded in the
    release issue.
-2. Signed tag (owner's key): `git tag -s v0.1.0 -m "LibreDAW 0.1.0"`;
+2. Signed tag (owner's key): `git tag -s v0.1.0 -m "Oto 0.1.0"`;
    `git tag -v v0.1.0`.
 3. `git push origin main v0.1.0` (owner approves the push).
-4. GitHub release: `gh release create v0.1.0 LibreDAW-0.1.0.flatpak
-   LibreDAW-0.1.0.flatpak.sha256 --title "LibreDAW 0.1.0" --notes-file
+4. GitHub release: `gh release create v0.1.0 Oto-0.1.0.flatpak
+   Oto-0.1.0.flatpak.sha256 --title "Oto 0.1.0" --notes-file
    packaging/RELEASE-NOTES-0.1.0.md`.
 5. Flathub submission is a separate, later owner decision.
 
 # Known limits (stated in the notes)
 
 Host CLAP plugins in `/usr/lib/clap` are not visible from the Flatpak; scripting
-is disabled in the Flatpak; `.ldaw` bundles show as folders in GNOME Files.
+is disabled in the Flatpak; `.oto` bundles show as folders in GNOME Files.

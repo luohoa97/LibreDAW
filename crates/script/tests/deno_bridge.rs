@@ -86,7 +86,6 @@ fn project_get_and_edit_round_trip() {
             Edit::SetTempo { bpm: 140.0 },
             Edit::AddNotes {
                 pattern: PatternId(3),
-                channel: ChannelId(4),
                 notes: vec![NewNote {
                     start: 0,
                     len: 240,
@@ -96,7 +95,6 @@ fn project_get_and_edit_round_trip() {
             },
             Edit::SetStep {
                 pattern: PatternId(3),
-                channel: ChannelId(4),
                 step: 2,
                 on: true,
                 vel: None,

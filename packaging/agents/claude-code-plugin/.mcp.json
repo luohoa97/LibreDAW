@@ -1,7 +1,7 @@
 {
   "mcpServers": {
-    "libredaw": {
-      "command": "libredaw-mcp",
+    "oto": {
+      "command": "oto-mcp",
       "args": []
     }
   }

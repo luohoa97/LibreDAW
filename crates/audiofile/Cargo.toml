@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+[package]
+name = "libredaw-audiofile"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+name = "audiofile"
+
+[dependencies]
+# WAV (PCM), FLAC, Ogg Vorbis and MP3 decoding; no default features, so no
+# Matroska, ADPCM or metadata parsers.
+symphonia = { version = "0.6", default-features = false, features = ["wav", "pcm", "flac", "vorbis", "ogg", "mp3"] }
+# Pure-Rust lossless WavPack decoder.
+wavicle = { version = "0.1", default-features = false, features = ["decode"] }

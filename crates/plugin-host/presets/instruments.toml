@@ -1,0 +1,250 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# Beginner instrument list for the Add Instrument picker (SPEC 15). Every entry
+# is a libre CLAP plugin plus a factory preset. `preset` is a path under the
+# plugin's `preset_root`, which is relative to the extension root (the parent of
+# the directory holding the .clap file). `note` is the MIDI key used to audition
+# and to test-render the entry (60 is C4, 48 is C3).
+
+[[plugin]]
+key = "surge-xt"
+name = "Surge XT"
+clap_id = "org.surge-synth-team.surge-xt"
+extension = "org.freedesktop.LinuxAudio.Plugins.Surge-XT"
+preset_root = "share/surge-xt/patches_factory"
+preset_load = "clap.preset-load"
+
+[[instrument]]
+role = "Bass"
+name = "Sub Bass"
+plugin = "surge-xt"
+preset = "Basses/Sub 1.fxp"
+note = 36
+
+[[instrument]]
+role = "Bass"
+name = "Rubber Bass"
+plugin = "surge-xt"
+preset = "Basses/Rubber Bass.fxp"
+note = 36
+
+[[instrument]]
+role = "Bass"
+name = "Electric Bass"
+plugin = "surge-xt"
+preset = "Basses/E-Bass.fxp"
+note = 36
+
+[[instrument]]
+role = "808"
+name = "808 Sub"
+plugin = "surge-xt"
+preset = "Basses/Sub 2.fxp"
+note = 36
+
+[[instrument]]
+role = "808"
+name = "808 Deep"
+plugin = "surge-xt"
+preset = "Basses/Deep End.fxp"
+note = 36
+
+[[instrument]]
+role = "808"
+name = "808 Square"
+plugin = "surge-xt"
+preset = "Basses/Sub Square.fxp"
+note = 36
+
+[[instrument]]
+role = "Lead"
+name = "Classic Lead"
+plugin = "surge-xt"
+preset = "Leads/Classic Lead 1.fxp"
+note = 60
+
+[[instrument]]
+role = "Lead"
+name = "Sine Lead"
+plugin = "surge-xt"
+preset = "Leads/Sine Lead.fxp"
+note = 60
+
+[[instrument]]
+role = "Lead"
+name = "Sync Lead"
+plugin = "surge-xt"
+preset = "Leads/Sync Lead.fxp"
+note = 60
+
+[[instrument]]
+role = "Pad"
+name = "Warm Pad"
+plugin = "surge-xt"
+preset = "Pads/MKS-70 Warm Pad.fxp"
+note = 48
+
+[[instrument]]
+role = "Pad"
+name = "Soft Pad"
+plugin = "surge-xt"
+preset = "Pads/Pad 1.fxp"
+note = 48
+
+[[instrument]]
+role = "Pad"
+name = "Choir Pad"
+plugin = "surge-xt"
+preset = "Pads/Choir Pad Thing.fxp"
+note = 48
+
+[[instrument]]
+role = "Keys"
+name = "Electric Piano"
+plugin = "surge-xt"
+preset = "Keys/EP 1.fxp"
+note = 60
+
+[[instrument]]
+role = "Keys"
+name = "DX Piano"
+plugin = "surge-xt"
+preset = "Keys/DX EP.fxp"
+note = 60
+
+[[instrument]]
+role = "Keys"
+name = "Organ"
+plugin = "surge-xt"
+preset = "Keys/Organ 1.fxp"
+note = 60
+
+[[instrument]]
+role = "Pluck"
+name = "Soft Pluck"
+plugin = "surge-xt"
+preset = "Plucks/Nice Pluck 1.fxp"
+note = 60
+
+[[instrument]]
+role = "Pluck"
+name = "Saw Pluck"
+plugin = "surge-xt"
+preset = "Plucks/Saw Pluck.fxp"
+note = 60
+
+[[instrument]]
+role = "Pluck"
+name = "Guitar Pluck"
+plugin = "surge-xt"
+preset = "Plucks/Guitar.fxp"
+note = 60
+
+[[instrument]]
+role = "Bell"
+name = "Glass Bell"
+plugin = "surge-xt"
+preset = "Plucks/Bell 1.fxp"
+note = 72
+
+[[instrument]]
+role = "Bell"
+name = "Music Box"
+plugin = "surge-xt"
+preset = "Plucks/Magic Music Box.fxp"
+note = 72
+
+[[instrument]]
+role = "Bell"
+name = "Fantasy Bell"
+plugin = "surge-xt"
+preset = "Plucks/Fantasy Bell.fxp"
+note = 72
+
+[[instrument]]
+role = "Strings"
+name = "Analog Strings"
+plugin = "surge-xt"
+preset = "Polysynths/Juno-60 Strings.fxp"
+note = 48
+
+[[instrument]]
+role = "Strings"
+name = "Violin Poly"
+plugin = "surge-xt"
+preset = "Polysynths/Violini Poly.fxp"
+note = 48
+
+[[instrument]]
+role = "Strings"
+name = "Poly Ahhs"
+plugin = "surge-xt"
+preset = "Polysynths/Poly Ahhs.fxp"
+note = 48
+
+[[instrument]]
+role = "Brass"
+name = "Synth Brass"
+plugin = "surge-xt"
+preset = "Brass/Synth Brass 1.fxp"
+note = 48
+
+[[instrument]]
+role = "Brass"
+name = "Double Brass"
+plugin = "surge-xt"
+preset = "Brass/JX-10 Double Brass.fxp"
+note = 48
+
+[[instrument]]
+role = "Brass"
+name = "Jump Brass"
+plugin = "surge-xt"
+preset = "Brass/OB-8 Jump.fxp"
+note = 48
+
+[[instrument]]
+role = "FX"
+name = "Space Adventure"
+plugin = "surge-xt"
+preset = "FX/Space Adventure 1.fxp"
+note = 48
+
+[[instrument]]
+role = "FX"
+name = "Aliens"
+plugin = "surge-xt"
+preset = "FX/Aliens.fxp"
+note = 48
+
+[[instrument]]
+role = "FX"
+name = "Fireworks"
+plugin = "surge-xt"
+preset = "FX/Fireworks.fxp"
+note = 48
+
+[[instrument]]
+role = "Arp"
+name = "Octave Arp"
+plugin = "surge-xt"
+preset = "Sequences/Octave Arp.fxp"
+note = 48
+
+[[instrument]]
+role = "Arp"
+name = "Sync Arp"
+plugin = "surge-xt"
+preset = "Sequences/Sync Arp.fxp"
+note = 48
+
+[[instrument]]
+role = "Arp"
+name = "Acid Sequence"
+plugin = "surge-xt"
+preset = "Sequences/Acid Seq 1.fxp"
+note = 48
+
+# Odin2 and Dexed ship no factory presets in their Flatpak extensions, so
+# they have no entries yet; their default (init) voices sound (see the smoke
+# tests) but are not a beginner list.
