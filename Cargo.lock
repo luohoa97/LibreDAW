@@ -860,6 +860,7 @@ version = "0.0.0"
 dependencies = [
  "libredaw-protocol",
  "libredaw-script",
+ "serde",
  "serde_json",
 ]
 
@@ -888,8 +889,6 @@ version = "0.0.0"
 dependencies = [
  "libredaw-control",
  "libredaw-protocol",
- "libredaw-script",
- "serde",
  "serde_json",
 ]
 

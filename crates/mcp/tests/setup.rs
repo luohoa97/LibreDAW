@@ -35,6 +35,7 @@ fn sandbox() -> Sandbox {
             home,
             path_dirs: vec![bindir],
             binary: PathBuf::from(BIN),
+            flatpak: false,
         },
         log: root.join("calls.log"),
         root,
@@ -328,4 +329,52 @@ fn remove_with_no_config_is_a_no_op() {
     let (code, out) = s.run(&["--remove", "--yes"], "");
     assert_eq!(code, 0, "{out}");
     assert!(!s.path(".cursor/mcp.json").exists());
+}
+
+const FLATPAK_CMD: &str = "flatpak run --command=libredaw-mcp io.github.luohoa97.LibreDAW";
+
+#[test]
+fn inside_flatpak_it_prints_host_commands_and_changes_nothing() {
+    let mut s = sandbox();
+    s.env.flatpak = true;
+    // Even with clients "installed" in the sandbox, nothing is run or written.
+    s.fake("claude", 0);
+    s.write(".cursor/mcp.json", "{}");
+    let (code, out) = s.run(&["--yes"], "");
+    assert_eq!(code, 0, "{out}");
+    assert!(
+        out.contains(&format!(
+            "claude mcp add --scope user libredaw -- {FLATPAK_CMD}"
+        )),
+        "{out}"
+    );
+    assert!(
+        out.contains(&format!("codex mcp add libredaw -- {FLATPAK_CMD}")),
+        "{out}"
+    );
+    assert!(
+        out.contains(
+            "\"command\":\"flatpak\",\"args\":[\"run\",\"--command=libredaw-mcp\",\"io.github.luohoa97.LibreDAW\"]"
+        ),
+        "{out}"
+    );
+    assert!(out.contains("Nothing was changed"), "{out}");
+    assert!(s.calls().is_empty(), "no host CLI may run from the sandbox");
+    assert_eq!(s.read(".cursor/mcp.json"), "{}");
+}
+
+#[test]
+fn flatpak_instructions_follow_only_and_remove() {
+    let mut s = sandbox();
+    s.env.flatpak = true;
+    let (_, out) = s.run(&["--only", "claude-code"], "");
+    assert!(
+        out.contains("claude mcp add") && !out.contains("codex mcp"),
+        "{out}"
+    );
+    let (_, out) = s.run(&["--remove", "--only", "claude-code"], "");
+    assert!(
+        out.contains("claude mcp remove --scope user libredaw"),
+        "{out}"
+    );
 }

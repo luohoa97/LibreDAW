@@ -21,6 +21,8 @@ use crate::state::{HELLO_TIMEOUT, HelloErr, Out, Shared};
 
 /// The hello is a short line; anything longer is not a hello.
 const MAX_HELLO_BYTES: usize = 4096;
+/// The first line is either the hello or an MCP `initialize`.
+const MAX_FIRST_LINE_BYTES: usize = 64 * 1024;
 const WRITE_TIMEOUT: Duration = Duration::from_secs(5);
 /// After a protocol violation we swallow this much input so the peer can
 /// still read our error before the connection resets.
@@ -43,7 +45,7 @@ pub fn accept_loop(listener: UnixListener, shared: Arc<Shared>) {
     }
 }
 
-enum ReadLine {
+pub(crate) enum ReadLine {
     Line(String),
     TooLong,
     NotUtf8,
@@ -51,13 +53,13 @@ enum ReadLine {
     Closed,
 }
 
-struct LineReader {
+pub(crate) struct LineReader {
     stream: UnixStream,
     buf: Vec<u8>,
 }
 
 impl LineReader {
-    fn read_line(&mut self, limit: usize) -> ReadLine {
+    pub(crate) fn read_line(&mut self, limit: usize) -> ReadLine {
         loop {
             if let Some(pos) = self.buf.iter().position(|&b| b == b'\n') {
                 if pos > limit {
@@ -95,7 +97,7 @@ impl LineReader {
         }
     }
 
-    fn drain(&mut self) {
+    pub(crate) fn drain(&mut self) {
         let end = Instant::now() + DRAIN_TIME;
         let mut total = 0;
         let mut chunk = [0u8; 16 * 1024];
@@ -141,6 +143,14 @@ fn hello_err_line(reason: &str) -> String {
     json!({"hello_err": {"reason": reason}}).to_string()
 }
 
+/// An MCP client starts with a JSON-RPC message; the script hello has no
+/// `jsonrpc` member.
+fn is_jsonrpc(line: &str) -> bool {
+    serde_json::from_str::<Value>(line)
+        .ok()
+        .is_some_and(|v| v.get("jsonrpc").is_some())
+}
+
 /// `None` is `bad_hello`.
 fn parse_hello(line: &str) -> Option<(Transport, String)> {
     let v: Value = serde_json::from_str(line).ok()?;
@@ -177,7 +187,7 @@ fn run_client(shared: Arc<Shared>, stream: UnixStream, id: u64) {
         let _ = tx.send(Out::Line(hello_err_line(reason)));
         let _ = tx.send(Out::Close);
     };
-    let hello = match reader.read_line(MAX_HELLO_BYTES) {
+    let hello = match reader.read_line(MAX_FIRST_LINE_BYTES) {
         ReadLine::Line(l) => l,
         ReadLine::TooLong | ReadLine::NotUtf8 => {
             refuse(&tx, "bad_hello");
@@ -189,12 +199,23 @@ fn run_client(shared: Arc<Shared>, stream: UnixStream, id: u64) {
             return;
         }
     };
+    if is_jsonrpc(&hello) {
+        // MCP: the first line is the client's `initialize` (SPEC 18.3).
+        let _ = reader.stream.set_read_timeout(None);
+        crate::mcp::serve::serve(shared, &mut reader, tx, kill_half, id, hello);
+        return;
+    }
+    if hello.len() > MAX_HELLO_BYTES {
+        refuse(&tx, "bad_hello");
+        reader.drain();
+        return;
+    }
     let Some((transport, name)) = parse_hello(&hello) else {
         refuse(&tx, "bad_hello");
         reader.drain();
         return;
     };
-    let info = match shared.register(id, transport, name, tx.clone(), kill_half) {
+    let info = match shared.register(id, transport, name, tx.clone(), kill_half, None) {
         Ok(i) => i,
         Err(e) => {
             refuse(
@@ -251,8 +272,10 @@ fn serve(
         }
         match check_request(&line, transport) {
             Ok(req) => {
-                if let Err(l) = shared.submit(id, req) {
-                    let _ = tx.send(Out::Line(l));
+                let rid = req.id;
+                if let Err(outcome) = shared.submit(id, req) {
+                    let r = Reply { id: rid, outcome };
+                    let _ = tx.send(Out::Line(serde_json::to_string(&r).unwrap_or_default()));
                 }
             }
             Err((rid, e)) => send_err(tx, rid, e),
