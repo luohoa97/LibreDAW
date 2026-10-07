@@ -6,3 +6,5 @@ pub mod document;
 pub mod history;
 pub mod persist;
 pub mod presets;
+pub mod samples;
+pub mod sha256;

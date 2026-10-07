@@ -360,6 +360,20 @@ impl History {
         }
     }
 
+    /// Plugin blobs and samples that any entry of the tree references, on
+    /// any branch. Pass it to `bundle::save_keeping` so a save's garbage
+    /// collection leaves what undo and redo can still reach (17.2).
+    pub fn keep(&self) -> crate::bundle::Keep {
+        let mut keep = crate::bundle::Keep::default();
+        let mut seen: HashSet<*const Project> = HashSet::new();
+        for e in self.entries.values() {
+            if seen.insert(Arc::as_ptr(&e.project)) {
+                keep.add_project(&e.project);
+            }
+        }
+        keep
+    }
+
     /// Entries for the control API's `History` reply, oldest first.
     pub fn infos(&self) -> Vec<HistoryEntry> {
         self.entries

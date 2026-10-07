@@ -31,6 +31,7 @@ use protocol::model::{Insert, Instrument, Project};
 use protocol::validate::ValidationError;
 
 use crate::document::{Document, parse_state_file_name};
+use crate::samples;
 
 pub const PROJECT_FILE: &str = "project.toml";
 pub const STATE_DIR: &str = "plugin-state";
@@ -58,6 +59,17 @@ pub enum BundleError {
     /// Test hook: the save stopped here, as a crash would.
     Crashed(SaveStep),
     TooLarge(PathBuf),
+    /// A sample file that is not a RIFF/WAVE file (15.1: only WAV is imported).
+    NotWav(PathBuf),
+    /// A sample file name that cannot be stored (empty, too long, control
+    /// characters, or not UTF-8).
+    BadName(PathBuf),
+    /// `samples/<hash>.wav` exists with a different size. Samples are
+    /// immutable and never overwritten (17.2).
+    SampleConflict(String),
+    /// No data directory for `local-samples.toml` (`$XDG_DATA_HOME` and
+    /// `$HOME` are both unset).
+    NoDataDir,
 }
 
 impl std::fmt::Display for BundleError {
@@ -69,6 +81,14 @@ impl std::fmt::Display for BundleError {
             BundleError::BlobConflict(n) => write!(f, "plugin state file {n} already exists"),
             BundleError::Crashed(s) => write!(f, "simulated crash after {s:?}"),
             BundleError::TooLarge(p) => write!(f, "{} is too large", p.display()),
+            BundleError::NotWav(p) => write!(f, "{} is not a WAV file", p.display()),
+            BundleError::BadName(p) => {
+                write!(f, "{} has a name that cannot be stored", p.display())
+            }
+            BundleError::SampleConflict(h) => {
+                write!(f, "sample {h} already exists with different content")
+            }
+            BundleError::NoDataDir => write!(f, "no data directory for local-samples.toml"),
         }
     }
 }
@@ -101,12 +121,39 @@ pub enum SaveStep {
     BundleDirSynced,
     /// Step 4: one unreferenced blob (or leftover tmp file) deleted.
     BlobDeleted(String),
+    /// Step 4 for `samples/`: one unreferenced sample file (or leftover tmp
+    /// file) deleted (17.2).
+    SampleDeleted(String),
 }
 
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct SaveReport {
     pub blobs_written: Vec<String>,
     pub blobs_deleted: Vec<String>,
+    pub samples_deleted: Vec<String>,
+}
+
+/// What else must survive the garbage collection of a save: blobs and
+/// samples that other documents (undo history, SPEC 15.11) still reference,
+/// and samples just imported whose `AddSample` edit has not been applied
+/// yet. The current document and the bundle's autosave are always kept.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Keep {
+    pub samples: HashSet<String>,
+    pub blobs: HashSet<String>,
+}
+
+impl Keep {
+    /// Adds everything `p` references.
+    pub fn add_project(&mut self, p: &Project) {
+        self.samples
+            .extend(p.samples.iter().map(|s| s.hash.clone()));
+        for_each_clap(p, |r| {
+            if let Some(n) = &r.state_file {
+                self.blobs.insert(n.clone());
+            }
+        });
+    }
 }
 
 fn fsync_dir(dir: &Path) -> Result<(), BundleError> {
@@ -120,6 +167,28 @@ fn write_durable(tmp: &Path, bytes: &[u8]) -> Result<(), BundleError> {
     let mut f = File::create(tmp).map_err(io_err(tmp))?;
     f.write_all(bytes).map_err(io_err(tmp))?;
     f.sync_all().map_err(io_err(tmp))
+}
+
+pub(crate) fn fsync_dir_of(dir: &Path) -> Result<(), BundleError> {
+    fsync_dir(dir)
+}
+
+/// Replaces `path` with `bytes` by the 7.4 steps: tmp file, fsync, rename,
+/// fsync of the directory. The directory must exist.
+pub(crate) fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), BundleError> {
+    let mut tmp = path.as_os_str().to_owned();
+    tmp.push(".tmp");
+    let tmp = PathBuf::from(tmp);
+    write_durable(&tmp, bytes)?;
+    fs::rename(&tmp, path).map_err(io_err(path))?;
+    if let Some(dir) = path.parent() {
+        fsync_dir(dir)?;
+    }
+    Ok(())
+}
+
+pub(crate) fn io_error(path: &Path) -> impl FnOnce(io::Error) -> BundleError + '_ {
+    io_err(path)
 }
 
 fn is_blob_name(n: &str) -> bool {
@@ -176,6 +245,25 @@ pub fn save_with_hook(
     doc: &Document,
     hook: &mut dyn FnMut(&SaveStep) -> bool,
 ) -> Result<SaveReport, BundleError> {
+    save_full(dir, doc, &Keep::default(), hook)
+}
+
+/// `save` that also keeps what `keep` names (for example
+/// `History::keep()`), so undo and redo still find their blobs and samples.
+pub fn save_keeping(dir: &Path, doc: &Document, keep: &Keep) -> Result<SaveReport, BundleError> {
+    save_full(dir, doc, keep, &mut |_| true)
+}
+
+/// Everything `save` can do. `dir` named `.autosave` is an autosave copy:
+/// its samples live in the parent bundle, so it neither collects samples
+/// nor writes a `.gitignore`.
+pub fn save_full(
+    dir: &Path,
+    doc: &Document,
+    keep: &Keep,
+    hook: &mut dyn FnMut(&SaveStep) -> bool,
+) -> Result<SaveReport, BundleError> {
+    let is_autosave = dir.file_name().is_some_and(|n| n == AUTOSAVE_DIR);
     let mut step = |s: SaveStep| -> Result<(), BundleError> {
         if hook(&s) {
             Ok(())
@@ -236,6 +324,18 @@ pub fn save_with_hook(
     fsync_dir(&state_dir)?;
     step(SaveStep::StateDirSynced)?;
 
+    // Before the project names a local-only sample, make sure git ignores
+    // any copy of it that finds its way into the bundle (17.2).
+    if !is_autosave {
+        let local: Vec<&str> = project
+            .samples
+            .iter()
+            .filter(|s| s.local_only)
+            .map(|s| s.hash.as_str())
+            .collect();
+        samples::update_gitignore(dir, &local)?;
+    }
+
     // 3. project.toml.
     let tmp = dir.join(format!("{PROJECT_FILE}.tmp"));
     let fin = dir.join(PROJECT_FILE);
@@ -259,7 +359,7 @@ pub fn save_with_hook(
         let Some(n) = entry.file_name().to_str().map(str::to_string) else {
             continue;
         };
-        if is_ours_to_delete(&n) && !referenced.contains(&n) {
+        if is_ours_to_delete(&n) && !referenced.contains(&n) && !keep.blobs.contains(&n) {
             stale.push(n);
         }
     }
@@ -269,6 +369,23 @@ pub fn save_with_hook(
         fs::remove_file(&p).map_err(io_err(&p))?;
         step(SaveStep::BlobDeleted(n.clone()))?;
         report.blobs_deleted.push(n);
+    }
+
+    // 4b. Delete samples nothing references (17.2: `samples/` is in the
+    // mark set). The marks are the new project, `keep`, and the bundle's
+    // autosave, which may still name samples an undo has since removed.
+    if !is_autosave {
+        let mut marks: HashSet<String> = keep.samples.clone();
+        marks.extend(project.samples.iter().map(|s| s.hash.clone()));
+        if let Ok(text) = fs::read_to_string(autosave_path(dir).join(PROJECT_FILE)) {
+            marks.extend(samples::hashes_in_text(&text));
+        }
+        for n in samples::stale_sample_files(dir, &marks)? {
+            let p = dir.join(samples::SAMPLES_DIR).join(&n);
+            fs::remove_file(&p).map_err(io_err(&p))?;
+            step(SaveStep::SampleDeleted(n.clone()))?;
+            report.samples_deleted.push(n);
+        }
     }
     Ok(report)
 }

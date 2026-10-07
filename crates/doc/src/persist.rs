@@ -35,6 +35,14 @@ impl Dirs {
         self.data.join("libredaw").join("recovery")
     }
 
+    /// `~/.local/share/libredaw/local-samples.toml` (17.2): where local-only
+    /// samples are recorded, outside every project.
+    pub fn local_samples_file(&self) -> PathBuf {
+        self.data
+            .join("libredaw")
+            .join(crate::samples::LOCAL_SAMPLES_FILE)
+    }
+
     pub fn last_file(&self) -> PathBuf {
         self.config.join("libredaw").join("last.toml")
     }
