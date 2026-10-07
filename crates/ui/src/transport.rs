@@ -91,7 +91,10 @@ impl Transport {
         let metro = gtk::ToggleButton::new();
         metro.set_icon_name("alarm-symbolic");
         metro.add_css_class("flat");
-        metro.set_tooltip_text(Some(&shortcuts::tooltip("Metronome", "win.metronome")));
+        metro.set_tooltip_text(Some(&shortcuts::tooltip(
+            "Play a Click on Every Beat",
+            "win.metronome",
+        )));
         metro.update_property(&[gtk::accessible::Property::Label("Metronome")]);
 
         let position = gtk::Label::new(Some("001:1:1"));
@@ -102,37 +105,39 @@ impl Transport {
         let pos_btn = gtk::Button::new();
         pos_btn.set_child(Some(&position));
         pos_btn.add_css_class("flat");
-        pos_btn.set_tooltip_text(Some("Position - click to switch between bars and time"));
+        pos_btn.set_tooltip_text(Some(
+            "Where the music is: bar, beat and sixteenth; click to show minutes and seconds",
+        ));
         pos_btn.update_property(&[
             gtk::accessible::Property::Label("Position"),
-            gtk::accessible::Property::ValueText("Bar 1, beat 1, step 1"),
+            gtk::accessible::Property::ValueText("Bar 1, beat 1"),
         ]);
 
         let tempo = gtk::SpinButton::with_range(MIN_TEMPO_BPM, MAX_TEMPO_BPM, 1.0);
-        tempo.set_digits(1);
+        tempo.set_digits(0);
         tempo.set_width_chars(5);
         tempo.add_css_class("numeric");
-        tempo.set_tooltip_text(Some("Tempo"));
+        tempo.set_tooltip_text(Some("How fast the music plays, in beats per minute"));
         tempo.update_property(&[gtk::accessible::Property::Label(
-            "Tempo in beats per minute",
+            "Tempo: how fast the music plays, in beats per minute",
         )]);
-        let bpm = gtk::Label::new(Some("BPM"));
-        bpm.add_css_class("dim-label");
+        let tempo_label = gtk::Label::new(Some("Tempo"));
+        tempo_label.add_css_class("dim-label");
         let tempo_group = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        tempo_group.append(&tempo_label);
         tempo_group.append(&tempo);
-        tempo_group.append(&bpm);
 
         // Narrow: the tempo is one button that opens the settings popover.
         let tempo_btn = gtk::MenuButton::new();
         tempo_btn.add_css_class("flat");
         tempo_btn.set_label("120");
-        tempo_btn.set_tooltip_text(Some("Tempo"));
+        tempo_btn.set_tooltip_text(Some("Tempo and more settings"));
         tempo_btn.update_property(&[gtk::accessible::Property::Label("Tempo and settings")]);
         tempo_btn.set_visible(false);
 
-        let tap = gtk::Button::with_label("Tap");
+        let tap = gtk::Button::with_label("Tap Tempo");
         tap.add_css_class("flat");
-        tap.set_tooltip_text(Some("Tap the Tempo"));
+        tap.set_tooltip_text(Some("Click in time with the music to set the tempo"));
         let beats_btn = gtk::MenuButton::new();
         beats_btn.add_css_class("flat");
         beats_btn.set_label("4/4");
@@ -140,7 +145,7 @@ impl Transport {
         beats_btn.update_property(&[gtk::accessible::Property::Label("Time signature")]);
         let extras = gtk::Box::new(gtk::Orientation::Horizontal, 6);
         extras.append(&tap);
-        extras.append(&beats_btn);
+        // Beats per bar is in More (SPEC 20.6), not on the first screen.
 
         // The settings popover: used by the compact menu and the narrow
         // tempo button. The beats button has its own small popover.
@@ -163,12 +168,16 @@ impl Transport {
         let pop = gtk::Popover::new();
         pop.set_child(Some(&list));
         let settings_btn = gtk::MenuButton::new();
-        settings_btn.set_icon_name("view-more-symbolic");
+        settings_btn.set_label("More");
         settings_btn.add_css_class("flat");
-        settings_btn.set_tooltip_text(Some("Transport Settings"));
-        settings_btn.update_property(&[gtk::accessible::Property::Label("Transport settings")]);
+        settings_btn.set_tooltip_text(Some(
+            "More settings: beats per bar, metronome and tap tempo",
+        ));
+        settings_btn.update_property(&[gtk::accessible::Property::Label(
+            "More settings: beats per bar, metronome and tap tempo",
+        )]);
         settings_btn.set_popover(Some(&pop));
-        settings_btn.set_visible(false);
+        settings_btn.set_visible(true);
         // A MenuButton owns its popover: `apply_size` moves this one
         // between the settings button and the narrow tempo button.
 
@@ -199,15 +208,17 @@ impl Transport {
         bar.append(&settings_btn);
         bar.append(&spacer);
         let master = Meter::new_horizontal();
-        master.set_label("Master level");
+        master.set_label("Main output level");
         master.set_size_request(96, 12);
         master.set_valign(gtk::Align::Center);
         let master_btn = gtk::Button::new();
         master_btn.set_child(Some(&master));
         master_btn.add_css_class("flat");
         master_btn.set_action_name(Some("win.view-mixer"));
-        master_btn.set_tooltip_text(Some("Master Level - click to open the Mixer"));
-        master_btn.update_property(&[gtk::accessible::Property::Label("Open the mixer")]);
+        master_btn.set_tooltip_text(Some("How loud the main output is; click to open the mixer"));
+        master_btn.update_property(&[gtk::accessible::Property::Label(
+            "How loud the main output is; click to open the mixer",
+        )]);
         bar.append(&master_btn);
 
         let t = Rc::new(Transport {
@@ -380,7 +391,7 @@ impl Transport {
             self.pop_tempo.set_value(tempo);
         }
         self.tempo_btn
-            .set_label(&format!("{}", tempo.round() as i64));
+            .set_label(&format!("{} BPM", tempo.round() as i64));
         self.pop_beats.set_value(beats as f64);
         self.beats_btn.set_label(&format!("{beats}/4"));
         if let Some(pop) = self.beats_btn.popover()
@@ -443,7 +454,6 @@ impl Transport {
     /// width, so they must be breakpoint setters).
     pub fn add_compact_setters(&self, bp: &adw::Breakpoint) {
         bp.add_setter(&self.extras, "visible", Some(&false.to_value()));
-        bp.add_setter(&self.settings_btn, "visible", Some(&true.to_value()));
     }
 
     /// Declarative changes at narrow widths.

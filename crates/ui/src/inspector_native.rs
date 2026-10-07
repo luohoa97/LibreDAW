@@ -194,7 +194,7 @@ impl SamplerPage {
         warn.set_tooltip_text(Some("The sound file cannot be found"));
         let choose = gtk::Button::with_label("Choose…");
         choose.set_valign(gtk::Align::Center);
-        choose.set_tooltip_text(Some("Choose a WAV File for This Channel"));
+        choose.set_tooltip_text(Some("Choose a WAV File for This Instrument"));
         choose.update_property(&[gtk::accessible::Property::Label("Choose a sound file")]);
         sample_row.add_prefix(&warn);
         sample_row.add_suffix(&choose);

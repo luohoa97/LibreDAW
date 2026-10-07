@@ -109,7 +109,7 @@ pub fn show(window: &adw::ApplicationWindow, app: &Rc<App>) {
     editing.set_title("Editing");
     let preview = adw::SwitchRow::new();
     preview.set_title("Preview Notes");
-    preview.set_subtitle("Hear a sound when you click a step, a piano key, or a note");
+    preview.set_subtitle("Hear a sound when you click a square, a piano key, or a note");
     preview.set_active(app.settings.borrow().preview_notes);
     {
         let a = app.clone();

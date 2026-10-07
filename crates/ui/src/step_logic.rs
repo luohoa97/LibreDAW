@@ -299,22 +299,22 @@ pub fn cell_label(channel_name: &str, step: u32, cell: Cell, read_only: bool) ->
     let state = match cell {
         Cell::Off => "off".to_string(),
         Cell::On { vel, off, repeat } => {
-            let mut s = format!("on, velocity {vel}");
+            let mut s = format!("on, volume {vel}");
             if off != 0 {
                 s.push_str(&format!(", pitch {off:+} semitones"));
             }
             if repeat > 1 {
-                s.push_str(&format!(", ratchet {repeat}"));
+                s.push_str(&format!(", repeats {repeat}"));
             }
             s
         }
     };
     let ro = if read_only {
-        ", read only, piano roll data"
+        ", read only, notes from Piano"
     } else {
         ""
     };
-    format!("{channel_name}, step {}, {state}{ro}", step + 1)
+    format!("{channel_name}, square {}, {state}{ro}", step + 1)
 }
 
 /// Moves a cursor by arrow keys, staying inside the grid.
@@ -642,11 +642,11 @@ mod tests {
     fn accessible_label_text() {
         assert_eq!(
             cell_label("Kick", 4, Cell::on(100), false),
-            "Kick, step 5, on, velocity 100"
+            "Kick, square 5, on, volume 100"
         );
         assert_eq!(
             cell_label("Kick", 0, Cell::Off, true),
-            "Kick, step 1, off, read only, piano roll data"
+            "Kick, square 1, off, read only, notes from Piano"
         );
     }
 }

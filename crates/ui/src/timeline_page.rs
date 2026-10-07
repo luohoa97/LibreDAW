@@ -91,7 +91,17 @@ pub fn build(app: &Rc<App>) -> TimelinePage {
     let body = gtk::Box::new(gtk::Orientation::Horizontal, 0);
     channels.widget.set_margin_end(6);
     body.append(&channels.widget);
-    body.append(&lanes);
+    // The first thing to do, until there is a clip (SPEC 20.6).
+    let first_hint = gtk::Label::new(Some("Click an empty spot in a row to add a clip"));
+    first_hint.add_css_class("dim-label");
+    first_hint.add_css_class("title-4");
+    first_hint.set_can_target(false);
+    first_hint.set_halign(gtk::Align::Center);
+    first_hint.set_valign(gtk::Align::Center);
+    let lanes_overlay = gtk::Overlay::new();
+    lanes_overlay.set_child(Some(&lanes));
+    lanes_overlay.add_overlay(&first_hint);
+    body.append(&lanes_overlay);
     crate::samples_ui::install_drop_target(&body, app);
 
     // Empty state: no instruments yet.
@@ -128,6 +138,7 @@ pub fn build(app: &Rc<App>) -> TimelinePage {
     // The editor takes about half the page the first time it opens.
     let placed = Rc::new(Cell::new(false));
     let sync = {
+        let first_hint = first_hint.clone();
         let (a, st, ed, p, placed) = (
             app.clone(),
             stack.clone(),
@@ -144,6 +155,8 @@ pub fn build(app: &Rc<App>) -> TimelinePage {
                 )
             };
             st.set_visible_child_name(if instruments { "lanes" } else { "empty" });
+            let no_clips = a.session.borrow().document().project.clips.is_empty();
+            first_hint.set_visible(instruments && no_clips);
             if ed.widget.is_visible() != clip {
                 ed.widget.set_visible(clip);
                 if clip && !placed.replace(true) {

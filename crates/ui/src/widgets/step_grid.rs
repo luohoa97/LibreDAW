@@ -109,7 +109,7 @@ mod imp {
             obj.set_can_focus(true);
             obj.set_halign(gtk::Align::Fill);
             obj.set_hexpand(true);
-            obj.update_property(&[gtk::accessible::Property::Label("Steps")]);
+            obj.update_property(&[gtk::accessible::Property::Label("Grid")]);
 
             let drag = gtk::GestureDrag::new();
             drag.set_button(gdk::BUTTON_PRIMARY);
@@ -378,7 +378,7 @@ impl StepGrid {
             }
             if self.is_read_only(row) {
                 self.app()
-                    .toast("This row has piano roll notes. Edit it in the piano roll.");
+                    .toast("This clip has notes that are not on the grid. Change them in Piano.");
                 return;
             }
             let on = !matches!(self.cell_state(row, step), StepCell::On { .. });
@@ -446,8 +446,9 @@ impl StepGrid {
             gdk::Key::Return | gdk::Key::KP_Enter => {
                 let (row, step) = logic::move_cursor(cur, 0, 0, rows, steps);
                 if self.is_read_only(row) {
-                    self.app()
-                        .toast("This row has piano roll notes. Edit it in the piano roll.");
+                    self.app().toast(
+                        "This clip has notes that are not on the grid. Change them in Piano.",
+                    );
                 } else {
                     let on = !matches!(self.cell_state(row, step), StepCell::On { .. });
                     self.set_step(row, step, on, false);
@@ -486,7 +487,7 @@ impl StepGrid {
     fn update_label(&self) {
         let (rows, steps) = self.dims();
         if rows == 0 || steps == 0 {
-            self.update_property(&[gtk::accessible::Property::Label("Steps, no channels")]);
+            self.update_property(&[gtk::accessible::Property::Label("Grid, no clip chosen")]);
             return;
         }
         let (row, step) = logic::move_cursor(self.imp().cursor.get(), 0, 0, rows, steps);

@@ -457,7 +457,7 @@ pub fn remove(app: &Rc<App>, id: ChannelId) {
         app.gesture_end();
     }
     let a = app.clone();
-    app.toast_action("Channel removed", "Undo", move || a.undo());
+    app.toast_action("Instrument removed", "Undo", move || a.undo());
 }
 
 #[cfg(test)]

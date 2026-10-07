@@ -370,7 +370,7 @@ impl LaneEditor {
                 let choices = lanes::ratchet_choices(d.step_ticks);
                 let next = lanes::cycle_ratchet(repeat, !shift, &choices);
                 if next != repeat {
-                    self.app().gesture_begin("Ratchet");
+                    self.app().gesture_begin("Repeats");
                     self.set_lanes(&d, step, lane, next as i32, true);
                     self.app().gesture_end();
                 }

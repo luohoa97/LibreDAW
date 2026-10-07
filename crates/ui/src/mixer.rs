@@ -114,7 +114,7 @@ impl Mixer {
         let empty = adw::StatusPage::new();
         empty.set_icon_name(Some("audio-volume-high-symbolic"));
         empty.set_title("No Tracks Yet");
-        empty.set_description(Some("Tracks appear here when you add channels."));
+        empty.set_description(Some("Tracks appear here when you add instruments."));
         empty.add_css_class("compact");
         let stack = gtk::Stack::new();
         stack.add_named(&scroller, Some("strips"));
@@ -286,7 +286,7 @@ impl Mixer {
         // Name.
         let mut name_label: Option<Rc<RenameLabel>> = None;
         if is_master {
-            let l = gtk::Label::new(Some("Master"));
+            let l = gtk::Label::new(Some("Main Output"));
             l.add_css_class("heading");
             inner.append(&l);
         } else {
@@ -332,7 +332,7 @@ impl Mixer {
             cap.set_ellipsize(gtk::pango::EllipsizeMode::End);
             cap.set_max_width_chars(10);
             cap.set_tooltip_text(Some(&format!(
-                "Channels on this track: {}",
+                "Instruments on this track: {}",
                 names.join(", ")
             )));
             inner.append(&cap);
@@ -353,7 +353,7 @@ impl Mixer {
         }
         let add = gtk::Button::from_icon_name("list-add-symbolic");
         add.add_css_class("flat");
-        add.set_tooltip_text(Some("Add Effect"));
+        add.set_tooltip_text(Some("Add an effect that changes how this track sounds"));
         add.update_property(&[gtk::accessible::Property::Label(&format!(
             "Add effect to {name}"
         ))]);
@@ -362,15 +362,19 @@ impl Mixer {
         inner.append(&add);
 
         // Pan, with its name.
-        let pan_label = gtk::Label::new(Some("Pan"));
+        let pan_label = gtk::Label::new(Some("Left/Right"));
         pan_label.add_css_class("caption-heading");
         pan_label.set_xalign(0.0);
         inner.append(&pan_label);
         let pan = gtk::Scale::with_range(gtk::Orientation::Horizontal, -1.0, 1.0, 0.01);
         pan.set_draw_value(false);
         pan.add_mark(0.0, gtk::PositionType::Bottom, None);
-        pan.set_tooltip_text(Some("Pan. Double-click centers."));
-        pan.update_property(&[gtk::accessible::Property::Label(&format!("Pan of {name}"))]);
+        pan.set_tooltip_text(Some(
+            "Moves the sound toward the left or right speaker; double-click to center it",
+        ));
+        pan.update_property(&[gtk::accessible::Property::Label(&format!(
+            "Left/Right of {name}"
+        ))]);
         {
             let m = self.clone();
             pan.connect_value_changed(move |s| {
@@ -406,7 +410,9 @@ impl Mixer {
         fader.set_draw_value(false);
         fader.set_vexpand(true);
         fader.set_height_request(120);
-        fader.set_tooltip_text(Some("Volume in dB. Double-click resets to 0."));
+        fader.set_tooltip_text(Some(
+            "How loud this track is; double-click to set it back to 0 dB",
+        ));
         fader.add_mark(0.0, gtk::PositionType::Right, None);
         fader.adjustment().set_page_increment(3.0);
         fader.update_property(&[gtk::accessible::Property::Label(&format!(
@@ -477,17 +483,17 @@ impl Mixer {
         mrow.set_vexpand(true);
         inner.append(&mrow);
         inner.append(&peak);
-        readout.set_tooltip_text(Some("Volume"));
+        readout.set_tooltip_text(Some("How loud this track is, in decibels"));
         inner.append(&readout);
 
         // Mute and Solo, with their full names.
         let mute = gtk::ToggleButton::with_label("Mute");
         mute.add_css_class("caption");
-        mute.set_tooltip_text(Some("Mute (M)"));
+        mute.set_tooltip_text(Some("Silence this track (M)"));
         mute.update_property(&[gtk::accessible::Property::Label(&format!("Mute {name}"))]);
         let solo = gtk::ToggleButton::with_label("Solo");
         solo.add_css_class("caption");
-        solo.set_tooltip_text(Some("Solo (S)"));
+        solo.set_tooltip_text(Some("Hear only this track (S)"));
         solo.update_property(&[gtk::accessible::Property::Label(&format!("Solo {name}"))]);
         for (b, is_mute) in [(&mute, true), (&solo, false)] {
             let m = self.clone();

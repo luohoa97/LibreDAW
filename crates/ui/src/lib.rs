@@ -54,5 +54,6 @@ pub mod timeline_page;
 pub mod transport;
 pub mod transport_logic;
 pub mod view_math;
+pub mod vocabulary;
 pub mod widgets;
 pub mod window;

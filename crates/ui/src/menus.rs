@@ -150,8 +150,8 @@ pub fn clip_menu() -> gio::Menu {
     first.append(Some("_Edit Clip"), Some("clip.edit"));
     menu.append_section(None, &first);
     let second = gio::Menu::new();
-    second.append(Some("_Duplicate"), Some("clip.duplicate"));
-    second.append(Some("Make _Unique"), Some("clip.unique"));
+    second.append(Some("_Copy That Changes Together"), Some("clip.duplicate"));
+    second.append(Some("Edit _Separately"), Some("clip.unique"));
     second.append(Some("_Split at Playhead"), Some("clip.split"));
     second.append(Some("_Mute"), Some("clip.mute"));
     menu.append_section(None, &second);

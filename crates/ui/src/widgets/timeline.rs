@@ -186,6 +186,23 @@ mod imp {
             });
             obj.add_controller(scroll);
 
+            // Plain-language help where the pointer is (SPEC 20.6): what a
+            // bar, the loop strip, a clip and an empty row are for.
+            obj.set_has_tooltip(true);
+            let w = obj.downgrade();
+            obj.connect_query_tooltip(move |_, x, y, _, tip| {
+                let Some(o) = w.upgrade() else { return false };
+                let text = tooltip_at(&tl::hit(
+                    &o.imp().view.get(),
+                    &o.rows(),
+                    &o.project_clips(),
+                    x as f64,
+                    y as f64,
+                ));
+                tip.set_text(Some(text));
+                true
+            });
+
             let keys = gtk::EventControllerKey::new();
             let w = obj.downgrade();
             keys.connect_key_pressed(move |_, key, _, st| match w.upgrade() {
@@ -247,6 +264,23 @@ mod imp {
         fn snapshot(&self, s: &gtk::Snapshot) {
             self.obj().draw(s);
         }
+    }
+}
+
+/// The tooltip for what the pointer is over.
+pub fn tooltip_at(hit: &Hit) -> &'static str {
+    match hit {
+        Hit::Ruler { .. } => {
+            "Bars: each number is one bar of music, four beats long; click to move the playhead"
+        }
+        Hit::Loop { .. } => {
+            "Loop: drag here to choose the part that repeats; click to turn looping on or off"
+        }
+        Hit::Clip { .. } => {
+            "A clip: a piece of music on a row; drag to move it, double-click to change its notes"
+        }
+        Hit::Lane { .. } => "Click to add a one-bar clip here",
+        Hit::Below { .. } => "Add an instrument to get a new row",
     }
 }
 

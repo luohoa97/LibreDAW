@@ -355,7 +355,7 @@ fn replace_preset(a: &Rc<App>, params: &protocol::model::SynthParams) {
         Some(c) if is_synth => {
             a.edit(presets::apply_edits(c, params));
         }
-        _ => a.toast("Select a channel with a built-in sound first"),
+        _ => a.toast("Choose an instrument with a built-in sound first"),
     }
 }
 
@@ -376,7 +376,7 @@ fn kit_rows(app: &Rc<App>, kit: &Kit) -> (adw::ExpanderRow, Vec<adw::ActionRow>)
     let add_all = gtk::Button::with_label("Add Kit");
     add_all.add_css_class("flat");
     add_all.set_valign(gtk::Align::Center);
-    add_all.set_tooltip_text(Some("Add All Sounds as New Channels"));
+    add_all.set_tooltip_text(Some("Add every sound of this kit as a new instrument"));
     add_all.update_property(&[gtk::accessible::Property::Label(&format!(
         "Add all sounds of {}",
         kit.title
@@ -396,7 +396,7 @@ fn kit_rows(app: &Rc<App>, kit: &Kit) -> (adw::ExpanderRow, Vec<adw::ActionRow>)
             kit.title
         ));
         row.set_activatable(true);
-        row.set_tooltip_text(Some("Add as a New Channel"));
+        row.set_tooltip_text(Some("Add this sound as a new instrument"));
         let (a, k, p) = (app.clone(), kit.clone(), piece.clone());
         row.connect_activated(move |_| samples_ui::add_piece(&a, &k, &p));
         expander.add_row(&row);

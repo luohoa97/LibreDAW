@@ -24,17 +24,17 @@ impl Lane {
 
     pub fn label(self) -> &'static str {
         match self {
-            Lane::Velocity => "Velocity",
+            Lane::Velocity => "Volume",
             Lane::Pitch => "Pitch",
-            Lane::Ratchet => "Ratchet",
+            Lane::Ratchet => "Repeats",
         }
     }
 
     pub fn tooltip(self) -> &'static str {
         match self {
-            Lane::Velocity => "Show Velocity Lane",
-            Lane::Pitch => "Show Pitch Lane",
-            Lane::Ratchet => "Show Ratchet Lane",
+            Lane::Velocity => "Change how loud each hit is",
+            Lane::Pitch => "Change the pitch of each hit",
+            Lane::Ratchet => "Play a hit 2, 3, 4, 6 or 8 times in a row, for rolls",
         }
     }
 }
@@ -123,9 +123,9 @@ pub fn nudge_off(off: i8, delta: i32, root: u8) -> i8 {
 /// Accessible text of the cursor step in `lane`.
 pub fn value_text(lane: Lane, step: u32, vel: u8, off: i8, repeat: u8) -> String {
     match lane {
-        Lane::Velocity => format!("Step {}, velocity {vel}", step + 1),
-        Lane::Pitch => format!("Step {}, pitch {off:+} semitones", step + 1),
-        Lane::Ratchet => format!("Step {}, ratchet {repeat}", step + 1),
+        Lane::Velocity => format!("Hit {}, volume {vel}", step + 1),
+        Lane::Pitch => format!("Hit {}, pitch {off:+} semitones", step + 1),
+        Lane::Ratchet => format!("Hit {}, repeats {repeat}", step + 1),
     }
 }
 
@@ -191,14 +191,11 @@ mod tests {
 
     #[test]
     fn value_texts() {
-        assert_eq!(
-            value_text(Lane::Velocity, 4, 96, 0, 1),
-            "Step 5, velocity 96"
-        );
+        assert_eq!(value_text(Lane::Velocity, 4, 96, 0, 1), "Hit 5, volume 96");
         assert_eq!(
             value_text(Lane::Pitch, 0, 96, -3, 1),
-            "Step 1, pitch -3 semitones"
+            "Hit 1, pitch -3 semitones"
         );
-        assert_eq!(value_text(Lane::Ratchet, 1, 96, 0, 4), "Step 2, ratchet 4");
+        assert_eq!(value_text(Lane::Ratchet, 1, 96, 0, 4), "Hit 2, repeats 4");
     }
 }

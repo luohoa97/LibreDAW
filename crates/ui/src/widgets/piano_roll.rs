@@ -153,7 +153,7 @@ mod imp {
             obj.set_can_focus(true);
             obj.set_hexpand(true);
             obj.set_vexpand(true);
-            obj.update_property(&[gtk::accessible::Property::Label("Piano roll")]);
+            obj.update_property(&[gtk::accessible::Property::Label("Piano")]);
             palette::watch(&*obj);
 
             let drag = gtk::GestureDrag::new();
@@ -515,9 +515,7 @@ impl PianoRoll {
 
     fn update_label(&self) {
         let Some(v) = self.view() else {
-            self.update_property(&[gtk::accessible::Property::Label(
-                "Piano roll, no channel selected",
-            )]);
+            self.update_property(&[gtk::accessible::Property::Label("Piano, no clip chosen")]);
             return;
         };
         let name = self
@@ -540,7 +538,7 @@ impl PianoRoll {
         };
         let value = format!("{}, bar {bar} beat {beat}, {at}", note_name(key));
         self.update_property(&[
-            gtk::accessible::Property::Label(&format!("Piano roll for {name}")),
+            gtk::accessible::Property::Label(&format!("Piano for {name}")),
             gtk::accessible::Property::ValueText(&format!(
                 "{value}, {} notes selected",
                 self.imp().selection.borrow().len()
@@ -599,7 +597,7 @@ impl PianoRoll {
                     if cur.contains(&id) { cur } else { vec![id] }
                 };
                 *imp.selection.borrow_mut() = sel.clone();
-                if app.gesture_begin("Velocity") {
+                if app.gesture_begin("Volume") {
                     imp.in_gesture.set(true);
                     let mut d = Drag::new(
                         DragKind::Velocity,
@@ -1307,7 +1305,7 @@ impl PianoRoll {
             // The label stays inside the key column: smaller type, and an
             // ellipsis if a larger font still does not fit, so it never
             // runs under the first velocity stem.
-            let l = self.create_pango_layout(Some("Velocity"));
+            let l = self.create_pango_layout(Some("Volume"));
             let attrs = gtk::pango::AttrList::new();
             attrs.insert(gtk::pango::AttrFloat::new_scale(0.75));
             l.set_attributes(Some(&attrs));
