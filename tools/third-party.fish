@@ -29,6 +29,10 @@ function justification
             echo "X11 top-level window for plugin GUIs that need a parent, SPEC 9.2 (plugin-host)"
         case rtrb
             echo "wait-free SPSC rings for the state, retire, command, plugin-event and event rings, SPEC 4.2 and 4.4 (engine)"
+        case gtk4
+            echo "GTK4 bindings, the app toolkit (ui); feature v4_10"
+        case libadwaita
+            echo "AdwApplicationWindow, toasts, dialogs (ui); feature v1_5"
         case serde
             echo "derive (de)serialization for the project file and the control API (protocol); typed MCP tool arguments (mcp)"
         case toml
@@ -97,7 +101,7 @@ begin
     echo '| libjack (JACK or PipeWire-JACK) | LGPL-2.1-or-later | engine, through the `jack` crate, loaded with dlopen at run time | JACK audio backend |'
     echo '| libclang (build time only) | Apache-2.0 WITH LLVM-exception | bindgen, while building pipewire-sys | generates the libpipewire bindings; not linked into our binaries |'
     echo '| libdbus-1 | AFL-2.1 OR GPL-2.0-or-later (used under GPL-2.0-or-later) | engine, through cpal'\''s `realtime-dbus` feature (libdbus-sys) | asks rtkit to make the audio thread real-time |'
-    echo '| GTK4 | LGPL-2.1-or-later | ui (planned) | UI toolkit |'
-    echo '| libadwaita | LGPL-2.1-or-later | ui (planned) | app shell widgets |'
-    echo '| GLib | LGPL-2.1-or-later | ui (planned) | main loop, timers, fd sources |'
+    echo '| GTK4 | LGPL-2.1-or-later | ui | UI toolkit |'
+    echo '| libadwaita | LGPL-2.1-or-later | ui | app shell widgets |'
+    echo '| GLib | LGPL-2.1-or-later | ui, plugin-host | main loop, timers, fd sources |'
 end >$out

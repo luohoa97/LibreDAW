@@ -11,6 +11,8 @@ CI fails if this file is out of date.
 | clap-sys | 0.5.0 | MIT/Apache-2.0 | raw CLAP C ABI bindings for plugin hosting, SPEC 9.1 (plugin-host) |
 | cpal | 0.18.2 | Apache-2.0 | audio I/O (fixed stack); its `pipewire` feature adds the native PipeWire host (pipewire, libspa, and bindgen at build time), its `realtime-dbus` feature promotes the PipeWire callback thread to SCHED_RR through rtkit (audio_thread_priority, dbus), and its `jack` feature the JACK backend |
 | glib | 0.22.10 | MIT | timer, fd, and X11 event sources on the GTK main context for plugins (plugin-host; also ui through gtk4) |
+| gtk4 | 0.11.5 | MIT | GTK4 bindings, the app toolkit (ui); feature v4_10 |
+| libadwaita | 0.9.2 | MIT | AdwApplicationWindow, toasts, dialogs (ui); feature v1_5 |
 | libloading | 0.7.4 | ISC | dlopen of .clap plugin files (plugin-host) |
 | libloading | 0.8.9 | ISC | dlopen of .clap plugin files (plugin-host) |
 | rtrb | 0.4.0 | MIT OR Apache-2.0 | wait-free SPSC rings for the state, retire, command, plugin-event and event rings, SPEC 4.2 and 4.4 (engine) |
@@ -29,9 +31,12 @@ CI fails if this file is out of date.
 | annotate-snippets | 0.11.5 | MIT OR Apache-2.0 |
 | anstyle | 1.0.14 | MIT OR Apache-2.0 |
 | audio_thread_priority | 0.35.1 | MPL-2.0 |
+| autocfg | 1.5.1 | Apache-2.0 OR MIT |
 | bindgen | 0.72.1 | BSD-3-Clause |
 | bitflags | 1.3.2 | MIT/Apache-2.0 |
 | bitflags | 2.13.2 | MIT OR Apache-2.0 |
+| cairo-rs | 0.22.9 | MIT |
+| cairo-sys-rs | 0.22.9 | MIT |
 | cc | 1.6.0 | MIT OR Apache-2.0 |
 | cexpr | 0.6.0 | Apache-2.0/MIT |
 | cfg-expr | 0.20.10 | MIT OR Apache-2.0 |
@@ -45,20 +50,34 @@ CI fails if this file is out of date.
 | either | 1.19.0 | MIT OR Apache-2.0 |
 | equivalent | 1.0.2 | Apache-2.0 OR MIT |
 | errno | 0.3.14 | MIT OR Apache-2.0 |
+| field-offset | 0.3.6 | MIT OR Apache-2.0 |
 | find-msvc-tools | 0.1.14 | MIT OR Apache-2.0 |
 | futures-channel | 0.3.34 | MIT OR Apache-2.0 |
 | futures-core | 0.3.34 | MIT OR Apache-2.0 |
 | futures-executor | 0.3.34 | MIT OR Apache-2.0 |
+| futures-io | 0.3.34 | MIT OR Apache-2.0 |
 | futures-macro | 0.3.34 | MIT OR Apache-2.0 |
 | futures-task | 0.3.34 | MIT OR Apache-2.0 |
 | futures-util | 0.3.34 | MIT OR Apache-2.0 |
+| gdk-pixbuf | 0.22.0 | MIT |
+| gdk-pixbuf-sys | 0.22.9 | MIT |
+| gdk4 | 0.11.5 | MIT |
+| gdk4-sys | 0.11.5 | MIT |
 | gethostname | 1.1.0 | Apache-2.0 |
+| gio | 0.22.10 | MIT |
 | gio-sys | 0.22.9 | MIT |
 | glib | 0.22.10 | MIT |
 | glib-macros | 0.22.9 | MIT |
 | glib-sys | 0.22.9 | MIT |
 | glob | 0.3.4 | MIT OR Apache-2.0 |
 | gobject-sys | 0.22.9 | MIT |
+| graphene-rs | 0.22.8 | MIT |
+| graphene-sys | 0.22.9 | MIT |
+| gsk4 | 0.11.5 | MIT |
+| gsk4-sys | 0.11.5 | MIT |
+| gtk4 | 0.11.5 | MIT |
+| gtk4-macros | 0.11.5 | MIT |
+| gtk4-sys | 0.11.5 | MIT |
 | hashbrown | 0.17.1 | MIT OR Apache-2.0 |
 | heck | 0.5.0 | MIT OR Apache-2.0 |
 | indexmap | 2.14.2 | Apache-2.0 OR MIT |
@@ -67,6 +86,8 @@ CI fails if this file is out of date.
 | jack | 0.13.5 | MIT |
 | jack-sys | 0.5.1 | MIT OR Apache-2.0 |
 | lazy_static | 1.5.1 | MIT OR Apache-2.0 |
+| libadwaita | 0.9.2 | MIT |
+| libadwaita-sys | 0.9.2 | MIT |
 | libc | 0.2.190 | MIT OR Apache-2.0 |
 | libdbus-sys | 0.2.7 | Apache-2.0/MIT |
 | libloading | 0.7.4 | ISC |
@@ -76,13 +97,17 @@ CI fails if this file is out of date.
 | linux-raw-sys | 0.12.1 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT |
 | log | 0.4.34 | MIT OR Apache-2.0 |
 | memchr | 2.8.3 | Unlicense OR MIT |
+| memoffset | 0.9.1 | MIT |
 | minimal-lexical | 0.2.1 | MIT/Apache-2.0 |
 | nom | 7.1.3 | MIT |
 | nom | 8.0.0 | MIT |
+| pango | 0.22.9 | MIT |
+| pango-sys | 0.22.9 | MIT |
 | pin-project-lite | 0.2.17 | Apache-2.0 OR MIT |
 | pipewire | 0.10.1 | MIT |
 | pipewire-sys | 0.10.1 | MIT |
 | pkg-config | 0.3.34 | MIT OR Apache-2.0 |
+| proc-macro-crate | 3.5.0 | MIT OR Apache-2.0 |
 | proc-macro2 | 1.0.107 | MIT OR Apache-2.0 |
 | quote | 1.0.47 | MIT OR Apache-2.0 |
 | regex | 1.13.1 | MIT OR Apache-2.0 |
@@ -90,7 +115,9 @@ CI fails if this file is out of date.
 | regex-syntax | 0.8.11 | MIT OR Apache-2.0 |
 | rtrb | 0.4.0 | MIT OR Apache-2.0 |
 | rustc-hash | 2.1.3 | Apache-2.0 OR MIT |
+| rustc_version | 0.4.1 | MIT OR Apache-2.0 |
 | rustix | 1.1.5 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT |
+| semver | 1.0.28 | MIT OR Apache-2.0 |
 | serde | 1.0.229 | MIT OR Apache-2.0 |
 | serde_core | 1.0.229 | MIT OR Apache-2.0 |
 | serde_derive | 1.0.229 | MIT OR Apache-2.0 |
@@ -107,6 +134,7 @@ CI fails if this file is out of date.
 | target-lexicon | 0.13.5 | Apache-2.0 WITH LLVM-exception |
 | toml | 1.1.6+spec-1.1.0 | MIT OR Apache-2.0 |
 | toml_datetime | 1.1.1+spec-1.1.0 | MIT OR Apache-2.0 |
+| toml_edit | 0.25.15+spec-1.1.0 | MIT OR Apache-2.0 |
 | toml_parser | 1.1.3+spec-1.1.0 | MIT OR Apache-2.0 |
 | toml_writer | 1.1.2+spec-1.1.0 | MIT OR Apache-2.0 |
 | unicode-ident | 1.0.26 | (MIT OR Apache-2.0) AND Unicode-3.0 |
@@ -128,6 +156,6 @@ Linked dynamically, never bundled. LGPL libraries are only ever linked dynamical
 | libjack (JACK or PipeWire-JACK) | LGPL-2.1-or-later | engine, through the `jack` crate, loaded with dlopen at run time | JACK audio backend |
 | libclang (build time only) | Apache-2.0 WITH LLVM-exception | bindgen, while building pipewire-sys | generates the libpipewire bindings; not linked into our binaries |
 | libdbus-1 | AFL-2.1 OR GPL-2.0-or-later (used under GPL-2.0-or-later) | engine, through cpal's `realtime-dbus` feature (libdbus-sys) | asks rtkit to make the audio thread real-time |
-| GTK4 | LGPL-2.1-or-later | ui (planned) | UI toolkit |
-| libadwaita | LGPL-2.1-or-later | ui (planned) | app shell widgets |
-| GLib | LGPL-2.1-or-later | ui (planned) | main loop, timers, fd sources |
+| GTK4 | LGPL-2.1-or-later | ui | UI toolkit |
+| libadwaita | LGPL-2.1-or-later | ui | app shell widgets |
+| GLib | LGPL-2.1-or-later | ui, plugin-host | main loop, timers, fd sources |
