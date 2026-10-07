@@ -25,6 +25,23 @@ pub fn samples_per_tick(sample_rate: f64, bpm: f64) -> f64 {
 }
 
 impl Transport {
+    /// `tick` sits at `sample`.
+    pub fn at(sample: u64, tick: i64, samples_per_tick: f64) -> Self {
+        Transport {
+            anchor_sample: sample,
+            anchor_tick: tick,
+            anchor_frac: 0.0,
+            samples_per_tick,
+        }
+    }
+
+    /// Exact musical position at `sample`, in ticks (fractional).
+    pub fn tick_at(&self, sample: u64) -> f64 {
+        self.anchor_tick as f64
+            + self.anchor_frac
+            + (sample as f64 - self.anchor_sample as f64) / self.samples_per_tick
+    }
+
     /// Tick 0 sits at sample 0.
     pub fn new(sample_rate: f64, bpm: f64) -> Self {
         Transport {

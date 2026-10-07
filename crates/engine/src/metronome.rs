@@ -39,8 +39,8 @@ impl Controls {
 
 /// A short sine burst with a squared linear fade-out.
 #[derive(Clone, Copy)]
-struct Click {
-    active: bool,
+pub(crate) struct Click {
+    pub(crate) active: bool,
     age: u32,
     len: u32,
     w: f32,
@@ -48,7 +48,7 @@ struct Click {
 }
 
 impl Click {
-    const IDLE: Click = Click {
+    pub(crate) const IDLE: Click = Click {
         active: false,
         age: 0,
         len: 0,
@@ -56,7 +56,7 @@ impl Click {
         amp: 0.0,
     };
 
-    fn start(sample_rate: f64, accent: bool) -> Click {
+    pub(crate) fn start(sample_rate: f64, accent: bool) -> Click {
         let (freq, amp) = if accent { (1500.0, 0.9) } else { (1000.0, 0.6) };
         Click {
             active: true,
@@ -68,7 +68,7 @@ impl Click {
     }
 
     /// Writes `out.len() / channels` frames, every channel the same.
-    fn render(&mut self, out: &mut [f32], channels: usize, gain: f32) {
+    pub(crate) fn render(&mut self, out: &mut [f32], channels: usize, gain: f32) {
         if !self.active {
             out.fill(0.0);
             return;
