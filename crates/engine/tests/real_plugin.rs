@@ -22,11 +22,17 @@ fn fixture() -> Option<PathBuf> {
         eprintln!("SKIPPED: {so:?} not built (cargo build -p libredaw-plugin-host --examples)");
         return None;
     }
-    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
-        .join(format!("engine-clap-{}", std::process::id()));
-    std::fs::create_dir_all(dir.join("nested")).ok()?;
-    std::fs::copy(&so, dir.join("nested/test_plugins.clap")).ok()?;
-    Some(dir)
+    static DIR: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    Some(
+        DIR.get_or_init(|| {
+            plugin_host::testing::install_fixture(
+                &so,
+                std::path::Path::new(env!("CARGO_TARGET_TMPDIR")),
+                "engine-clap",
+            )
+        })
+        .clone(),
+    )
 }
 
 fn desc(dir: &PathBuf, id: &str) -> PluginDesc {
