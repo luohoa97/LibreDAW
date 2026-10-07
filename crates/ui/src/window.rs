@@ -69,6 +69,8 @@ struct Ui {
     inspector_split: adw::OverlaySplitView,
     sounds_toggle: gtk::ToggleButton,
     inspector_toggle: gtk::ToggleButton,
+    banner: adw::Banner,
+    agent_btn: gtk::Button,
     undo: gtk::Button,
     redo: gtk::Button,
     narrow_title: adw::WindowTitle,
@@ -158,8 +160,14 @@ pub fn build(gapp: &adw::Application, app: Rc<App>) -> adw::ApplicationWindow {
     header.pack_start(&sounds_toggle);
     header.pack_start(&undo);
     header.pack_start(&redo);
+    let agent_btn = gtk::Button::from_icon_name("network-workgroup-symbolic");
+    agent_btn.add_css_class("flat");
+    agent_btn.set_tooltip_text(Some("An agent is connected"));
+    agent_btn.update_property(&[gtk::accessible::Property::Label("An agent is connected")]);
+    agent_btn.set_visible(false);
     header.pack_end(&menu_button);
     header.pack_end(&inspector_toggle);
+    header.pack_end(&agent_btn);
 
     // ---- pages ----
     let pattern = pattern_page::build(&window, &app);
@@ -212,8 +220,12 @@ pub fn build(gapp: &adw::Application, app: Rc<App>) -> adw::ApplicationWindow {
     // ---- transport and the toolbar view ----
     let transport = Transport::new(&app);
     let view = adw::ToolbarView::new();
+    let banner = adw::Banner::new("");
+    banner.set_button_label(Some("Review"));
+    banner.set_revealed(false);
     view.add_top_bar(&header);
     view.add_top_bar(&transport.bar);
+    view.add_top_bar(&banner);
     view.set_content(Some(&browser_split));
 
     let overlay = gtk::Overlay::new();
@@ -248,6 +260,8 @@ pub fn build(gapp: &adw::Application, app: Rc<App>) -> adw::ApplicationWindow {
         narrow_title: narrow_title.clone(),
         transport: transport.clone(),
         pattern,
+        banner: banner.clone(),
+        agent_btn: agent_btn.clone(),
     });
 
     install_toggles(&ui);
@@ -265,15 +279,32 @@ pub fn build(gapp: &adw::Application, app: Rc<App>) -> adw::ApplicationWindow {
     install_view_hooks(&ui, &app);
     install_close(&window, &app);
     {
-        let (u, stack) = (ui.clone(), inspector.stack.clone());
+        let (u, stack, a2) = (ui.clone(), inspector.stack.clone(), app.clone());
         app.on_command(move |c| match c {
             UiCommand::ShowSound => {
                 stack.set_visible_child_name("sound");
                 u.inspector_split.set_show_sidebar(true);
             }
             UiCommand::ShowSounds => u.browser_split.set_show_sidebar(true),
+            UiCommand::ShowAgent => {
+                stack.set_visible_child_name("agent");
+                u.inspector_split.set_show_sidebar(true);
+            }
+            UiCommand::AgentChanged => update_agent_ui(&u, &a2),
             UiCommand::EditNotes => {}
         });
+    }
+    {
+        let (u, a) = (ui.clone(), app.clone());
+        banner.connect_button_clicked({
+            let a = a.clone();
+            move |_| a.command(UiCommand::ShowAgent)
+        });
+        agent_btn.connect_clicked({
+            let a = app.clone();
+            move |_| a.command(UiCommand::ShowAgent)
+        });
+        update_agent_ui(&u, &a);
     }
 
     {
@@ -496,6 +527,25 @@ fn install_breakpoints(
         });
     }
     publish();
+}
+
+/// The approval banner and the agent indicator follow the control state.
+fn update_agent_ui(ui: &Ui, app: &App) {
+    let state = app
+        .bridge
+        .borrow()
+        .as_ref()
+        .map(|b| b.ui.clone())
+        .unwrap_or_default();
+    match crate::agent_panel::banner_title(&state) {
+        Some(t) => {
+            ui.banner.set_title(&t);
+            ui.banner.set_revealed(true);
+        }
+        None => ui.banner.set_revealed(false),
+    }
+    ui.agent_btn
+        .set_visible(state.enabled && !state.clients.is_empty());
 }
 
 fn page_name(ui: &Ui) -> String {
@@ -874,6 +924,9 @@ fn install_close(window: &adw::ApplicationWindow, app: &Rc<App>) {
     let a = app.clone();
     window.connect_close_request(move |win| {
         if saved_ok.get() {
+            if let Some(b) = a.bridge.borrow_mut().take() {
+                b.shutdown();
+            }
             a.session.borrow_mut().link.stop();
             a.session.borrow_mut().shutdown();
             return glib::Propagation::Proceed;
@@ -923,11 +976,8 @@ fn install_tick(app: &Rc<App>) {
     glib::timeout_add_local(Duration::from_millis(10), move || {
         let now = Instant::now();
         let report = a.session.borrow_mut().tick_at(now);
-        for d in report.done {
-            if let Err(e) = d.result {
-                a.toast(&e.to_string());
-            }
-        }
+        crate::control_bridge::on_done(&a, report.done);
+        crate::control_bridge::tick(&a);
         if report.changed {
             a.notify();
         }

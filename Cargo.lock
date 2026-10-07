@@ -918,6 +918,7 @@ version = "0.0.0"
 dependencies = [
  "gtk4",
  "libadwaita",
+ "libredaw-control",
  "libredaw-engine",
  "libredaw-plugin-host",
  "libredaw-protocol",

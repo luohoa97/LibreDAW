@@ -70,12 +70,9 @@ pub fn build(app: &Rc<App>) -> Inspector {
         "Sound",
         "audio-x-generic-symbolic",
     );
+    let agent = crate::agent_panel::AgentPanel::new(app);
     stack.add_titled_with_icon(
-        &status(
-            "network-workgroup-symbolic",
-            "No Agent Connected",
-            "Connect an agent with libredaw-mcp, then allow it here.",
-        ),
+        &agent.widget,
         Some("agent"),
         "Agent",
         "network-workgroup-symbolic",

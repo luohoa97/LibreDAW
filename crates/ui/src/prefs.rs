@@ -150,5 +150,107 @@ pub fn show(window: &adw::ApplicationWindow, app: &Rc<App>) {
     look.add(&g);
     dialog.add(&look);
 
+    dialog.add(&agents_page(app));
+
     dialog.present(Some(window));
+}
+
+/// The Agents page: the per-session switch, who is connected, and one
+/// line to copy for each AI client.
+fn agents_page(app: &Rc<App>) -> adw::PreferencesPage {
+    let page = adw::PreferencesPage::new();
+    page.set_title("Agents");
+    page.set_icon_name(Some("network-workgroup-symbolic"));
+    page.set_name(Some("agents"));
+
+    let control = adw::PreferencesGroup::new();
+    control.set_title("Control");
+    control.set_description(Some(
+        "An agent is an AI program that can edit your project. It can only do so while this is on, \
+         and it asks before anything risky.",
+    ));
+    let available = app.bridge.borrow().is_some();
+    let allow = adw::SwitchRow::new();
+    allow.set_title("Allow Agents to Control LibreDAW");
+    allow.set_subtitle(if available {
+        "Until you quit LibreDAW"
+    } else {
+        "Not available: the control socket could not start"
+    });
+    allow.set_sensitive(available);
+    allow.set_active(
+        app.bridge
+            .borrow()
+            .as_ref()
+            .map(|b| b.enabled())
+            .unwrap_or(false),
+    );
+    {
+        let a = app.clone();
+        allow.connect_active_notify(move |r| {
+            if let Some(b) = a.bridge.borrow_mut().as_mut() {
+                if b.enabled() == r.is_active() {
+                    return;
+                }
+                b.set_enabled(r.is_active());
+            }
+            a.command(crate::app::UiCommand::AgentChanged);
+        });
+    }
+    control.add(&allow);
+    let connected = adw::ActionRow::new();
+    connected.set_title("Connected agents");
+    let names: Vec<String> = app
+        .bridge
+        .borrow()
+        .as_ref()
+        .map(|b| {
+            b.server_clients()
+                .iter()
+                .map(|c| {
+                    crate::control_bridge::author_of(c)
+                        .tag()
+                        .replace("agent:", "")
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    connected.set_subtitle(&if names.is_empty() {
+        "None".to_string()
+    } else {
+        names.join(", ")
+    });
+    connected.add_css_class("property");
+    control.add(&connected);
+    page.add(&control);
+
+    let setup = adw::PreferencesGroup::new();
+    setup.set_title("Connect an Agent");
+    setup.set_description(Some(
+        "Copy the line for your program and run it, or add it where it says. \
+         Running libredaw-mcp setup does all of them at once.",
+    ));
+    for c in crate::agents_setup::clients(&crate::agents_setup::mcp_path()) {
+        let row = adw::ActionRow::new();
+        row.set_title(c.name);
+        row.set_subtitle(c.how);
+        row.set_tooltip_text(Some(&c.line));
+        let copy = gtk::Button::from_icon_name("edit-copy-symbolic");
+        copy.add_css_class("flat");
+        copy.set_valign(gtk::Align::Center);
+        copy.set_tooltip_text(Some("Copy"));
+        copy.update_property(&[gtk::accessible::Property::Label(&format!(
+            "Copy the setup line for {}",
+            c.name
+        ))]);
+        let (a, line, name) = (app.clone(), c.line.clone(), c.name);
+        copy.connect_clicked(move |b| {
+            b.display().clipboard().set_text(&line);
+            a.toast(&format!("Copied the line for {name}"));
+        });
+        row.add_suffix(&copy);
+        setup.add(&row);
+    }
+    page.add(&setup);
+    page
 }

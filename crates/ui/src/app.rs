@@ -66,6 +66,8 @@ pub struct App {
     action_toaster: RefCell<Option<ActionToaster>>,
     notifying: Cell<bool>,
     pub settings: RefCell<Settings>,
+    /// The control socket, when it started.
+    pub bridge: RefCell<Option<crate::control_bridge::Bridge>>,
     preview_timer: RefCell<Option<gtk::glib::SourceId>>,
     rest_timer: RefCell<Option<gtk::glib::SourceId>>,
     /// Window size class and what the Pattern page shows (what the user
@@ -93,6 +95,10 @@ pub enum UiCommand {
     ShowSounds,
     /// Put the piano roll in front (narrow) or focus it (wide).
     EditNotes,
+    /// Open the inspector on the Agent page.
+    ShowAgent,
+    /// The agent state changed (banner, indicator, Agent page).
+    AgentChanged,
 }
 
 impl App {
@@ -107,6 +113,7 @@ impl App {
             session: RefCell::new(session),
             tasks: crate::tasks::Tasks::new(),
             settings: RefCell::new(settings),
+            bridge: RefCell::new(None),
             preview_timer: RefCell::new(None),
             rest_timer: RefCell::new(None),
             size: Cell::new(SizeClass::from_size(1360.0, 800.0)),

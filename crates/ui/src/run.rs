@@ -53,6 +53,14 @@ fn start_audio(settings: &crate::settings::Settings) -> (EngineLink, Option<Stri
 
 pub fn run() -> glib::ExitCode {
     let gapp = adw::Application::builder().application_id(APP_ID).build();
+    gapp.add_main_option(
+        "agent-request",
+        glib::Char::from(0),
+        glib::OptionFlags::NONE,
+        glib::OptionArg::None,
+        "Ask to allow agent control at start-up",
+        None,
+    );
     gapp.connect_activate(|gapp| {
         if let Some(w) = gapp.active_window() {
             w.present();
@@ -71,6 +79,14 @@ pub fn run() -> glib::ExitCode {
         let session = Session::new(Document::new(), false, link, Registry::new(catalog, rate));
         let app: Rc<App> = App::new(session);
         app.ui.borrow_mut().audio_error = audio_err.clone();
+        // The control socket for scripts and agents. Agents stay off until
+        // the user allows them (Preferences or the banner).
+        let agent_request = std::env::args().any(|a| a == "--agent-request");
+        let (bridge, bridge_err) = crate::control_bridge::start(agent_request);
+        if let Some(e) = &bridge_err {
+            trace(e);
+        }
+        *app.bridge.borrow_mut() = bridge;
         trace("building window");
         let win = window::build(gapp, app.clone());
         win.present();
