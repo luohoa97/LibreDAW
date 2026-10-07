@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::beats::{Bass808, BuiltinFx, Sampler};
 use crate::consts::{DEFAULT_STEP_TICKS, PPQ};
-use crate::ids::{ChannelId, ClipId, InstanceId, NoteId, PatternId, PlaylistTrackId, TrackId};
+use crate::ids::{ChannelId, ClipId, InstanceId, NoteId, PatternId, TrackId};
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Project {
@@ -27,9 +27,13 @@ pub struct Project {
     /// Samples used by the project, sorted by hash (17.2).
     #[serde(default)]
     pub samples: Vec<SampleRef>,
-    /// Song arrangement (15.6), sorted by id.
+    /// Clips on the timeline (20.2), sorted by `(instrument, start, id)`,
+    /// never overlapping on one instrument's row.
     #[serde(default)]
-    pub playlist: Vec<Arc<PlaylistTrack>>,
+    pub clips: Vec<Clip>,
+    /// Loop region of the timeline (20.2).
+    #[serde(default)]
+    pub loop_region: LoopRegion,
 }
 
 impl Project {
@@ -49,7 +53,8 @@ impl Project {
                 sends: Vec::new(),
             })],
             samples: Vec::new(),
-            playlist: Vec::new(),
+            clips: Vec::new(),
+            loop_region: LoopRegion::default(),
         }
     }
 
@@ -76,10 +81,8 @@ impl Project {
         }
         for p in &self.patterns {
             m = m.max(p.id.0);
-            for cn in &p.notes {
-                for n in &cn.notes {
-                    m = m.max(n.id.0);
-                }
+            for n in &p.notes {
+                m = m.max(n.id.0);
             }
         }
         for t in &self.tracks {
@@ -88,11 +91,8 @@ impl Project {
                 m = m.max(i.instance().0);
             }
         }
-        for pt in &self.playlist {
-            m = m.max(pt.id.0);
-            for c in &pt.clips {
-                m = m.max(c.id.0);
-            }
+        for c in &self.clips {
+            m = m.max(c.id.0);
         }
         m
     }
@@ -404,23 +404,26 @@ impl SynthParams {
 pub struct Pattern {
     pub id: PatternId,
     pub name: String,
+    /// The instrument whose notes this clip content holds (20.2). Clips
+    /// that share this content are linked copies.
+    pub instrument: ChannelId,
     pub length_steps: u8,
     pub step_ticks: u32,
     /// Swing in 1/1000 of a step (0 to `MAX_SWING`), applied by the
     /// compiler to step notes on odd steps (17.2).
     #[serde(default)]
     pub swing: u16,
-    /// Notes per channel, sorted by channel id. Channels with no notes in
-    /// this pattern have no entry.
+    /// Sorted by `(start, key, id)`.
     #[serde(default)]
-    pub notes: Vec<ChannelNotes>,
+    pub notes: Vec<Note>,
 }
 
 impl Pattern {
-    pub fn new(id: PatternId, name: String) -> Pattern {
+    pub fn new(id: PatternId, name: String, instrument: ChannelId) -> Pattern {
         Pattern {
             id,
             name,
+            instrument,
             length_steps: 16,
             step_ticks: DEFAULT_STEP_TICKS,
             swing: 0,
@@ -432,25 +435,9 @@ impl Pattern {
         self.length_steps as u32 * self.step_ticks
     }
 
-    pub fn notes_of(&self, channel: ChannelId) -> &[Note] {
-        self.notes
-            .iter()
-            .find(|c| c.channel == channel)
-            .map(|c| c.notes.as_slice())
-            .unwrap_or(&[])
-    }
-
     pub fn note_count(&self) -> usize {
-        self.notes.iter().map(|c| c.notes.len()).sum()
+        self.notes.len()
     }
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct ChannelNotes {
-    pub channel: ChannelId,
-    /// Sorted by `(start, key, id)`.
-    pub notes: Vec<Note>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -545,32 +532,36 @@ pub struct SampleRef {
     pub local_only: bool,
 }
 
-/// A playlist track (15.6): a lane of pattern clips.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct PlaylistTrack {
-    pub id: PlaylistTrackId,
-    pub name: String,
-    /// Sorted by `(start, id)`, never overlapping.
-    #[serde(default)]
-    pub clips: Vec<Clip>,
-}
-
-/// A pattern placed on the timeline. When `len` is longer than the pattern,
-/// the pattern repeats; when shorter, it is cut.
+/// A clip on an instrument's row (20.2). It plays its content (`pattern`)
+/// starting `offset` ticks into the content; when `len` is longer than the
+/// content the content repeats, when shorter it is cut.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Clip {
     pub id: ClipId,
+    pub instrument: ChannelId,
     pub pattern: PatternId,
     pub start: u32,
     pub len: u32,
+    #[serde(default)]
+    pub offset: u32,
+    #[serde(default)]
+    pub muted: bool,
 }
 
 impl Clip {
     pub fn end(&self) -> u32 {
         self.start + self.len
     }
+}
+
+/// The timeline loop region (20.2). `end > start` when set.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LoopRegion {
+    pub start: u32,
+    pub end: u32,
+    pub enabled: bool,
 }
 
 /// Ticks per bar for a project's time signature.

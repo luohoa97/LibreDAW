@@ -1,0 +1,81 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+<component type="desktop-application">
+  <id>io.github.luohoa97.LibreDAW</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-or-later</project_license>
+  <name>LibreDAW</name>
+  <summary>Make beats and music on your desktop</summary>
+  <developer id="io.github.luohoa97">
+    <name>The LibreDAW developers</name>
+  </developer>
+  <description>
+    <p>LibreDAW is a free digital audio workstation for Linux that you can pick up and use right away. Start from a beat template, click steps into a drum pattern, play notes, arrange the song and mix it.</p>
+    <p>It is built with GTK 4 and libadwaita, so it looks and behaves like the rest of your desktop.</p>
+    <ul>
+      <li>Home page with templates for Phonk, Trap, Boom Bap, Lo-fi and House beats</li>
+      <li>Step sequencer, note editor, song view and mixer</li>
+      <li>Built-in sound packs, free to use for any purpose</li>
+      <li>CLAP plugin hosting</li>
+      <li>A guided first-beat tutorial</li>
+      <li>AI agents can work inside your project through MCP, visibly, and only with your approval</li>
+    </ul>
+  </description>
+  <launchable type="desktop-id">io.github.luohoa97.LibreDAW.desktop</launchable>
+  <url type="homepage">https://github.com/luohoa97/LibreDAW</url>
+  <url type="bugtracker">https://github.com/luohoa97/LibreDAW/issues</url>
+  <provides>
+    <binary>libredaw</binary>
+    <binary>libredaw-mcp</binary>
+    <mediatype>application/x-libredaw-project</mediatype>
+  </provides>
+  <supports>
+    <control>keyboard</control>
+    <control>pointing</control>
+  </supports>
+  <requires>
+    <display_length compare="ge">768</display_length>
+  </requires>
+  <categories>
+    <category>AudioVideo</category>
+    <category>Audio</category>
+    <category>Music</category>
+  </categories>
+  <keywords>
+    <keyword>beat</keyword>
+    <keyword>drum machine</keyword>
+    <keyword>sequencer</keyword>
+    <keyword>music production</keyword>
+  </keywords>
+  <content_rating type="oars-1.1"/>
+  <!-- Placeholder screenshot files: the orchestrator provides them at release time. -->
+  <screenshots>
+    <screenshot type="default">
+      <caption>Start a beat from the Home page</caption>
+      <image type="source">https://raw.githubusercontent.com/luohoa97/LibreDAW/main/docs/screenshots/home.png</image>
+    </screenshot>
+    <screenshot>
+      <caption>Click steps into a pattern</caption>
+      <image type="source">https://raw.githubusercontent.com/luohoa97/LibreDAW/main/docs/screenshots/pattern.png</image>
+    </screenshot>
+    <screenshot>
+      <caption>Mix your song</caption>
+      <image type="source">https://raw.githubusercontent.com/luohoa97/LibreDAW/main/docs/screenshots/mixer.png</image>
+    </screenshot>
+  </screenshots>
+  <releases>
+    <release version="0.1.0" date="2026-10-07">
+      <description>
+        <p>First release.</p>
+        <ul>
+          <li>Home page with templates, recent projects and recovery of unsaved work</li>
+          <li>Welcome tour and an interactive "Make Your First Beat" tutorial</li>
+          <li>Pattern, Song and Mixer views, with a real-time audio engine</li>
+          <li>Built-in CC0 sound packs</li>
+          <li>CLAP plugin hosting</li>
+          <li>MCP control for AI agents, with visible activity and approvals</li>
+        </ul>
+      </description>
+    </release>
+  </releases>
+</component>

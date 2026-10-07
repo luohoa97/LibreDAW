@@ -5,10 +5,10 @@
 use engine::runtime::{Runtime, Shared, UiEnds, rings};
 use engine::{Slots, compile, write_controls};
 use protocol::engine::EngineCommand;
-use protocol::ids::{ChannelId, NoteId, PatternId, TrackId};
+use protocol::ids::{ChannelId, ClipId, NoteId, PatternId, TrackId};
 use protocol::model::{
-    Adsr, Channel, ChannelNotes, Instrument, Mix, Note, Osc, Pattern, Project, SynthParams, Track,
-    Wave,
+    Adsr, Channel, Clip, Instrument, LoopRegion, Mix, Note, Osc, Pattern, Project, SynthParams,
+    Track, Wave,
 };
 use std::sync::Arc;
 
@@ -67,10 +67,33 @@ pub fn track(id: u32) -> Track {
 /// A note: `(id, start, len, key, vel)`.
 pub type N = (u32, u32, u32, u8, u8);
 
-pub fn pattern(id: u32, steps: u8, notes: &[(u32, Vec<N>)]) -> Pattern {
-    let mut p = Pattern::new(PatternId(id), format!("p{id}"));
-    p.length_steps = steps;
+/// One "beat" of the old pattern model: clip contents (one per instrument
+/// with notes, all the same length) that `project` places as one clip each
+/// at tick 0, plus a loop region over the first beat's length, which
+/// reproduces the former looping pattern playback on the timeline.
+#[derive(Clone)]
+pub struct Beat {
+    pub contents: Vec<Pattern>,
+    pub len_ticks: u32,
+}
+
+impl From<Pattern> for Beat {
+    fn from(p: Pattern) -> Beat {
+        Beat {
+            len_ticks: p.length_ticks(),
+            contents: vec![p],
+        }
+    }
+}
+
+/// Contents of instrument notes with ids `id` (one instrument) or
+/// `id * 100 + instrument` (several), `steps` steps long.
+pub fn pattern(id: u32, steps: u8, notes: &[(u32, Vec<N>)]) -> Beat {
+    let mut contents = Vec::new();
     for (ch, ns) in notes {
+        let pid = if notes.len() == 1 { id } else { id * 100 + ch };
+        let mut p = Pattern::new(PatternId(pid), format!("p{pid}"), ChannelId(*ch));
+        p.length_steps = steps;
         let mut v: Vec<Note> = ns
             .iter()
             .map(|&(id, start, len, key, vel)| Note {
@@ -84,19 +107,25 @@ pub fn pattern(id: u32, steps: u8, notes: &[(u32, Vec<N>)]) -> Pattern {
             })
             .collect();
         v.sort_by_key(|n| (n.start, n.key, n.id));
-        p.notes.push(ChannelNotes {
-            channel: ChannelId(*ch),
-            notes: v,
-        });
+        p.notes = v;
+        contents.push(p);
     }
-    p
+    let mut probe = Pattern::new(PatternId(id), String::new(), ChannelId(0));
+    probe.length_steps = steps;
+    Beat {
+        contents,
+        len_ticks: probe.length_ticks(),
+    }
 }
 
-pub fn project(
+/// A project whose timeline plays each beat's contents as one clip at tick
+/// 0 (clip ids `1000 + content id`), with the loop region on over the
+/// first beat's length.
+pub fn project<B: Into<Beat>>(
     bpm: f64,
     tracks: Vec<Track>,
     channels: Vec<Channel>,
-    patterns: Vec<Pattern>,
+    beats: Vec<B>,
 ) -> Project {
     let mut p = Project::empty();
     p.tempo_bpm = bpm;
@@ -106,8 +135,29 @@ pub fn project(
     for c in channels {
         p.channels.push(Arc::new(c));
     }
-    for pat in patterns {
-        p.patterns.push(Arc::new(pat));
+    let mut first = true;
+    for b in beats {
+        let b: Beat = b.into();
+        if first {
+            p.loop_region = LoopRegion {
+                start: 0,
+                end: b.len_ticks,
+                enabled: true,
+            };
+            first = false;
+        }
+        for c in b.contents {
+            p.clips.push(Clip {
+                id: ClipId(1000 + c.id.0),
+                instrument: c.instrument,
+                pattern: c.id,
+                start: 0,
+                len: b.len_ticks,
+                offset: 0,
+                muted: false,
+            });
+            p.patterns.push(Arc::new(c));
+        }
     }
     p
 }
@@ -121,7 +171,7 @@ pub struct Rig {
 }
 
 /// A runtime with the project compiled and installed, controls written,
-/// tracing on, the pattern selected and the transport started.
+/// tracing on and the transport started when `play`.
 pub fn rig(project: &Project, sr: f64, play: bool) -> Rig {
     let mut slots = Slots::new();
     slots.sync(project).unwrap();
@@ -131,9 +181,6 @@ pub fn rig(project: &Project, sr: f64, play: bool) -> Rig {
     let mut rt = Runtime::new(sr, shared.clone(), ends);
     rt.enable_trace(1 << 16);
     rt.install(compile(project, &slots, sr));
-    if let Some(p) = project.patterns.first() {
-        rt.command(EngineCommand::SetPlayingPattern { pattern: p.id });
-    }
     if play {
         rt.command(EngineCommand::Play);
     }

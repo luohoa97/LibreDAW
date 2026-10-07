@@ -3,6 +3,7 @@
 //! stream, offline render and WAV writer.
 
 pub mod api;
+pub mod audition;
 pub mod bass808;
 pub mod compiled;
 pub mod fx;
@@ -12,6 +13,7 @@ pub mod loadproject;
 pub mod metronome;
 pub mod mixer;
 pub mod plugins;
+pub mod portal_rt;
 pub mod preview;
 pub mod recorder;
 pub mod render;
@@ -34,7 +36,7 @@ pub use compiled::{Compiled, Slots, SlotsFull, compile, compile_with};
 pub use metronome::{CallbackState, Controls, Metronome};
 pub use plugins::PluginApi;
 pub use recorder::Recorder;
-pub use render::{RenderRequest, Rendered, SongRequest, render_offline, render_song};
+pub use render::{RangeRequest, Rendered, render_range};
 pub use runtime::{RtEnds, Runtime, Shared, UiEnds, rings};
 pub use samples::{SampleData, SampleStore};
 pub use tables::{

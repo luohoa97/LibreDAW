@@ -15,14 +15,12 @@ name = "libredaw-mcp"
 path = "src/main.rs"
 
 [dependencies]
-libredaw-protocol = { path = "../protocol" }
-# Control socket client shared with the Deno bridge (SPEC 16.2).
-libredaw-script = { path = "../script" }
-# JSON-RPC 2.0 messages and tool results (SPEC 16.2). preserve_order keeps key order when `setup` edits client config files.
+# The control socket speaks MCP itself (SPEC 18.3); the relay only needs
+# its socket location and the pinned protocol revision.
+libredaw-control = { path = "../control" }
+# JSON-RPC errors from the relay and config edits in `setup`. preserve_order keeps key order when `setup` edits client config files.
 serde_json = { version = "1", features = ["preserve_order"] }
-# Derive typed tool arguments so a bad argument gets a clear error (SPEC 16.3).
-serde = { version = "1", features = ["derive"] }
 
 [dev-dependencies]
-# Real control server and fake UI loop for the end-to-end tests (SPEC 16.2).
-libredaw-control = { path = "../control" }
+# Fake UI types for the end-to-end tests through the real control server.
+libredaw-protocol = { path = "../protocol" }

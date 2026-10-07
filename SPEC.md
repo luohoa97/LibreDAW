@@ -1156,6 +1156,26 @@ in the project, content-addressed like git:
 - No merge between branches (merging music edits is not well defined) and
   no remote sync.
 
+
+### 15.12 Branches and versions (Amendment 17)
+
+The change tree (15.11) can split into named branches. Agents and users
+use the same tree; MCP exposes it (`HistoryTree`, `HistoryDiff`,
+`VersionSave`, `VersionRestore`, `BranchCreate`, `BranchSwitch`,
+`BranchList`, `BranchRename`, `BranchArchive`, and a `libredaw://history`
+resource with subscriptions).
+
+- "Make 3 versions of this song": the agent creates three branches from
+  the current commit ("Version A: darker", "Version B: faster", ...),
+  edits each, and the DAW shows them as cards in a **Versions** panel:
+  name, author, short description of what changed, and a **Listen**
+  button.
+- Compare: while playing, switching cards swaps the project state at the
+  next bar, keeping the playhead, so versions can be A/B compared by ear.
+- **Use This Version** makes that branch current; the others stay in the
+  tree (archived, never deleted) and can be brought back.
+- No merging between branches (15.11): picking a version is the decision.
+- Undo, the History page, and agent author scoping (17.1) work per branch.
 ## 16. Agent control (LibreDAW MCP)
 
 (Amended by 17.1: trust model, settings, concurrency, jobs, startup. Where
@@ -1468,7 +1488,9 @@ Status: approved scope, not yet adversarially reviewed.
 - While an agent session is active (connected and has sent a request in
   the last 5 s, or holds an open activity, 18.2), the main window shows an
   orange glow along its inner edges: an inset shadow in the libadwaita
-  warning color (`@warning_color`), 3 px, softly pulsing at 1 Hz. With
+  warning color (`@warning_color`), drawn like the browser agent glow in
+  Claude for Chrome: a soft inward gradient about 12 to 16 px deep along
+  all four window edges, gently pulsing (about 1.5 s per cycle). With
   "reduce animation" (GNOME setting) the glow is static. The glow never
   carries meaning alone (HIG): the header bar also shows an agent pill
   (agent name, current activity text, a Stop button), and the screen
@@ -1587,7 +1609,7 @@ Flatpak with a full release.
 
 ### 19.3 Flatpak
 
-- App id `org.libredaw.LibreDAW` (to be confirmed by the owner; it must
+- App id `io.github.luohoa97.LibreDAW` (owner decision: the project's GitHub account; it must
   be a domain the project controls for Flathub), GNOME runtime matching
   libadwaita >= 1.5, Rust SDK extension, `--socket=pipewire` (fallback
   `--socket=pulseaudio` only if needed), `--device=dri`, Wayland and X11
@@ -1607,7 +1629,7 @@ Flatpak with a full release.
   disabled in the Flatpak build with a clear message, unless a Deno
   extension is added later.
 - Agents: `libredaw-mcp` ships inside the Flatpak and is launched by
-  clients as `flatpak run --command=libredaw-mcp org.libredaw.LibreDAW`;
+  clients as `flatpak run --command=libredaw-mcp io.github.luohoa97.LibreDAW`;
   `libredaw-mcp setup` writes that form when it runs inside the Flatpak.
   The control socket lives in the app's runtime dir.
 - Desktop integration: `.desktop` file, AppStream metainfo with
@@ -1628,6 +1650,97 @@ Flatpak with a full release.
 - Published: a signed git tag `v0.1.0`, a GitHub release with the
   `.flatpak` bundle and release notes. Flathub submission is a separate,
   later owner decision.
+
+## 20. Timeline-first model (Amendment 16)
+
+Owner direction: "one model to reason about, no duplication of concepts,
+one opinionated way of doing things, easy to understand", and "we need to
+be THE professional DAW even if we're easy to use". This section replaces
+the pattern/channel/playlist model of sections 5, 15.4, 15.6 and the
+"Beat" naming of Amendment 15 wherever they conflict.
+
+### 20.1 Principles
+
+1. One model: Instruments are rows on one Timeline; music lives in Clips
+   on those rows. There is no separate pattern list, channel rack, or song
+   row. Every view shows the same objects.
+2. Progressive disclosure, no "expert mode": the first screen shows only
+   what a beginner needs (rows, clips, play). Professional depth is one
+   step away, in context, on the same objects: the clip editor's lanes,
+   the inspector's More Controls, the mixer's inserts and sends,
+   automation lanes under a row. Nothing is hidden behind a mode switch,
+   and nothing a professional needs is missing because it would confuse a
+   beginner.
+3. Fast for experts: every action has a keyboard path; selection,
+   duplicate, split, nudge, quantize, and zoom work the same in every
+   editor; nothing requires a dialog.
+4. Every edit is undoable, including those by agents (sections 6, 17, 18).
+
+### 20.2 Objects
+
+- **Instrument** (internally still `Channel`): one sound source and its
+  row: name, color, instrument kind (synth, 808, sampler, CLAP plugin),
+  root key, choke group, mix values, output mixer track.
+- **Clip**: a block on one instrument's row: id, instrument, content,
+  start tick, length ticks, content offset ticks (for trimmed starts),
+  muted. When the clip is longer than its content, the content repeats
+  (looping clip); when shorter, it is cut.
+- **Clip content** (internally the former `Pattern`, now holding notes of
+  one instrument only): id, name, length ticks, step ticks, swing, notes
+  (with step lanes: velocity, pitch offset, ratchet). Clips that share a
+  content are linked copies: editing one edits all. "Make Unique" copies
+  the content for one clip.
+- **Timeline**: tempo, time signature, loop region (start, end, enabled),
+  markers (post-0.1). The transport always plays the timeline; there is
+  no pattern mode. Looping a single clip is "loop region = this clip".
+- **Mixer**: tracks, inserts, sends, master (section 15.5 unchanged).
+  New instruments get their own mixer track by default; several
+  instruments may share one (for example a drum bus).
+
+### 20.3 Editing
+
+- Views: **Timeline** (rows + clips, with the clip editor docked below
+  the timeline when a clip is selected) and **Mixer**. The sound browser
+  and inspector remain side panes.
+- Clip editor: one editor with two presentations of the same clip:
+  **Steps** (grid with velocity, pitch, ratchet lanes; best for drums) and
+  **Notes** (piano roll with velocity lane). The default follows the
+  instrument (drums and one-shot samplers: Steps; tonal instruments:
+  Notes); the user can switch per instrument.
+- Creating: click an empty spot on a row to create a 1-bar clip there
+  (one click, undoable); drag a sound from the browser onto the empty
+  area below the rows to create an instrument with a clip; "Add
+  Instrument" adds an empty row.
+- Duplicate (Ctrl+D) places a linked copy right after the selection;
+  Alt+drag (or Ctrl+drag) copies; Make Unique, Split at playhead (S),
+  Join, Mute (0), Delete; drag edges to resize or loop.
+- New projects start with Kick, Snare, Hat, and 808 rows, each with a
+  1-bar clip repeated as linked copies over 4 bars, loop region on, so
+  Space plays a beat immediately (SPEC 15.8 rule 1).
+- Audition: `EngineCommand::Audition` plays a preset or sample on a
+  dedicated preview voice routed to the master, for the sound browser.
+
+### 20.4 Professional depth (after 0.1.0, all on the same model)
+
+Automation lanes under instrument rows and mixer tracks (clip-like
+envelopes); audio tracks and audio clips with recording and comping; MIDI
+input and MIDI recording into clips; tempo and time-signature map;
+plugin delay compensation; markers and arrangement sections; stem and
+MIDI export; groups and VCA faders. Each extends rows, clips, or the
+mixer; none adds a parallel concept.
+
+### 20.5 Format version 3 and migration
+
+- `Project` gains `clips: Vec<Clip>` and `loop_region`; `patterns` become
+  clip contents with an `instrument` field and only that instrument's
+  notes; `playlist` is removed.
+- v2 to v3: each v2 pattern with notes for several channels becomes one
+  content per channel. Each v2 playlist clip becomes one clip per
+  channel that had notes in its pattern, at the same position. A v2
+  project with no playlist gets, for each content, one clip at tick 0
+  spanning one loop of its pattern, and the loop region covers the
+  longest of them.
+- The step and swing semantics of 17.2 apply per content.
 ---
 
 ## Owner decisions (approved 2026-10-07)
@@ -1641,6 +1754,28 @@ Flatpak with a full release.
 ---
 
 ## Changelog
+
+### Amendment 17 (2026-10-07, owner)
+
+The change tree splits into named branches; agents can make several
+versions (branches) of a song, shown as cards with Listen, A/B switching
+at the next bar, and Use This Version (15.12). MCP has full access to the
+tree. The agent glow matches the Claude for Chrome style (18.1).
+
+### Amendment 16 (2026-10-07, owner)
+
+Timeline-first, one model: Instruments are rows, music lives in Clips,
+linked copies replace patterns, loop region replaces pattern mode; views
+are Timeline and Mixer; progressive disclosure toward a professional
+feature set without an expert mode (section 20). Supersedes the "Beat"
+naming of Amendment 15 and the playlist of 15.6. Format version 3.
+
+### Amendment 15 (2026-10-07, owner)
+
+User-visible "Pattern" is renamed "Beat" (views: Beats, Song, Mixer).
+Internal names (protocol, files, code) keep "pattern". The loop selector
+and its actions (new, duplicate, rename, delete) are one menu button.
+("Loop" was chosen first and replaced by "Beat" by the owner.)
 
 ### Amendment 14 (2026-10-07, owner)
 

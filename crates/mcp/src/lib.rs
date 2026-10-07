@@ -1,16 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//! `libredaw-mcp`: a stdio MCP server that lets an agent control a running
-//! LibreDAW through its control socket (SPEC 16, 17.1).
+//! `libredaw-mcp`: the stdio side of LibreDAW's agent control (SPEC 16,
+//! 18.3).
 //!
-//! Hand-written JSON-RPC 2.0 over newline-delimited stdio. Pinned MCP
-//! protocol revision: [`PROTOCOL_VERSION`].
+//! The DAW's control socket speaks MCP itself (`crates/control`), so this
+//! binary is a byte relay between an AI client's stdio and that socket
+//! ([`relay`]), plus the `setup` subcommand that registers it with the
+//! clients found on the machine ([`setup`]).
 
-pub mod conn;
-pub mod sanitize;
-pub mod server;
+pub mod relay;
 pub mod setup;
-pub mod tools;
 
-/// The one MCP protocol revision this server speaks. A client that asks for
-/// another revision gets a JSON-RPC error naming this one.
-pub const PROTOCOL_VERSION: &str = "2025-06-18";
+/// The MCP protocol revision the DAW speaks (defined in `control`).
+pub use control::PROTOCOL_VERSION;

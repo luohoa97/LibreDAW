@@ -3,7 +3,7 @@ use super::*;
 use crate::document::commit_plugin_state;
 use crate::document::tests::{Rng, random_edit};
 use protocol::edit::{MixValue, NewInstrument, NewNote};
-use protocol::ids::{InstanceId, TrackId};
+use protocol::ids::{ChannelId, InstanceId, TrackId};
 use protocol::model::SynthParams;
 
 fn tempo(b: f64) -> Edit {
@@ -510,19 +510,19 @@ fn undo_restores_the_exact_previous_snapshot() {
                 track: TrackId::MASTER,
             },
             Edit::AddPattern {
+                instrument: ChannelId(1),
                 name: "p".into(),
                 length_steps: 16,
             },
         ],
     );
     let proj = e.document().project.clone();
-    let (c, p) = (proj.channels[0].id, proj.patterns[0].id);
+    let (_c, p) = (proj.channels[0].id, proj.patterns[0].id);
     put(
         &mut e,
         user(),
         vec![Edit::AddNotes {
             pattern: p,
-            channel: c,
             notes: vec![NewNote {
                 start: 0,
                 len: 5,

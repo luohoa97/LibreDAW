@@ -13,10 +13,12 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use protocol::control::{ControlError, Outcome, Reply, Request, Transport};
+use protocol::control::{ControlError, Outcome, Reply, ReplyBody, Request, Transport};
 
 use crate::client;
+use crate::mcp::Session;
 use crate::socket;
+use crate::suggest::{PendingSuggestion, SuggestionEvent};
 
 /// Approval wait for a PRIVILEGED request (17.1).
 pub const APPROVAL_TIMEOUT: Duration = Duration::from_secs(60);
@@ -41,6 +43,12 @@ pub struct ControlConfig {
     pub allow_scripts: bool,
     pub approval_timeout: Duration,
     pub busy_timeout: Duration,
+    /// How long an MCP `initialize` waits for the user to enable agent
+    /// control before it gets a clear error (the user may be about to click
+    /// the banner after `--agent-request`).
+    pub agents_wait: Duration,
+    /// How long an export or analysis tool call waits for its job.
+    pub job_wait: Duration,
 }
 
 impl ControlConfig {
@@ -52,15 +60,63 @@ impl ControlConfig {
             allow_scripts: true,
             approval_timeout: APPROVAL_TIMEOUT,
             busy_timeout: BUSY_TIMEOUT,
+            agents_wait: Duration::from_secs(25),
+            job_wait: Duration::from_secs(120),
         }
     }
 
     /// `$XDG_RUNTIME_DIR/libredaw`; `None` if the variable is unset (never
     /// `/tmp`, 17.1).
+    ///
+    /// Inside a Flatpak the directory is `$XDG_RUNTIME_DIR/app/$FLATPAK_ID/libredaw`:
+    /// each `flatpak run` gets its own private runtime dir, except that
+    /// `app/<id>` is shared by every instance of the app, so the DAW and a
+    /// `libredaw-mcp` started separately find the same socket.
     pub fn default_dir() -> Option<PathBuf> {
-        let d = std::env::var_os("XDG_RUNTIME_DIR").filter(|d| !d.is_empty())?;
-        Some(PathBuf::from(d).join("libredaw"))
+        let base = PathBuf::from(std::env::var_os("XDG_RUNTIME_DIR").filter(|d| !d.is_empty())?);
+        Some(dir_in(&base, std::env::var("FLATPAK_ID").ok().as_deref()))
     }
+}
+
+/// The socket directory under runtime dir `base` (see `default_dir`).
+fn dir_in(base: &Path, flatpak_id: Option<&str>) -> PathBuf {
+    if let Some(id) =
+        flatpak_id.filter(|id| !id.is_empty() && !id.contains('/') && !id.starts_with('.'))
+    {
+        let shared = base.join("app").join(id);
+        if shared.is_dir() {
+            return shared.join("libredaw");
+        }
+    }
+    base.join("libredaw")
+}
+
+#[cfg(test)]
+mod dir_tests {
+    use super::dir_in;
+
+    #[test]
+    fn flatpak_uses_the_shared_app_dir_when_it_exists() {
+        let base = std::env::temp_dir().join(format!("ldaw-dir-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(base.join("app/org.example.App")).unwrap();
+        assert_eq!(
+            dir_in(&base, Some("org.example.App")),
+            base.join("app/org.example.App/libredaw")
+        );
+        // Not in a Flatpak, no such app dir, or a hostile id: the plain path.
+        assert_eq!(dir_in(&base, None), base.join("libredaw"));
+        assert_eq!(dir_in(&base, Some("other.App")), base.join("libredaw"));
+        assert_eq!(dir_in(&base, Some("../x")), base.join("libredaw"));
+        assert_eq!(dir_in(&base, Some("")), base.join("libredaw"));
+        let _ = std::fs::remove_dir_all(&base);
+    }
+}
+
+/// The control socket of the running DAW, or `None` if `XDG_RUNTIME_DIR`
+/// is unset.
+pub fn default_socket_path() -> Option<PathBuf> {
+    ControlConfig::default_dir().map(|d| d.join(crate::socket::SOCKET_NAME))
 }
 
 #[derive(Debug)]
@@ -136,6 +192,9 @@ pub enum UiEvent {
 pub struct Polled {
     pub requests: Vec<Incoming>,
     pub events: Vec<UiEvent>,
+    /// Suggestion lifecycle (18.5). Kept apart from `events` so existing
+    /// exhaustive matches on `UiEvent` keep compiling.
+    pub suggestions: Vec<SuggestionEvent>,
 }
 
 /// Lines for a client's writer thread.
@@ -167,6 +226,8 @@ struct ClientSlot {
     info: ClientInfo,
     out: Sender<Out>,
     stream: UnixStream,
+    /// Set for MCP clients: replies go to the session, not to a line.
+    mcp: Option<Arc<Session>>,
 }
 
 pub enum HelloErr {
@@ -175,7 +236,7 @@ pub enum HelloErr {
     BusyOwner,
 }
 
-struct State {
+pub(crate) struct State {
     agents_enabled: bool,
     requested_notified: bool,
     next_client: u64,
@@ -185,30 +246,77 @@ struct State {
     queue: Vec<Incoming>,
     events: Vec<UiEvent>,
     shutting_down: bool,
+    /// Latest document revision seen in any reply or `notify_revision`.
+    revision: Option<u64>,
+    pub(crate) next_suggestion: u64,
+    pub(crate) pending: Vec<PendingSuggestion>,
+    pub(crate) suggestion_events: Vec<SuggestionEvent>,
 }
 
 pub struct Shared {
     state: Mutex<State>,
     allow_scripts: bool,
-    approval_timeout: Duration,
+    pub(crate) approval_timeout: Duration,
     busy_timeout: Duration,
+    pub(crate) agents_wait: Duration,
+    pub(crate) job_wait: Duration,
 }
 
-fn error_line(id: u64, error: ControlError) -> String {
-    let reply = Reply {
-        id,
-        outcome: Outcome::Err { error },
-    };
-    serde_json::to_string(&reply).unwrap_or_default()
+fn error_outcome(error: ControlError) -> Outcome {
+    Outcome::Err { error }
+}
+
+fn reply_line(id: u64, outcome: Outcome) -> String {
+    let fallback = id;
+    serde_json::to_string(&Reply { id, outcome }).unwrap_or_else(|e| {
+        serde_json::to_string(&Reply {
+            id: fallback,
+            outcome: error_outcome(ControlError::Internal {
+                reason: e.to_string(),
+            }),
+        })
+        .unwrap_or_default()
+    })
+}
+
+/// Sends `outcome` to the client behind `slot`: a reply line for scripts, a
+/// tool-call result for MCP sessions.
+fn deliver(slot: &ClientSlot, request_id: u64, outcome: Outcome) -> bool {
+    match &slot.mcp {
+        Some(session) => session.deliver(request_id, outcome),
+        None => slot
+            .out
+            .send(Out::Line(reply_line(request_id, outcome)))
+            .is_ok(),
+    }
+}
+
+/// The document revision a reply carries, if any.
+fn outcome_revision(outcome: &Outcome) -> Option<u64> {
+    match outcome {
+        Outcome::Ok { body } => match body {
+            ReplyBody::Project { revision, .. } | ReplyBody::Job { revision, .. } => {
+                Some(*revision)
+            }
+            ReplyBody::Applied(a) => Some(a.revision),
+            ReplyBody::Analysis(a) => Some(a.revision),
+            _ => None,
+        },
+        Outcome::Err { .. } => None,
+    }
 }
 
 impl Shared {
-    fn lock(&self) -> MutexGuard<'_, State> {
+    pub(crate) fn lock(&self) -> MutexGuard<'_, State> {
         self.state.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     pub fn is_shutting_down(&self) -> bool {
         self.lock().shutting_down
+    }
+
+    pub fn agents_enabled(&self) -> bool {
+        self.lock().agents_enabled
     }
 
     pub fn next_client_id(&self) -> Option<u64> {
@@ -221,7 +329,8 @@ impl Shared {
     }
 
     /// Hello succeeded: adds the client or says why not. Atomic with the
-    /// enabled flag so a banner click cannot race the check.
+    /// enabled flag so a banner click cannot race the check. `mcp` is the
+    /// session of an MCP client.
     pub fn register(
         &self,
         id: u64,
@@ -229,6 +338,7 @@ impl Shared {
         name: String,
         out: Sender<Out>,
         stream: UnixStream,
+        mcp: Option<Arc<Session>>,
     ) -> Result<ClientInfo, HelloErr> {
         let mut s = self.lock();
         let info = ClientInfo {
@@ -263,15 +373,16 @@ impl Shared {
                 info: info.clone(),
                 out,
                 stream,
+                mcp,
             },
         );
         s.events.push(UiEvent::ClientConnected(info.clone()));
         Ok(info)
     }
 
-    /// A validated request from client `id`. `Err` carries the line to send
-    /// back at once.
-    pub fn submit(&self, client: u64, request: Request) -> Result<(), String> {
+    /// A validated request from client `id`. `Err` carries the outcome to
+    /// answer with at once.
+    pub fn submit(&self, client: u64, request: Request) -> Result<(), Outcome> {
         let mut s = self.lock();
         let Some(slot) = s.clients.get(&client) else {
             return Ok(());
@@ -279,7 +390,7 @@ impl Shared {
         let info = slot.info.clone();
         let in_flight = s.tickets.values().filter(|t| t.client == client).count();
         if in_flight >= MAX_IN_FLIGHT {
-            return Err(error_line(request.id, ControlError::Busy));
+            return Err(error_outcome(ControlError::Busy));
         }
         s.next_ticket += 1;
         let ticket = Ticket(s.next_ticket);
@@ -302,9 +413,9 @@ impl Shared {
     /// Client thread ended. Idempotent.
     pub fn unregister(&self, id: u64) {
         let mut s = self.lock();
-        if s.clients.remove(&id).is_none() {
+        let Some(slot) = s.clients.remove(&id) else {
             return;
-        }
+        };
         s.queue.retain(|i| i.client.id != id);
         let gone: Vec<u64> = s
             .tickets
@@ -321,12 +432,58 @@ impl Shared {
             }
         }
         s.events.push(UiEvent::ClientGone { id });
+        if slot.info.transport == Transport::Agent {
+            // Pending suggestions can no longer be answered (18.5).
+            let dropped: Vec<PendingSuggestion> = std::mem::take(&mut s.pending);
+            for p in dropped {
+                s.suggestion_events.push(SuggestionEvent::Failed {
+                    id: p.id,
+                    reason: "the agent disconnected".into(),
+                });
+            }
+        }
+        drop(s);
+        if let Some(session) = slot.mcp {
+            session.close();
+        }
+    }
+
+    /// The agent session, if an MCP agent is connected.
+    pub(crate) fn agent_session(&self) -> Option<Arc<Session>> {
+        self.lock()
+            .clients
+            .values()
+            .find(|c| c.info.transport == Transport::Agent)
+            .and_then(|c| c.mcp.clone())
+    }
+
+    /// The document changed to `revision`: tells MCP clients that subscribed
+    /// to resources.
+    pub fn note_revision(&self, revision: u64) {
+        let sessions = {
+            let mut s = self.lock();
+            if s.revision == Some(revision) {
+                return;
+            }
+            s.revision = Some(revision);
+            s.clients
+                .values()
+                .filter_map(|c| c.mcp.clone())
+                .collect::<Vec<_>>()
+        };
+        for session in sessions {
+            session.on_revision(revision);
+        }
+    }
+
+    pub(crate) fn push_suggestion_event(&self, e: SuggestionEvent) {
+        self.lock().suggestion_events.push(e);
     }
 }
 
 /// The server handle. Dropping it shuts it down.
 pub struct ControlServer {
-    shared: Arc<Shared>,
+    pub(crate) shared: Arc<Shared>,
     socket_path: PathBuf,
     listener_thread: Option<JoinHandle<()>>,
     lock: Option<File>,
@@ -347,10 +504,16 @@ impl ControlServer {
                 queue: Vec::new(),
                 events: Vec::new(),
                 shutting_down: false,
+                revision: None,
+                next_suggestion: 0,
+                pending: Vec::new(),
+                suggestion_events: Vec::new(),
             }),
             allow_scripts: cfg.allow_scripts,
             approval_timeout: cfg.approval_timeout,
             busy_timeout: cfg.busy_timeout,
+            agents_wait: cfg.agents_wait,
+            job_wait: cfg.job_wait,
         });
         let socket_path = bound.socket_path.clone();
         let listener_shared = Arc::clone(&shared);
@@ -396,6 +559,14 @@ impl ControlServer {
         self.shared.lock().agents_enabled
     }
 
+    /// The document is now at `revision` (call after every change, from any
+    /// author, so MCP clients subscribed to `libredaw://` resources hear
+    /// about changes the user makes). Replies that carry a revision are
+    /// observed automatically; this covers the user's own edits.
+    pub fn notify_revision(&self, revision: u64) {
+        self.shared.note_revision(revision);
+    }
+
     /// GTK thread, every 10 ms. Also expires approval and Busy deadlines.
     pub fn poll(&self) -> Polled {
         let now = Instant::now();
@@ -425,7 +596,7 @@ impl ControlServer {
                 )
             };
             if let Some(c) = s.clients.get(&t.client) {
-                let _ = c.out.send(Out::Line(error_line(t.request_id, error)));
+                deliver(c, t.request_id, error_outcome(error));
             }
             s.events.push(event);
         }
@@ -436,32 +607,32 @@ impl ControlServer {
             }
         }
         let events = std::mem::take(&mut s.events);
-        Polled { requests, events }
+        let suggestions = std::mem::take(&mut s.suggestion_events);
+        Polled {
+            requests,
+            events,
+            suggestions,
+        }
     }
 
     /// Answers one request. False if the ticket is unknown: expired,
     /// already answered, or its client left.
     pub fn reply(&self, ticket: Ticket, outcome: Outcome) -> bool {
-        let mut s = self.shared.lock();
-        let Some(t) = s.tickets.remove(&ticket.0) else {
-            return false;
+        let rev = outcome_revision(&outcome);
+        let delivered = {
+            let mut s = self.shared.lock();
+            let Some(t) = s.tickets.remove(&ticket.0) else {
+                return false;
+            };
+            match s.clients.get(&t.client) {
+                Some(c) => deliver(c, t.request_id, outcome),
+                None => false,
+            }
         };
-        let line = serde_json::to_string(&Reply {
-            id: t.request_id,
-            outcome,
-        })
-        .unwrap_or_else(|e| {
-            error_line(
-                t.request_id,
-                ControlError::Internal {
-                    reason: e.to_string(),
-                },
-            )
-        });
-        match s.clients.get(&t.client) {
-            Some(c) => c.out.send(Out::Line(line)).is_ok(),
-            None => false,
+        if let Some(rev) = rev {
+            self.shared.note_revision(rev);
         }
+        delivered
     }
 
     /// The UI decided this request is PRIVILEGED: show the banner and wait
@@ -495,9 +666,7 @@ impl ControlServer {
         }
         let t = s.tickets.remove(&ticket.0).expect("present");
         if let Some(c) = s.clients.get(&t.client) {
-            let _ = c
-                .out
-                .send(Out::Line(error_line(t.request_id, ControlError::Denied)));
+            deliver(c, t.request_id, error_outcome(ControlError::Denied));
         }
         false
     }

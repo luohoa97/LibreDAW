@@ -38,12 +38,12 @@ use protocol::consts::*;
 use protocol::edit::{Edit, EditError, MixValue, NewInstrument, NewNote, set_mix};
 use protocol::ids::{ChannelId, FIRST_ID, InstanceId, NoteId, PatternId, TrackId};
 use protocol::model::{
-    Channel, ChannelNotes, ClapRef, Insert, Instrument, Note, ParamValue, Pattern, Project, Track,
-    Wave,
+    Channel, ClapRef, Insert, Instrument, Note, ParamValue, Pattern, Project, Track, Wave,
 };
 use protocol::validate::{ValidationError, check_synth, sort_canonical, validate};
 
 mod beats;
+mod clips;
 
 /// Velocity of a step turned on without an explicit velocity.
 pub const DEFAULT_STEP_VEL: u8 = 100;
@@ -218,6 +218,17 @@ impl Work {
         self.created.push(id);
         Ok(id)
     }
+
+    /// An id that is not reported in `created` (the notes of copied
+    /// content).
+    fn alloc_quiet(&mut self) -> Result<u32, EditError> {
+        if self.next_id == u32::MAX {
+            return Err(bad("id space exhausted"));
+        }
+        let id = self.next_id;
+        self.next_id += 1;
+        Ok(id)
+    }
 }
 
 fn bad(what: &str) -> EditError {
@@ -329,51 +340,43 @@ fn check_room(p: &Project, pi: usize, extra: usize) -> Result<(), EditError> {
     Ok(())
 }
 
-fn insert_notes(pat: &mut Pattern, channel: ChannelId, notes: Vec<Note>) {
+fn insert_notes(pat: &mut Pattern, notes: Vec<Note>) {
     if notes.is_empty() {
         return;
     }
-    let i = match pat.notes.iter().position(|c| c.channel == channel) {
-        Some(i) => i,
-        None => {
-            pat.notes.push(ChannelNotes {
-                channel,
-                notes: Vec::new(),
-            });
-            pat.notes.sort_by_key(|c| c.channel);
-            pat.notes
-                .iter()
-                .position(|c| c.channel == channel)
-                .expect("just inserted")
-        }
-    };
-    let cn = &mut pat.notes[i];
-    cn.notes.extend(notes);
-    cn.notes.sort_by_key(|n| (n.start, n.key, n.id));
+    pat.notes.extend(notes);
+    pat.notes.sort_by_key(|n| (n.start, n.key, n.id));
 }
 
-fn prune_empty(pat: &mut Pattern) {
-    pat.notes.retain(|c| !c.notes.is_empty());
-}
-
-/// Positions of the named notes in a pattern, or `NotFound` for the first
-/// id that is missing. Duplicate ids in the request count once.
+/// The named notes of a pattern, or `NotFound` for the first id that is
+/// missing. Duplicate ids in the request count once.
 fn locate(pat: &Pattern, ids: &[NoteId]) -> Result<HashSet<NoteId>, EditError> {
     let want: HashSet<NoteId> = ids.iter().copied().collect();
-    let mut found = 0usize;
-    for cn in &pat.notes {
-        found += cn.notes.iter().filter(|n| want.contains(&n.id)).count();
-    }
-    if found != want.len() {
-        let have: HashSet<NoteId> = pat
-            .notes
-            .iter()
-            .flat_map(|c| c.notes.iter().map(|n| n.id))
-            .collect();
-        let missing = ids.iter().find(|i| !have.contains(i)).copied();
-        return Err(not_found("note", missing.map(|m| m.0).unwrap_or(0)));
+    let have: HashSet<NoteId> = pat.notes.iter().map(|n| n.id).collect();
+    if let Some(missing) = ids.iter().find(|i| !have.contains(i)) {
+        return Err(not_found("note", missing.0));
     }
     Ok(want)
+}
+
+/// Root key of the instrument that owns a pattern's notes.
+fn root_of(p: &Project, pat: &Pattern) -> Result<u8, EditError> {
+    p.channel(pat.instrument)
+        .map(|c| c.root_key)
+        .ok_or_else(|| not_found("channel", pat.instrument.0))
+}
+
+/// After a content's length changed, keeps every clip offset inside it by
+/// wrapping (the content repeats, so the same musical position).
+fn wrap_offsets(p: &mut Project, pattern: PatternId) {
+    let Some(len) = p.pattern(pattern).map(|x| x.length_ticks().max(1)) else {
+        return;
+    };
+    for c in &mut p.clips {
+        if c.pattern == pattern && c.offset >= len {
+            c.offset %= len;
+        }
+    }
 }
 
 fn apply_one(w: &mut Work, e: &Edit) -> Result<(), EditError> {
@@ -432,11 +435,9 @@ fn apply_one(w: &mut Work, e: &Edit) -> Result<(), EditError> {
         Edit::RemoveChannel { channel } => {
             let i = channel_idx(&w.p, *channel)?;
             w.p.channels.remove(i);
-            for pat in &mut w.p.patterns {
-                if pat.notes.iter().any(|c| c.channel == *channel) {
-                    Arc::make_mut(pat).notes.retain(|c| c.channel != *channel);
-                }
-            }
+            // Its contents and clips go with it (20.3).
+            w.p.patterns.retain(|pat| pat.instrument != *channel);
+            w.p.clips.retain(|c| c.instrument != *channel);
         }
         Edit::RenameChannel { channel, name } => {
             let i = channel_idx(&w.p, *channel)?;
@@ -483,8 +484,13 @@ fn apply_one(w: &mut Work, e: &Edit) -> Result<(), EditError> {
             }
         }
 
-        // Patterns
-        Edit::AddPattern { name, length_steps } => {
+        // Clip contents (20.2)
+        Edit::AddPattern {
+            instrument,
+            name,
+            length_steps,
+        } => {
+            channel_idx(&w.p, *instrument)?;
             if w.p.patterns.len() >= MAX_PATTERNS {
                 return Err(too_many("patterns", MAX_PATTERNS));
             }
@@ -492,18 +498,14 @@ fn apply_one(w: &mut Work, e: &Edit) -> Result<(), EditError> {
                 return Err(out_of_range("pattern.length_steps", *length_steps as f64));
             }
             let id = PatternId(w.alloc()?);
-            let mut pat = Pattern::new(id, name.clone());
+            let mut pat = Pattern::new(id, name.clone(), *instrument);
             pat.length_steps = *length_steps;
             w.p.patterns.push(Arc::new(pat));
         }
         Edit::RemovePattern { pattern } => {
             let i = pattern_idx(&w.p, *pattern)?;
             w.p.patterns.remove(i);
-            for pt in &mut w.p.playlist {
-                if pt.clips.iter().any(|c| c.pattern == *pattern) {
-                    Arc::make_mut(pt).clips.retain(|c| c.pattern != *pattern);
-                }
-            }
+            w.p.clips.retain(|c| c.pattern != *pattern);
         }
         Edit::RenamePattern { pattern, name } => {
             let i = pattern_idx(&w.p, *pattern)?;
@@ -520,10 +522,8 @@ fn apply_one(w: &mut Work, e: &Edit) -> Result<(), EditError> {
             let pat = Arc::make_mut(&mut w.p.patterns[i]);
             pat.length_steps = *length_steps;
             let end = pat.length_ticks();
-            for cn in &mut pat.notes {
-                cn.notes.retain(|n| n.start < end);
-            }
-            prune_empty(pat);
+            pat.notes.retain(|n| n.start < end);
+            wrap_offsets(&mut w.p, *pattern);
         }
         Edit::SetStepTicks {
             pattern,
@@ -533,18 +533,12 @@ fn apply_one(w: &mut Work, e: &Edit) -> Result<(), EditError> {
         // Steps and notes
         Edit::SetStep {
             pattern,
-            channel,
             step,
             on,
             vel,
-        } => set_step(w, *pattern, *channel, *step, *on, *vel)?,
-        Edit::AddNotes {
-            pattern,
-            channel,
-            notes,
-        } => {
+        } => set_step(w, *pattern, *step, *on, *vel)?,
+        Edit::AddNotes { pattern, notes } => {
             let pi = pattern_idx(&w.p, *pattern)?;
-            channel_idx(&w.p, *channel)?;
             check_room(&w.p, pi, notes.len())?;
             for n in notes {
                 check_note(n, &w.p.patterns[pi])?;
@@ -561,7 +555,7 @@ fn apply_one(w: &mut Work, e: &Edit) -> Result<(), EditError> {
                     repeat: 1,
                 });
             }
-            insert_notes(Arc::make_mut(&mut w.p.patterns[pi]), *channel, made);
+            insert_notes(Arc::make_mut(&mut w.p.patterns[pi]), made);
         }
         Edit::RemoveNotes { pattern, notes } => {
             let pi = pattern_idx(&w.p, *pattern)?;
@@ -569,11 +563,9 @@ fn apply_one(w: &mut Work, e: &Edit) -> Result<(), EditError> {
             if want.is_empty() {
                 return Ok(());
             }
-            let pat = Arc::make_mut(&mut w.p.patterns[pi]);
-            for cn in &mut pat.notes {
-                cn.notes.retain(|n| !want.contains(&n.id));
-            }
-            prune_empty(pat);
+            Arc::make_mut(&mut w.p.patterns[pi])
+                .notes
+                .retain(|n| !want.contains(&n.id));
         }
         Edit::MoveNotes {
             pattern,
@@ -584,38 +576,38 @@ fn apply_one(w: &mut Work, e: &Edit) -> Result<(), EditError> {
             let pi = pattern_idx(&w.p, *pattern)?;
             let want = locate(&w.p.patterns[pi], notes)?;
             let end = w.p.patterns[pi].length_ticks() as i64;
-            for cn in &w.p.patterns[pi].notes {
-                for n in cn.notes.iter().filter(|n| want.contains(&n.id)) {
-                    let s = (n.start as i64)
-                        .checked_add(*dt)
-                        .ok_or_else(|| out_of_range("note.start", f64::INFINITY))?;
-                    let k = n.key as i64 + *dkey as i64;
-                    if s < 0 || s >= end {
-                        return Err(out_of_range("note.start", s as f64));
-                    }
-                    if s + n.len as i64 > MAX_TICK as i64 {
-                        return Err(out_of_range("note.end", (s + n.len as i64) as f64));
-                    }
-                    if !(0..=127).contains(&k) {
-                        return Err(out_of_range("note.key", k as f64));
-                    }
+            for n in w.p.patterns[pi]
+                .notes
+                .iter()
+                .filter(|n| want.contains(&n.id))
+            {
+                let s = (n.start as i64)
+                    .checked_add(*dt)
+                    .ok_or_else(|| out_of_range("note.start", f64::INFINITY))?;
+                let k = n.key as i64 + *dkey as i64;
+                if s < 0 || s >= end {
+                    return Err(out_of_range("note.start", s as f64));
+                }
+                if s + n.len as i64 > MAX_TICK as i64 {
+                    return Err(out_of_range("note.end", (s + n.len as i64) as f64));
+                }
+                if !(0..=127).contains(&k) {
+                    return Err(out_of_range("note.key", k as f64));
                 }
             }
             if want.is_empty() {
                 return Ok(());
             }
             let pat = Arc::make_mut(&mut w.p.patterns[pi]);
-            for cn in &mut pat.notes {
-                for n in cn.notes.iter_mut().filter(|n| want.contains(&n.id)) {
-                    n.start = (n.start as i64 + *dt) as u32;
-                    n.key = (n.key as i64 + *dkey as i64) as u8;
-                    if *dt != 0 || *dkey != 0 {
-                        // A moved step note becomes a piano-roll note (17.2).
-                        n.off = 0;
-                    }
+            for n in pat.notes.iter_mut().filter(|n| want.contains(&n.id)) {
+                n.start = (n.start as i64 + *dt) as u32;
+                n.key = (n.key as i64 + *dkey as i64) as u8;
+                if *dt != 0 || *dkey != 0 {
+                    // A moved step note becomes a piano-roll note (17.2).
+                    n.off = 0;
                 }
-                cn.notes.sort_by_key(|n| (n.start, n.key, n.id));
             }
+            pat.notes.sort_by_key(|n| (n.start, n.key, n.id));
         }
         Edit::ResizeNotes {
             pattern,
@@ -624,32 +616,32 @@ fn apply_one(w: &mut Work, e: &Edit) -> Result<(), EditError> {
         } => {
             let pi = pattern_idx(&w.p, *pattern)?;
             let want = locate(&w.p.patterns[pi], notes)?;
-            for cn in &w.p.patterns[pi].notes {
-                for n in cn.notes.iter().filter(|n| want.contains(&n.id)) {
-                    let l = (n.len as i64)
-                        .checked_add(*dlen)
-                        .ok_or_else(|| out_of_range("note.len", f64::INFINITY))?;
-                    if l < 1 {
-                        return Err(out_of_range("note.len", l as f64));
-                    }
-                    if n.start as i64 + l > MAX_TICK as i64 {
-                        return Err(out_of_range("note.end", (n.start as i64 + l) as f64));
-                    }
-                    if l % n.repeat as i64 != 0 {
-                        return Err(bad("note length must stay divisible by its repeat"));
-                    }
+            for n in w.p.patterns[pi]
+                .notes
+                .iter()
+                .filter(|n| want.contains(&n.id))
+            {
+                let l = (n.len as i64)
+                    .checked_add(*dlen)
+                    .ok_or_else(|| out_of_range("note.len", f64::INFINITY))?;
+                if l < 1 {
+                    return Err(out_of_range("note.len", l as f64));
+                }
+                if n.start as i64 + l > MAX_TICK as i64 {
+                    return Err(out_of_range("note.end", (n.start as i64 + l) as f64));
+                }
+                if l % n.repeat as i64 != 0 {
+                    return Err(bad("note length must stay divisible by its repeat"));
                 }
             }
             if want.is_empty() {
                 return Ok(());
             }
             let pat = Arc::make_mut(&mut w.p.patterns[pi]);
-            for cn in &mut pat.notes {
-                for n in cn.notes.iter_mut().filter(|n| want.contains(&n.id)) {
-                    n.len = (n.len as i64 + *dlen) as u32;
-                    if *dlen != 0 {
-                        n.off = 0;
-                    }
+            for n in pat.notes.iter_mut().filter(|n| want.contains(&n.id)) {
+                n.len = (n.len as i64 + *dlen) as u32;
+                if *dlen != 0 {
+                    n.off = 0;
                 }
             }
         }
@@ -665,10 +657,8 @@ fn apply_one(w: &mut Work, e: &Edit) -> Result<(), EditError> {
                 return Ok(());
             }
             let pat = Arc::make_mut(&mut w.p.patterns[pi]);
-            for cn in &mut pat.notes {
-                for n in cn.notes.iter_mut().filter(|n| want.contains(&n.id)) {
-                    n.vel = *vel;
-                }
+            for n in pat.notes.iter_mut().filter(|n| want.contains(&n.id)) {
+                n.vel = *vel;
             }
         }
 
@@ -789,14 +779,19 @@ fn apply_one(w: &mut Work, e: &Edit) -> Result<(), EditError> {
         | Edit::SetSidechain { .. }
         | Edit::MoveInsert { .. }
         | Edit::SetSend { .. }
-        | Edit::RemoveSend { .. }
-        | Edit::AddPlaylistTrack { .. }
-        | Edit::RemovePlaylistTrack { .. }
-        | Edit::RenamePlaylistTrack { .. }
-        | Edit::AddClip { .. }
+        | Edit::RemoveSend { .. } => beats::apply(w, e)?,
+
+        // Timeline (20.2, 20.3)
+        Edit::AddClip { .. }
+        | Edit::DuplicateClips { .. }
         | Edit::RemoveClips { .. }
         | Edit::MoveClips { .. }
-        | Edit::ResizeClips { .. } => beats::apply(w, e)?,
+        | Edit::MoveClipToInstrument { .. }
+        | Edit::ResizeClips { .. }
+        | Edit::SplitClip { .. }
+        | Edit::MakeUnique { .. }
+        | Edit::SetClipMuted { .. }
+        | Edit::SetLoopRegion { .. } => clips::apply(w, e)?,
     }
     Ok(())
 }
@@ -828,14 +823,12 @@ fn new_clap(w: &mut Work, plugin_id: &str) -> Result<ClapRef, EditError> {
 fn set_step(
     w: &mut Work,
     pattern: PatternId,
-    channel: ChannelId,
     step: u8,
     on: bool,
     vel: Option<u8>,
 ) -> Result<(), EditError> {
     let pi = pattern_idx(&w.p, pattern)?;
-    let ci = channel_idx(&w.p, channel)?;
-    let root = w.p.channels[ci].root_key;
+    let root = root_of(&w.p, &w.p.patterns[pi])?;
     let (len, start) = {
         let pat = &w.p.patterns[pi];
         if step >= pat.length_steps {
@@ -848,20 +841,15 @@ fn set_step(
     }
     // Off removes notes at the step whose key is `root + off`, whatever
     // their `off` (17.2); on keeps an existing step note, with any `off`.
-    let at = |n: &&Note| n.start == start && n.key as i16 == root as i16 + n.off as i16;
+    let at = |n: &Note| n.start == start && n.key as i16 == root as i16 + n.off as i16;
     if on {
-        let exists = w.p.patterns[pi]
-            .notes_of(channel)
-            .iter()
-            .any(|n| at(&n) && n.len == len);
+        let exists = w.p.patterns[pi].notes.iter().any(|n| at(n) && n.len == len);
         if exists {
             if let Some(v) = vel {
                 let pat = Arc::make_mut(&mut w.p.patterns[pi]);
-                for cn in pat.notes.iter_mut().filter(|c| c.channel == channel) {
-                    for n in cn.notes.iter_mut() {
-                        if at(&&*n) && n.len == len {
-                            n.vel = v;
-                        }
+                for n in pat.notes.iter_mut() {
+                    if at(n) && n.len == len {
+                        n.vel = v;
                     }
                 }
             }
@@ -877,14 +865,11 @@ fn set_step(
             off: 0,
             repeat: 1,
         };
-        insert_notes(Arc::make_mut(&mut w.p.patterns[pi]), channel, vec![note]);
-    } else if w.p.patterns[pi].notes_of(channel).iter().any(|n| at(&n)) {
-        let pat = Arc::make_mut(&mut w.p.patterns[pi]);
-        for cn in pat.notes.iter_mut().filter(|c| c.channel == channel) {
-            cn.notes
-                .retain(|n| !(n.start == start && n.key as i16 == root as i16 + n.off as i16));
-        }
-        prune_empty(pat);
+        insert_notes(Arc::make_mut(&mut w.p.patterns[pi]), vec![note]);
+    } else if w.p.patterns[pi].notes.iter().any(at) {
+        Arc::make_mut(&mut w.p.patterns[pi])
+            .notes
+            .retain(|n| !at(n));
     }
     Ok(())
 }
@@ -900,8 +885,8 @@ fn set_root_key(w: &mut Work, channel: ChannelId, key: u8) -> Result<(), EditErr
     }
     // Check first so a failure changes nothing: every step note keeps
     // `key = new_root + off` inside 0 to 127.
-    for pat in &w.p.patterns {
-        for n in pat.notes_of(channel) {
+    for pat in w.p.patterns.iter().filter(|p| p.instrument == channel) {
+        for n in &pat.notes {
             if n.is_step_note(old, pat) {
                 let k = key as i16 + n.off as i16;
                 if !(0..=127).contains(&k) {
@@ -910,28 +895,22 @@ fn set_root_key(w: &mut Work, channel: ChannelId, key: u8) -> Result<(), EditErr
             }
         }
     }
-    for pat in &mut w.p.patterns {
-        let has_step = pat
-            .notes_of(channel)
-            .iter()
-            .any(|n| n.is_step_note(old, pat));
-        if !has_step {
+    for pat in w.p.patterns.iter_mut().filter(|p| p.instrument == channel) {
+        if !pat.notes.iter().any(|n| n.is_step_note(old, pat)) {
             continue;
         }
-        let snapshot = (pat.step_ticks, pat.length_ticks());
+        let (step, end) = (pat.step_ticks, pat.length_ticks());
         let pat = Arc::make_mut(pat);
-        for cn in pat.notes.iter_mut().filter(|c| c.channel == channel) {
-            for n in cn.notes.iter_mut() {
-                if n.start % snapshot.0 == 0
-                    && n.len == snapshot.0
-                    && n.key as i16 == old as i16 + n.off as i16
-                    && n.start < snapshot.1
-                {
-                    n.key = (key as i16 + n.off as i16) as u8;
-                }
+        for n in pat.notes.iter_mut() {
+            if n.start % step == 0
+                && n.len == step
+                && n.key as i16 == old as i16 + n.off as i16
+                && n.start < end
+            {
+                n.key = (key as i16 + n.off as i16) as u8;
             }
-            cn.notes.sort_by_key(|n| (n.start, n.key, n.id));
         }
+        pat.notes.sort_by_key(|n| (n.start, n.key, n.id));
     }
     Arc::make_mut(&mut w.p.channels[ci]).root_key = key;
     Ok(())
@@ -946,33 +925,32 @@ fn set_step_ticks(w: &mut Work, pattern: PatternId, new: u32) -> Result<(), Edit
     if old == new {
         return Ok(());
     }
-    let roots: Vec<(ChannelId, u8)> = w.p.channels.iter().map(|c| (c.id, c.root_key)).collect();
+    let root = root_of(&w.p, &w.p.patterns[pi])?;
     let pat = Arc::make_mut(&mut w.p.patterns[pi]);
     let old_len = pat.length_ticks();
-    for cn in &mut pat.notes {
-        let root = roots.iter().find(|r| r.0 == cn.channel).map(|r| r.1);
-        for n in &mut cn.notes {
-            let is_step = root.is_some_and(|r| n.key as i16 == r as i16 + n.off as i16)
-                && n.start % old == 0
-                && n.len == old
-                && n.start < old_len;
-            if is_step {
-                n.start = n.start / old * new;
-                n.len = new;
-            }
+    for n in &mut pat.notes {
+        let is_step = n.key as i16 == root as i16 + n.off as i16
+            && n.start % old == 0
+            && n.len == old
+            && n.start < old_len;
+        if is_step {
+            n.start = n.start / old * new;
+            n.len = new;
         }
     }
     pat.step_ticks = new;
     let end = pat.length_ticks();
-    for cn in &mut pat.notes {
-        cn.notes.retain(|n| n.start < end);
-        cn.notes.sort_by_key(|n| (n.start, n.key, n.id));
-    }
-    prune_empty(pat);
+    pat.notes.retain(|n| n.start < end);
+    pat.notes.sort_by_key(|n| (n.start, n.key, n.id));
+    wrap_offsets(&mut w.p, pattern);
     Ok(())
 }
 
 #[cfg(test)]
 mod beats_tests;
+#[cfg(test)]
+mod clips_props;
+#[cfg(test)]
+mod clips_tests;
 #[cfg(test)]
 pub(crate) mod tests;

@@ -3,7 +3,7 @@
 //! 17.1). Requests and replies are newline-delimited JSON. The DAW, not the
 //! client, enforces the capability mask and the PRIVILEGED rule.
 //!
-//! Milestone A only; later milestones add variants (interface change).
+//! Adding variants is an interface change (orchestrator only).
 
 use std::sync::Arc;
 
@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::consts::MAX_AGENT_STRING_CHARS;
 use crate::edit::{Applied, Edit, EditError};
-use crate::ids::{ChannelId, PatternId};
+use crate::ids::PatternId;
 use crate::model::{Note, Project};
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -51,31 +51,72 @@ pub enum RequestBody {
     },
     NotesList {
         pattern: PatternId,
-        channel: ChannelId,
     },
 
     // Transport
     Play,
     Stop,
-    SetPlayingPattern {
-        pattern: PatternId,
-    },
     TransportState,
 
     // History (author-scoped for agents, 17.1)
     Undo,
     Redo,
     History,
+    /// The change tree (15.11, 15.12): every commit with its parent, author, and
+    /// name, newest first; `since` returns only commits after that one.
+    HistoryTree {
+        since: Option<String>,
+        limit: u32,
+    },
+    /// Compact description of what changed between two commits.
+    HistoryDiff {
+        from: String,
+        to: String,
+    },
+    /// Names the current commit (a version).
+    VersionSave {
+        name: String,
+    },
+    /// Starts a named branch at `from` (default: the current commit) and
+    /// makes it current; following edits go onto it (15.11). Used for
+    /// alternatives such as "three versions of this song".
+    BranchCreate {
+        name: String,
+        from: Option<String>,
+    },
+    /// Makes a branch current (its head becomes the project state).
+    /// Undoable; needs `base_revision`.
+    BranchSwitch {
+        branch: String,
+    },
+    BranchList,
+    BranchRename {
+        branch: String,
+        name: String,
+    },
+    /// Hides a branch from the version list; its commits are kept.
+    BranchArchive {
+        branch: String,
+    },
+    /// Makes an older commit current again as a new commit on top of the
+    /// head (nothing is lost; undoable). Needs `base_revision`.
+    VersionRestore {
+        commit: String,
+    },
 
     // Jobs (17.1)
+    /// Renders the timeline from `start` to `end` ticks (default: the loop
+    /// region if enabled, else the whole arrangement) plus `tail_seconds`.
     ExportWav {
-        pattern: PatternId,
-        loops: u32,
         format: WavFormat,
+        start: Option<u32>,
+        end: Option<u32>,
+        tail_seconds: f64,
     },
+    /// Analyzes the same range as `ExportWav` would render.
     Analyze {
-        pattern: PatternId,
-        loops: u32,
+        start: Option<u32>,
+        end: Option<u32>,
     },
     JobStatus {
         job: u64,
@@ -96,19 +137,6 @@ pub enum RequestBody {
     // Plugins
     PluginScan,
     PluginList,
-
-    // Milestone B (15.6)
-    SetTransportMode {
-        mode: crate::engine::TransportMode,
-        loop_song: bool,
-    },
-    /// Renders the whole playlist plus `tail_seconds` (job).
-    ExportSongWav {
-        format: WavFormat,
-        tail_seconds: f64,
-    },
-    /// Analyzes the whole playlist (job).
-    AnalyzeSong,
 
     // Agents in the workstation (18.2)
     /// Declares what the agent is doing; `text: None` ends the activity.
@@ -194,11 +222,11 @@ pub struct SoundInfo {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", content = "id", rename_all = "snake_case")]
 pub enum Focus {
+    #[serde(rename = "instrument")]
     Channel(crate::ids::ChannelId),
     Pattern(PatternId),
     Track(crate::ids::TrackId),
     Insert(crate::ids::InstanceId),
-    PlaylistTrack(crate::ids::PlaylistTrackId),
     Clip(crate::ids::ClipId),
 }
 
@@ -293,10 +321,21 @@ pub enum ReplyBody {
         playing: bool,
         tick: u64,
         tempo_bpm: f64,
-        pattern: Option<PatternId>,
+        loop_region: crate::model::LoopRegion,
     },
     History {
         entries: Vec<HistoryEntry>,
+    },
+    HistoryTree {
+        head: String,
+        nodes: Vec<HistoryNode>,
+    },
+    HistoryDiff {
+        lines: Vec<String>,
+    },
+    Branches {
+        current: String,
+        branches: Vec<BranchInfo>,
     },
     /// A job was started; poll it with `JobStatus`.
     Job {
@@ -330,6 +369,34 @@ pub struct ProjectInfo {
     pub tempo_bpm: f64,
     pub modified_unix_s: u64,
     pub dirty: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct BranchInfo {
+    /// Stable id (also accepted wherever a branch is named).
+    pub branch: String,
+    /// Display name, untrusted when an agent chose it.
+    pub name: String,
+    pub head: String,
+    /// Commit the branch started from.
+    pub base: String,
+    pub author: String,
+    pub archived: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct HistoryNode {
+    pub commit: String,
+    pub parent: Option<String>,
+    /// Branch the commit belongs to.
+    pub branch: String,
+    /// `user`, `script`, or `agent:<session>`.
+    pub author: String,
+    /// Untrusted when written by an agent (`agent_string`).
+    pub description: String,
+    pub unix_ms: u64,
+    /// Version name, if the commit was named.
+    pub name: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -474,7 +541,7 @@ mod tests {
                         Edit::SetTempo { bpm: 140.0 },
                         Edit::AddNotes {
                             pattern: PatternId(3),
-                            channel: ChannelId(4),
+
                             notes: vec![NewNote {
                                 start: 0,
                                 len: 240,

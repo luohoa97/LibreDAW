@@ -12,7 +12,7 @@ use std::time::Duration;
 
 use protocol::control::{Outcome, Request};
 
-use crate::{ControlServer, Incoming, UiEvent};
+use crate::{ControlServer, Incoming, SuggestionEvent, UiEvent};
 
 /// What the fake UI does with one request.
 pub enum Action {
@@ -36,6 +36,7 @@ pub struct FakeUi {
     stop: Arc<AtomicBool>,
     requests: Arc<Mutex<Vec<Request>>>,
     events: Arc<Mutex<Vec<UiEvent>>>,
+    suggestions: Arc<Mutex<Vec<SuggestionEvent>>>,
     thread: Option<JoinHandle<()>>,
 }
 
@@ -49,6 +50,8 @@ impl FakeUi {
         let stop = Arc::new(AtomicBool::new(false));
         let requests: Arc<Mutex<Vec<Request>>> = Arc::default();
         let events: Arc<Mutex<Vec<UiEvent>>> = Arc::default();
+        let suggestions: Arc<Mutex<Vec<SuggestionEvent>>> = Arc::default();
+        let sg = Arc::clone(&suggestions);
         let (s, st, rq, ev) = (
             Arc::clone(&server),
             Arc::clone(&stop),
@@ -61,6 +64,9 @@ impl FakeUi {
                 ev.lock()
                     .unwrap_or_else(PoisonError::into_inner)
                     .extend(polled.events);
+                sg.lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .extend(polled.suggestions);
                 for inc in polled.requests {
                     rq.lock()
                         .unwrap_or_else(PoisonError::into_inner)
@@ -95,6 +101,7 @@ impl FakeUi {
             stop,
             requests,
             events,
+            suggestions,
             thread: Some(thread),
         }
     }
@@ -132,5 +139,15 @@ impl Drop for FakeUi {
             let _ = t.join();
         }
         // The last Arc drops here and shuts the server down.
+    }
+}
+
+impl FakeUi {
+    /// Every `SuggestionEvent` seen so far (18.5).
+    pub fn suggestion_events(&self) -> Vec<SuggestionEvent> {
+        self.suggestions
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
     }
 }

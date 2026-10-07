@@ -5,12 +5,12 @@
 //!
 //! Edits that create entities carry no ids: `apply()` allocates them from
 //! the document's counter and reports them in `Applied::created`.
-//! Milestone A only; later milestones add variants (interface change).
+//! Adding variants is an interface change (orchestrator only).
 
 use serde::{Deserialize, Serialize};
 
 use crate::beats::{Bass808Param, BuiltinFxKind, SampleMode, SamplerParam, SaturatorCurve};
-use crate::ids::{ChannelId, ClipId, InstanceId, NoteId, PatternId, PlaylistTrackId, TrackId};
+use crate::ids::{ChannelId, ClipId, InstanceId, NoteId, PatternId, TrackId};
 use crate::model::{Mix, SampleRef, SynthParam, SynthParams, Wave};
 use crate::validate::ValidationError;
 
@@ -112,11 +112,15 @@ pub enum Edit {
         wave: Wave,
     },
 
-    // Patterns
+    // Clip contents (the former patterns; one instrument each, 20.2).
+    /// Creates content for an instrument without placing it; `AddClip`
+    /// with `pattern: None` is the usual way to make a clip.
     AddPattern {
+        instrument: ChannelId,
         name: String,
         length_steps: u8,
     },
+    /// Also removes every clip that uses it.
     RemovePattern {
         pattern: PatternId,
     },
@@ -137,17 +141,15 @@ pub enum Edit {
 
     // Steps and notes
     /// On: add a step note (velocity `vel`, default 100). Off: remove every
-    /// note at that step with the channel's root key (5.2).
+    /// step note at that step, whatever its pitch offset (5.2, 17.2).
     SetStep {
         pattern: PatternId,
-        channel: ChannelId,
         step: u8,
         on: bool,
         vel: Option<u8>,
     },
     AddNotes {
         pattern: PatternId,
-        channel: ChannelId,
         notes: Vec<NewNote>,
     },
     RemoveNotes {
@@ -221,7 +223,6 @@ pub enum Edit {
     /// Fails if there is no step note at that step.
     SetStepLanes {
         pattern: PatternId,
-        channel: ChannelId,
         step: u8,
         vel: Option<u8>,
         off: Option<i8>,
@@ -328,38 +329,62 @@ pub enum Edit {
         to: TrackId,
     },
 
-    // Playlist (15.6)
-    AddPlaylistTrack {
-        name: String,
-    },
-    /// Removes the track and its clips.
-    RemovePlaylistTrack {
-        track: PlaylistTrackId,
-    },
-    RenamePlaylistTrack {
-        track: PlaylistTrackId,
-        name: String,
-    },
-    /// Fails if it would overlap another clip on that track.
+    // Timeline (20.2, 20.3)
+    /// Places a clip on an instrument's row. `pattern: None` creates new
+    /// empty content (one bar of 16 steps) for it; `Some` makes a linked
+    /// copy of existing content of the same instrument. Fails on overlap.
     AddClip {
-        track: PlaylistTrackId,
-        pattern: PatternId,
+        instrument: ChannelId,
+        pattern: Option<PatternId>,
         start: u32,
         len: u32,
     },
+    /// Copies clips to `start + dt` on the same rows. `linked: true` shares
+    /// content (Duplicate); `false` copies content (Copy). Fails on overlap.
+    DuplicateClips {
+        clips: Vec<ClipId>,
+        dt: i64,
+        linked: bool,
+    },
+    /// Removes clips; content no clip uses any more is removed too.
     RemoveClips {
         clips: Vec<ClipId>,
     },
-    /// Moves clips by `dt` ticks and `dtrack` playlist rows (in id order).
-    /// Fails on overlap or out of range; nothing is clamped silently.
+    /// Moves clips in time. Fails on overlap or out of range.
     MoveClips {
         clips: Vec<ClipId>,
         dt: i64,
-        dtrack: i32,
     },
+    /// Moves one clip to another instrument's row; its content is copied
+    /// (made unique) and retargeted to that instrument.
+    MoveClipToInstrument {
+        clip: ClipId,
+        instrument: ChannelId,
+    },
+    /// Changes clip length at the end (`from_start: false`) or at the start
+    /// (`true`, which also shifts `start` and `offset`).
     ResizeClips {
         clips: Vec<ClipId>,
         dlen: i64,
+        from_start: bool,
+    },
+    /// Splits a clip at an absolute tick into two clips sharing content.
+    SplitClip {
+        clip: ClipId,
+        at: u32,
+    },
+    /// Gives a clip its own copy of its content.
+    MakeUnique {
+        clip: ClipId,
+    },
+    SetClipMuted {
+        clips: Vec<ClipId>,
+        muted: bool,
+    },
+    SetLoopRegion {
+        start: u32,
+        end: u32,
+        enabled: bool,
     },
 }
 

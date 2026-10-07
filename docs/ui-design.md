@@ -39,8 +39,10 @@ What we borrow from GNOME apps with dense editing UIs (in structure, not in appe
 
 ### 2.1 Widget tree
 
+**Amendment (owner, 2026-10-07): split header bars.** The top level is the split view; each pane (Sounds, content, Inspector) is its own `AdwToolbarView` with its own `AdwHeaderBar`, as in GNOME Files and Settings. The content header holds the view switcher, undo, redo, and the main menu; the transport bar is a top bar of the content pane only. Pane headers carry the pane title. Panes are pinned when the content keeps at least 600 sp, and overlay below that; the switch never changes which panes are open, and the user's choice persists across resize and maximize. The Inspector is capped at about 360 sp wide. The tree below is kept for history where it differs.
+
 ```
-GtkApplication "org.libredaw.LibreDAW" (app id to be confirmed in ASSETS/packaging)
+GtkApplication "io.github.luohoa97.LibreDAW" (app id to be confirmed in ASSETS/packaging)
 AdwApplicationWindow  (default 1360x800, width-request 360, height-request 294)
   breakpoints: bp-regular, bp-compact, bp-narrow, bp-short   (section 2.4)
   content:
@@ -233,6 +235,8 @@ Keyboard: Tab order is cards (arrow keys move within the flow box), recent list,
 Accessible: the flow box is a list; each card has the label "Trap template, 140 BPM, 8 channels". Focus ring is the stock `.card` focus ring.
 
 ### 3.2 Pattern view: overview
+
+**Amendment 15 (owner, 2026-10-07):** the user-visible word is "Beat", not "Pattern": the views are Beats, Song, Mixer; one menu button selects the beat and holds New, Duplicate, Rename, and Delete Beat; Length (in bars) and Swing follow it as that beat's settings.
 
 **Amendment (owner, 2026-10-07): replaces the vertical split below.** The Pattern page is an `AdwNavigationView`: the root page "Steps" (pattern toolbar plus channel list with steps), and a pushed `AdwNavigationPage` per channel titled with the channel name that shows the piano roll, with the standard back button, swipe, Esc, and Alt+Left. "Edit Notes", double-click on a channel name, and Return on a channel push it. There is no `GtkPaned`, no `PatternFocus` button, and no hand-drawn separator anywhere in the app: structure comes from `AdwToolbarView` top bars, the `.view` background, spacing, and stock selection styles, as in GNOME core apps. The text below about the split is kept for history only.
 

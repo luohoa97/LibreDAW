@@ -48,9 +48,6 @@ fn rig_samples(p: &Project, store: &SampleStore) -> Rig {
     let mut rt = Runtime::new(SR, shared.clone(), ends);
     rt.enable_trace(1 << 12);
     rt.install(compile_with(p, &slots, SR, Some(store)));
-    rt.command(EngineCommand::SetPlayingPattern {
-        pattern: p.patterns[0].id,
-    });
     rt.command(EngineCommand::Play);
     Rig {
         rt,

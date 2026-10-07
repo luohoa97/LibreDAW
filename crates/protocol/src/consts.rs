@@ -62,7 +62,7 @@ pub const MAX_EDITS_PER_REQUEST: usize = 10_000;
 pub const MAX_AGENT_STRING_CHARS: usize = 64;
 
 /// Project file format version (7.3). Bump on any schema change.
-pub const FORMAT_VERSION: u32 = 2;
+pub const FORMAT_VERSION: u32 = 3;
 
 const _: () = assert!(RETIRE_RING_CAP > STATE_RING_CAP);
 
@@ -82,8 +82,7 @@ pub const MAX_STEP_OFFSET: i8 = 24;
 pub const RATCHETS: [u8; 6] = [1, 2, 3, 4, 6, 8];
 /// Samples registered in a project.
 pub const MAX_SAMPLES: usize = 4096;
-/// Playlist tracks and clips.
-pub const MAX_PLAYLIST_TRACKS: usize = 128;
+/// Clips on the timeline.
 pub const MAX_CLIPS: usize = 20_000;
 
 /// Built-in effect pool sizes per kind, project-wide (17.2). `validate`

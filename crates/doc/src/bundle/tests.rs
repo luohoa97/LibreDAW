@@ -3,7 +3,7 @@ use super::*;
 use crate::document::tests::{Rng, random_edit};
 use crate::document::{apply, apply_batch, commit_plugin_state, state_file_name};
 use protocol::edit::{Edit, NewInstrument};
-use protocol::ids::{InstanceId, TrackId};
+use protocol::ids::{ChannelId, InstanceId, TrackId};
 use std::collections::BTreeSet;
 use std::sync::atomic::{AtomicU32, Ordering};
 
@@ -56,6 +56,7 @@ fn doc_with_plugins(gen_a: u32, gen_b: u32, fill: u8) -> (Document, InstanceId, 
                 plugin_id: "c.d".into(),
             },
             Edit::AddPattern {
+                instrument: ChannelId(1),
                 name: "P".into(),
                 length_steps: 16,
             },

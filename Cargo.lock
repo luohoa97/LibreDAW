@@ -860,6 +860,7 @@ version = "0.0.0"
 dependencies = [
  "libredaw-protocol",
  "libredaw-script",
+ "serde",
  "serde_json",
 ]
 
@@ -868,6 +869,8 @@ name = "libredaw-doc"
 version = "0.0.0"
 dependencies = [
  "libredaw-protocol",
+ "serde",
+ "toml",
 ]
 
 [[package]]
@@ -875,6 +878,8 @@ name = "libredaw-engine"
 version = "0.0.0"
 dependencies = [
  "cpal",
+ "dbus",
+ "libc",
  "libredaw-plugin-host",
  "libredaw-protocol",
  "rtrb",
@@ -886,8 +891,6 @@ version = "0.0.0"
 dependencies = [
  "libredaw-control",
  "libredaw-protocol",
- "libredaw-script",
- "serde",
  "serde_json",
 ]
 

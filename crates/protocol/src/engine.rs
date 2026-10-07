@@ -8,12 +8,9 @@
 
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
-use serde::{Deserialize, Serialize};
-
 use crate::consts::{
     FX_PARAMS_PER_INSERT, MAX_CHANNELS, MAX_INSERTS, MAX_PARAMS_PER_SLOT, MAX_SENDS, TRACK_SLOTS,
 };
-use crate::ids::PatternId;
 
 /// Stable per-channel slot index, `0..MAX_CHANNELS`, assigned by the GTK
 /// thread for the channel's lifetime (4.1).
@@ -257,16 +254,6 @@ pub enum EngineCommand {
     Seek {
         tick: u64,
     },
-    /// The pattern looped in pattern mode.
-    SetPlayingPattern {
-        pattern: PatternId,
-    },
-    /// Pattern mode loops the playing pattern; song mode plays the playlist
-    /// (15.6), looping the whole song when `loop_song` is true.
-    SetTransportMode {
-        mode: TransportMode,
-        loop_song: bool,
-    },
     /// Fill a plugin slot. `start_processing` happens on first use.
     AttachPlugin {
         slot: PluginSlot,
@@ -289,14 +276,27 @@ pub enum EngineCommand {
         vel: u8,
         on: bool,
     },
+    /// Sound-browser audition (20.3): plays `source` on a dedicated preview
+    /// voice routed straight to the master, independent of any instrument.
+    /// Auto-release after `PREVIEW_MAX_SECONDS`; a new audition replaces
+    /// the previous one.
+    Audition {
+        source: AuditionSource,
+        key: u8,
+        vel: u8,
+        on: bool,
+    },
 }
 
-/// What the transport plays (15.6).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum TransportMode {
-    Pattern,
-    Song,
+/// What an audition plays (20.3).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum AuditionSource {
+    Synth(crate::model::SynthParams),
+    Bass808(crate::beats::Bass808Params),
+    /// A sample already in the engine's `SampleStore`, by SHA-256.
+    Sample {
+        hash: [u8; 32],
+    },
 }
 
 /// Longest a preview note sounds without a release (seconds).

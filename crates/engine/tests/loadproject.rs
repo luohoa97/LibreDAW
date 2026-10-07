@@ -6,7 +6,7 @@ use engine::loadproject::{load_project, load_store};
 use engine::rt::{RtGuard, rt_events};
 use engine::runtime::{Runtime, Shared, rings};
 use engine::{Slots, compile_with, write_controls};
-use protocol::engine::{EngineCommand, TransportMode};
+use protocol::engine::EngineCommand;
 
 const SR: f64 = 48000.0;
 
@@ -16,7 +16,8 @@ fn load_project_is_valid() {
     protocol::validate::validate(&p).unwrap();
     assert_eq!(p.channels.len(), 16);
     assert_eq!(p.tracks.len(), 11);
-    assert_eq!(p.playlist[0].clips.len(), 8);
+    assert_eq!(p.clips.len(), 16 * 8);
+    assert!(p.loop_region.enabled);
 }
 
 #[test]
@@ -30,10 +31,6 @@ fn load_project_song_makes_no_allocations_for_ten_seconds() {
     let (_ui, ends) = rings();
     let mut rt = Runtime::new(SR, shared, ends);
     let _ = rt.install(compile_with(&p, &slots, SR, Some(&store)));
-    rt.command(EngineCommand::SetTransportMode {
-        mode: TransportMode::Song,
-        loop_song: true,
-    });
     rt.command(EngineCommand::Seek { tick: 0 });
     rt.command(EngineCommand::Play);
 
