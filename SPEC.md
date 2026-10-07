@@ -883,18 +883,29 @@ Milestone B starts.
   over a set glide time (the "808 slide"). Polyphonic mode is available.
 - Presets: clean sub, distorted (phonk), long decay, short punch.
 
-### 15.3 Built-in drum kits
+### 15.3 Sound content (separate repository)
 
-- All built-in drum sounds are synthesized by a Rust tool in this repo
-  (`tools/kitgen`, part of the workspace, GPL-3.0-or-later) and rendered to
-  WAV at build time. No third-party samples are bundled, so every sound's
-  license is ours and is recorded in `ASSETS.md`.
+- Sounds live outside this repository, in a separate content repository
+  `libredaw-sounds`, under its own license: CC0-1.0 by default. The DAW
+  never links or embeds it. It finds sound packs at runtime in
+  `$XDG_DATA_DIRS/libredaw/sounds/` and `~/.local/share/libredaw/sounds/`.
+- Content in `libredaw-sounds` must be ours or under a license that allows
+  redistribution (CC0-1.0, CC-BY-4.0 with attribution). Each file has its
+  license and source recorded in that repository's manifest. Sounds
+  extracted from commercial products are never accepted, whatever
+  repository they are in: a separate repository does not change copyright.
+- The drum sounds are synthesized by a Rust generator in `libredaw-sounds`
+  (`kitgen`), so every sound is original.
 - Kit pieces: kick (several), snare, clap, rim, closed hat, open hat,
-  cowbell (the phonk staple), toms, crash, ride, shaker, snap, perc.
+  cowbell, toms, crash, ride, shaker, snap, perc.
 - Kits: phonk, trap, boom bap, lo-fi, house. Each is a set of samples plus
-  default channel settings.
-- Third-party sample packs may be added later only if CC0 or another
-  allowed license, with the source URL and license recorded per file.
+  default channel settings (a small TOML manifest per kit).
+- User libraries: the sound browser can add any local folder of WAV files
+  (for example sample packs the user has bought). Those files stay on the
+  user's machine; projects that use them copy them into the project bundle
+  (15.1) for that user's own use.
+- If no sound pack is installed, the DAW still runs: the synth and 808 are
+  built in.
 
 ### 15.4 Step sequencer lanes and groove
 
@@ -974,6 +985,13 @@ icons, names, or color scheme.
 ---
 
 ## Changelog
+
+### Amendment 3 (2026-10-07, owner)
+
+Sound content moved to a separate repository, `libredaw-sounds`, under its
+own license (CC0-1.0 by default), found by the DAW at runtime (15.3).
+Recorded explicitly: content from commercial products is not accepted in
+either repository.
 
 ### Amendment 2 (2026-10-07, owner)
 
