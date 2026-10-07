@@ -219,3 +219,54 @@ fn instrument_list_loads_and_sounds() {
     }
     assert!(bad.is_empty(), "{}", bad.join("\n"));
 }
+
+/// Open, pump, close and reopen a real plugin's GUI. Needs an X server
+/// (`DISPLAY`), so it is ignored with the rest. JUCE plugins register their X
+/// connection for READ|WRITE and keep it after the window closes: the host
+/// must not turn that into a busy main loop (it starved GTK's redraw, which
+/// left the whole window unresponsive), and a plugin's `chdir` must not leak.
+fn gui_cycle(name: &str) {
+    let d = find(name);
+    let mut a = Instance::create(&d).unwrap();
+    a.activate(RATE, BLOCK as u32).unwrap();
+    let cwd = std::env::current_dir().unwrap();
+    let ctx = glib::MainContext::default();
+    // Main loop iterations that dispatched something in `ms`.
+    let pump = |a: &mut Instance, ms: u64| {
+        let (t, mut n) = (Instant::now(), 0u32);
+        while t.elapsed().as_millis() < u128::from(ms) {
+            n += u32::from(ctx.iteration(false));
+            a.poll_main_thread();
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        n
+    };
+    for round in 0..3 {
+        a.show_gui(name).unwrap();
+        assert!(a.gui_open());
+        let open = pump(&mut a, 1000);
+        a.hide_gui();
+        assert!(!a.gui_open());
+        let closed = pump(&mut a, 1000);
+        println!(
+            "{name} round {round}: dispatches open {open}, closed {closed}, sources {:?}",
+            a.source_counts()
+        );
+        // 1 s at 1 ms sleeps: the 20 ms write tick and plugin timers stay
+        // far below a spinning source (about 700).
+        assert!(closed < 300, "{name}: main loop is spinning after close");
+        assert_eq!(std::env::current_dir().unwrap(), cwd, "{name}: cwd changed");
+    }
+}
+
+#[test]
+#[ignore = "needs the Flatpak extension and an X server"]
+fn gui_cycle_dexed() {
+    gui_cycle("Dexed");
+}
+
+#[test]
+#[ignore = "needs the Flatpak extension and an X server"]
+fn gui_cycle_surge_xt() {
+    gui_cycle("Surge XT");
+}
