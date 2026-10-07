@@ -359,12 +359,17 @@ pub struct Compiled {
     pub order: Vec<u16>,
     /// Sorted by id.
     pub patterns: Vec<PatternC>,
-    /// The playlist flattened to one timeline in song ticks (15.6): every
-    /// clip expanded into notes, a clip longer than its pattern repeating it
-    /// and a shorter one cutting it. `len_ticks` is at least 1.
+    /// The clips flattened to one timeline in ticks (20.2): every clip
+    /// expanded into notes, a clip longer than its content repeating it, a
+    /// shorter one cutting it, `offset` skipping into it, muted clips
+    /// omitted. `len_ticks` is at least 1.
     pub song: PatternC,
-    /// End of the last clip; 0 when the playlist has no clip with a pattern.
+    /// End of the last clip; 0 when there is no clip with content.
     pub song_len_ticks: u32,
+    /// Loop region (20.2); `loop_end > loop_start` when one is set.
+    pub loop_start: u32,
+    pub loop_end: u32,
+    pub loop_enabled: bool,
 }
 
 impl Compiled {
@@ -410,6 +415,9 @@ pub fn compile_with(
             active_slots: Vec::new(),
         },
         song_len_ticks: 0,
+        loop_start: 0,
+        loop_end: 0,
+        loop_enabled: false,
     };
     for t in &project.tracks {
         if let Some(s) = slots.track_slot(t.id) {
@@ -476,13 +484,10 @@ pub fn compile_with(
         let len = p.length_ticks().max(1);
         let mut notes: Vec<Vec<NoteC>> = vec![Vec::new(); MAX_CHANNELS];
         let mut active = Vec::new();
-        for cn in &p.notes {
-            let Some(s) = slots.channel_slot(cn.channel) else {
-                continue;
-            };
-            let root_key = project.channel(cn.channel).map_or(60, |ch| ch.root_key);
+        if let Some(s) = slots.channel_slot(p.instrument) {
+            let root_key = project.channel(p.instrument).map_or(60, |ch| ch.root_key);
             let v = &mut notes[s.0 as usize];
-            for n in &cn.notes {
+            for n in &p.notes {
                 if n.start >= len || n.key > 127 {
                     continue;
                 }
@@ -525,7 +530,6 @@ pub fn compile_with(
                 active.push(s.0);
             }
         }
-        active.sort_unstable();
         c.patterns.push(PatternC {
             id: p.id,
             len_ticks: len,
@@ -537,6 +541,12 @@ pub fn compile_with(
     let (song, song_len) = compile_song(project, &c);
     c.song = song;
     c.song_len_ticks = song_len;
+    let lr = project.loop_region;
+    if lr.end > lr.start {
+        c.loop_start = lr.start;
+        c.loop_end = lr.end;
+        c.loop_enabled = lr.enabled;
+    }
     c.order = topo_order(&c);
     Box::new(c)
 }
@@ -545,45 +555,53 @@ pub fn compile_with(
 /// expanding (a one-tick pattern under a very long clip, for example).
 pub const MAX_SONG_NOTES: usize = 4_000_000;
 
-/// Flattens the playlist into one note timeline (15.6). Returns it with the
-/// end of the last clip. Clips of patterns that do not exist are skipped.
+/// Flattens the clips into one note timeline (20.2). Returns it with the
+/// end of the last clip. Clips of contents that do not exist play nothing
+/// and do not count; a muted clip plays nothing but still counts toward the
+/// end.
 fn compile_song(project: &Project, c: &Compiled) -> (PatternC, u32) {
     let mut notes: Vec<Vec<NoteC>> = vec![Vec::new(); MAX_CHANNELS];
     let mut end = 0u64;
     let mut total = 0usize;
-    'clips: for pt in &project.playlist {
-        for clip in &pt.clips {
-            let Some(p) = c.pattern(clip.pattern) else {
-                continue;
-            };
-            if clip.len == 0 {
-                continue;
-            }
-            let start = clip.start as u64;
-            let cend = start + clip.len as u64;
-            end = end.max(cend);
-            let plen = p.len_ticks.max(1) as u64;
-            let mut off = start;
-            while off < cend {
-                for &s in &p.active_slots {
-                    for n in &p.notes[s as usize] {
-                        let st = off + n.start as u64;
-                        if st >= cend {
-                            break; // sorted by start
-                        }
-                        if total >= MAX_SONG_NOTES {
-                            continue 'clips;
-                        }
-                        total += 1;
-                        notes[s as usize].push(NoteC {
-                            start: st as u32,
-                            end: (off + n.end as u64).min(cend) as u32,
-                            ..*n
-                        });
+    'clips: for clip in &project.clips {
+        let Some(p) = c.pattern(clip.pattern) else {
+            continue;
+        };
+        if clip.len == 0 {
+            continue;
+        }
+        let start = clip.start as i64;
+        let cend = start + clip.len as i64;
+        end = end.max(cend as u64);
+        if clip.muted {
+            continue;
+        }
+        let plen = p.len_ticks.max(1) as i64;
+        // The clip starts `offset` ticks into the content (wrapped).
+        let phase = clip.offset as i64 % plen;
+        let mut off = start - phase;
+        while off < cend {
+            for &s in &p.active_slots {
+                for n in &p.notes[s as usize] {
+                    let st = off + n.start as i64;
+                    if st < start {
+                        continue; // before the clip's first tick
                     }
+                    if st >= cend {
+                        break; // sorted by start
+                    }
+                    if total >= MAX_SONG_NOTES {
+                        continue 'clips;
+                    }
+                    total += 1;
+                    notes[s as usize].push(NoteC {
+                        start: st as u32,
+                        end: (off + n.end as i64).min(cend) as u32,
+                        ..*n
+                    });
                 }
-                off += plen;
             }
+            off += plen;
         }
     }
     let mut active = Vec::new();

@@ -3,12 +3,14 @@
 //! and stop the stream, hand over compiled states, commands and plugin
 //! events, drain engine events. The disposal thread is internal.
 
+use crate::audition::AuditionSample;
 use crate::compiled::Compiled;
 use crate::live::HostKind;
 use crate::runtime::{RtEnds, Runtime, Shared, UiEnds, rings};
+use crate::samples::{SampleData, SampleStore, hash_hex};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{BufferSize, ErrorKind, HostId, SampleFormat, StreamConfig};
-use protocol::engine::PluginEvent;
+use protocol::engine::{AuditionSource, PluginEvent};
 use protocol::engine::{ControlTable, EngineCommand, EngineEvent, EngineStatus, ParamTable};
 use rtrb::Consumer;
 use rtrb::PushError;
@@ -65,6 +67,8 @@ struct Flags {
     needs_restart: AtomicBool,
     /// Bit 63 set once probed; policy in bits 32..63, priority in the low 32.
     sched: AtomicU64,
+    /// Outcome of the real-time request (the portal inside a Flatpak).
+    rt_report: crate::portal_rt::Report,
 }
 
 /// Callback index at which the scheduling policy is read (cpal promotes the
@@ -172,6 +176,8 @@ struct UiSide {
     commands: rtrb::Producer<EngineCommand>,
     plugin_events: rtrb::Producer<PluginEvent>,
     events: Consumer<EngineEvent>,
+    audition: rtrb::Producer<AuditionSample>,
+    audition_retired: Consumer<SampleData>,
 }
 
 pub struct Engine {
@@ -183,6 +189,8 @@ pub struct Engine {
     stream: Option<cpal::Stream>,
     disposal: Option<Disposal>,
     flags: Arc<Flags>,
+    /// Keeps the portal helper thread alive for the life of the stream.
+    _promoter: Option<Arc<crate::portal_rt::Promoter>>,
 }
 
 fn host_id(h: Host) -> (HostId, &'static str) {
@@ -271,7 +279,14 @@ impl Engine {
         let flags = Arc::new(Flags {
             needs_restart: AtomicBool::new(false),
             sched: AtomicU64::new(0),
+            rt_report: crate::portal_rt::new_report(),
         });
+        // Inside a Flatpak the direct rtkit request fails; the portal
+        // promotes the callback thread instead (off the audio thread).
+        let promoter =
+            crate::portal_rt::Promoter::spawn(rate, cfg.buffer_frames, flags.rt_report.clone())
+                .map(Arc::new);
+        let cb_promoter = promoter.clone();
         let cb_flags = flags.clone();
         let cb_status = shared.status.clone();
         let err_flags = flags.clone();
@@ -299,6 +314,11 @@ impl Engine {
                         }
                     }
                     last = Some(now);
+                    if calls == 1
+                        && let Some(p) = &cb_promoter
+                    {
+                        p.request_from_callback();
+                    }
                     runtime.process_interleaved(data);
                     if let Some(p) = &cb_probe {
                         p.record(frames, now.elapsed().as_nanos() as u64);
@@ -342,11 +362,14 @@ impl Engine {
                 commands: ui.commands,
                 plugin_events: ui.plugin_events,
                 events: ui.events,
+                audition: ui.audition,
+                audition_retired: ui.audition_retired,
             },
             rate,
             stream: Some(stream),
             disposal: Some(disposal),
             flags,
+            _promoter: promoter,
         })
     }
 
@@ -378,12 +401,58 @@ impl Engine {
         (v >> 63 == 1).then_some((((v >> 32) & 0x7fff_ffff) as i32, v as u32 as i32))
     }
 
+    /// How the real-time priority request went, for logs and the load
+    /// probe next to `callback_sched`: inside a Flatpak the portal's answer
+    /// (granted, or the reason it failed), otherwise a note that cpal's
+    /// direct rtkit request applies. "pending" until the first callback.
+    pub fn realtime_report(&self) -> String {
+        self.flags
+            .rt_report
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
+
     /// Queues a compiled state. `Err` returns it when the state ring is
     /// full; retry later.
     pub fn submit(&mut self, c: Box<Compiled>) -> Result<(), Box<Compiled>> {
         self.ui.state.push(c).map_err(|PushError::Full(c)| c)
     }
 
+    /// Starts or releases a sound-browser audition (20.3). For
+    /// `AuditionSource::Sample` the decoded sample is looked up in `store`
+    /// by hash and handed to the audio thread first; a sample that is not
+    /// ready in the store plays silence. `Err` returns the command when the
+    /// command ring is full.
+    #[allow(clippy::result_large_err)]
+    pub fn audition(
+        &mut self,
+        store: Option<&SampleStore>,
+        source: AuditionSource,
+        key: u8,
+        vel: u8,
+        on: bool,
+    ) -> Result<(), EngineCommand> {
+        while self.ui.audition_retired.pop().is_ok() {}
+        if let (AuditionSource::Sample { hash }, true, Some(store)) = (&source, on, store)
+            && let Some(data) = store.get(&hash_hex(hash))
+        {
+            // A full inbox means earlier samples are still unread; the
+            // newest wins once the audio thread catches up.
+            let _ = self.ui.audition.push(AuditionSample { hash: *hash, data });
+        }
+        self.command(EngineCommand::Audition {
+            source,
+            key,
+            vel,
+            on,
+        })
+    }
+
+    /// `Err` returns the command when the ring is full. The command is big
+    /// since `Audition` carries synth parameters by value (no allocation
+    /// on the audio thread).
+    #[allow(clippy::result_large_err)]
     pub fn command(&mut self, c: EngineCommand) -> Result<(), EngineCommand> {
         self.ui.commands.push(c).map_err(|PushError::Full(c)| c)
     }

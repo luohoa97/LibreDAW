@@ -133,6 +133,16 @@ pub fn decode_sample(bytes: &[u8], rate: u32) -> Result<SampleData, SampleError>
     Ok(SampleData::from_vec(d.channels, rate, data))
 }
 
+/// The store key of a raw SHA-256: 64 lowercase hex digits.
+pub fn hash_hex(hash: &[u8; 32]) -> String {
+    let mut s = String::with_capacity(64);
+    for b in hash {
+        s.push(char::from_digit((b >> 4) as u32, 16).unwrap_or('0'));
+        s.push(char::from_digit((b & 15) as u32, 16).unwrap_or('0'));
+    }
+    s
+}
+
 /// The state of one sample in the store.
 #[derive(Clone, Debug)]
 pub enum SampleState {

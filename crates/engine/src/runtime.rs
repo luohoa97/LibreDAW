@@ -3,6 +3,7 @@
 //! once, sized to the fixed maxima, never reallocated while the stream runs.
 //! The live callback and the offline renderer call the same `process_*`.
 
+use crate::audition::{Audition, AuditionSample};
 use crate::bass808::{Bass808, BassCtl};
 use crate::compiled::{Compiled, InsertC, InstrumentC};
 use crate::fx::FxPools;
@@ -14,6 +15,7 @@ use crate::plugins::{
 use crate::preview::{PREVIEW_CAP, PreviewNote, Previews, TAIL_SECONDS, insert_sorted};
 use crate::rt::{RtGuard, enter_rt_fp_mode, restore_fp_mode};
 use crate::sampler::{Sampler, SamplerCtl};
+use crate::samples::SampleData;
 use crate::sequencer::{BEAT_CAP, Beat, ChokeEvent, EVENT_CAP, SeqEvent, Sequencer, TraceEvent};
 use crate::synth::{Synth, SynthCtl};
 use protocol::consts::{
@@ -31,6 +33,9 @@ use rtrb::{Consumer, Producer, RingBuffer};
 use std::sync::Arc;
 use std::sync::atomic::Ordering::Relaxed;
 use std::time::Instant;
+
+/// Capacity of the audition sample rings.
+const AUDITION_RING_CAP: usize = 8;
 
 /// Choke triggers per sub-block (more are dropped).
 const CHOKE_CAP: usize = 256;
@@ -63,6 +68,10 @@ impl Default for Shared {
 pub struct RtEnds {
     pub state: Consumer<Box<Compiled>>,
     pub retire: Producer<Box<Compiled>>,
+    /// Samples for `EngineCommand::Audition` (sent before the command), and
+    /// the ring the replaced ones leave through.
+    pub audition: Consumer<AuditionSample>,
+    pub audition_retire: Producer<SampleData>,
     pub commands: Consumer<EngineCommand>,
     pub plugin_events: Consumer<PluginEvent>,
     pub events: Producer<EngineEvent>,
@@ -72,6 +81,9 @@ pub struct RtEnds {
 pub struct UiEnds {
     pub state: Producer<Box<Compiled>>,
     pub retired: Consumer<Box<Compiled>>,
+    /// Decoded sample for the next audition; drop `audition_retired` items.
+    pub audition: Producer<AuditionSample>,
+    pub audition_retired: Consumer<SampleData>,
     pub commands: Producer<EngineCommand>,
     pub plugin_events: Producer<PluginEvent>,
     pub events: Consumer<EngineEvent>,
@@ -85,10 +97,14 @@ pub fn rings() -> (UiEnds, RtEnds) {
     let (cmd_p, cmd_c) = RingBuffer::new(COMMAND_RING_CAP);
     let (pe_p, pe_c) = RingBuffer::new(PLUGIN_EVENT_RING_CAP);
     let (ev_p, ev_c) = RingBuffer::new(EVENT_RING_CAP);
+    let (as_p, as_c) = RingBuffer::new(AUDITION_RING_CAP);
+    let (ar_p, ar_c) = RingBuffer::new(AUDITION_RING_CAP);
     (
         UiEnds {
             state: state_p,
             retired: retire_c,
+            audition: as_p,
+            audition_retired: ar_c,
             commands: cmd_p,
             plugin_events: pe_p,
             events: ev_c,
@@ -96,6 +112,8 @@ pub fn rings() -> (UiEnds, RtEnds) {
         RtEnds {
             state: state_c,
             retire: retire_p,
+            audition: as_c,
+            audition_retire: ar_p,
             commands: cmd_c,
             plugin_events: pe_c,
             events: ev_p,
@@ -359,6 +377,7 @@ pub struct Runtime {
     ch_audible: Vec<bool>,
     tr_audible: Vec<bool>,
     previews: Previews,
+    audition: Audition,
     previews_allowed: bool,
     /// Frames left in which a previewed channel stays solo-exempt.
     preview_tail: [u32; MAX_CHANNELS],
@@ -408,6 +427,7 @@ impl Runtime {
             ch_audible: vec![false; MAX_CHANNELS],
             tr_audible: vec![false; TRACK_SLOTS],
             previews: Previews::new(),
+            audition: Audition::new(),
             previews_allowed: true,
             preview_tail: [0; MAX_CHANNELS],
         }
@@ -625,6 +645,7 @@ impl Runtime {
             }
             EngineCommand::Stop => {
                 self.release_previews(None);
+                self.audition.release();
                 if self.seq.playing {
                     let tick = self.seq.stop(&mut self.events);
                     push_engine_event(
@@ -632,6 +653,9 @@ impl Runtime {
                         &self.shared.status,
                         EngineEvent::Stopped { tick },
                     );
+                } else {
+                    // A second stop returns the playhead to the start.
+                    self.seq.rewind();
                 }
             }
             EngineCommand::Seek { tick } => {
@@ -639,23 +663,24 @@ impl Runtime {
                     self.seq.seek(c, tick, &mut self.events);
                 }
             }
-            EngineCommand::SetPlayingPattern { pattern } => {
-                if let Some(c) = self.compiled.as_deref() {
-                    self.seq.set_pattern(c, pattern, &mut self.events);
-                } else {
-                    self.seq.set_pattern_id(pattern);
-                }
-            }
-            EngineCommand::SetTransportMode { mode, loop_song } => {
-                self.seq
-                    .set_mode(self.compiled.as_deref(), mode, loop_song, &mut self.events);
-            }
             EngineCommand::Preview {
                 channel,
                 key,
                 vel,
                 on,
             } => self.preview_command(channel, key, vel, on),
+            EngineCommand::Audition {
+                source,
+                key,
+                vel,
+                on,
+            } => {
+                if self.previews_allowed {
+                    self.pull_audition_samples();
+                    self.audition
+                        .command(self.sample_rate, &source, key, vel, on);
+                }
+            }
             EngineCommand::AttachPlugin { slot, handle } => self.plug.attach(slot, handle),
             EngineCommand::DetachPlugin { slot } => {
                 self.plug.detach(slot);
@@ -663,6 +688,20 @@ impl Runtime {
                     self.plug.pending_acks[slot.index()] = true;
                     self.plug.n_pending += 1;
                 }
+            }
+        }
+    }
+
+    /// Takes delivered audition samples; the ones they replace leave
+    /// through the retire ring (never freed here). Stops while that ring
+    /// is full.
+    fn pull_audition_samples(&mut self) {
+        while self.ends.audition_retire.slots() > 0 {
+            let Ok(s) = self.ends.audition.pop() else {
+                break;
+            };
+            if let Some(old) = self.audition.install_sample(s) {
+                let _ = self.ends.audition_retire.push(old);
             }
         }
     }
@@ -747,6 +786,10 @@ impl Runtime {
             }
             out_l.fill(0.0);
             out_r.fill(0.0);
+            // No project yet: an audition still sounds, straight out.
+            if self.audition.is_active() {
+                self.audition.render(self.sample_rate, out_l, out_r);
+            }
             self.events.clear();
             self.seq.pos += n as u64;
             return;
@@ -755,13 +798,13 @@ impl Runtime {
         self.seq
             .schedule(&c, n, metronome_on, &mut self.events, &mut self.beats);
         if self.seq.finished {
-            // A song that does not loop ran out: the same event as a stop.
+            // The arrangement ran out: the same event as a stop.
             self.seq.finished = false;
             push_engine_event(
                 &mut self.ends.events,
                 &self.shared.status,
                 EngineEvent::Stopped {
-                    tick: c.song.len_ticks as u64,
+                    tick: c.song_len_ticks as u64,
                 },
             );
         }
@@ -915,6 +958,14 @@ impl Runtime {
                     self.mix_channel(s, t, n, true, (vol, pan, audible), key);
                 }
             }
+        }
+
+        // Sound-browser audition straight into the master bus, before the
+        // master inserts (the limiter) and fader.
+        if self.audition.is_active() {
+            let (ml, mr) = self.buses.lr(0, n);
+            self.audition.render(self.sample_rate, ml, mr);
+            self.track_dirty[0] = true;
         }
 
         // Metronome into the master bus (before master inserts and fader).

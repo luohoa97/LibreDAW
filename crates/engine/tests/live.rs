@@ -34,10 +34,6 @@ fn pipewire_engine_plays_a_pattern_at_real_time_priority() {
     assert!(!Engine::devices(Host::PipeWire).is_empty());
     let mut e = Engine::start(&cfg, compile(&p, &slots, 48000.0)).unwrap();
     write_controls(&p, &slots, &e.controls, &e.params);
-    e.command(EngineCommand::SetPlayingPattern {
-        pattern: p.patterns[0].id,
-    })
-    .unwrap();
     e.command(EngineCommand::Play).unwrap();
     // submit a recompile while playing
     let mut c = Some(compile(&p, &slots, 48000.0));

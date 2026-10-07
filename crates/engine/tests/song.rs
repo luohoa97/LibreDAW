@@ -1,28 +1,43 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//! Song mode (SPEC 15.6): the playlist compiled to a timeline, exact note
-//! positions across clip boundaries, looping and ending, the playhead in
-//! song ticks, and the offline song render.
+//! Timeline playback (SPEC 20): clips compiled to one note timeline, exact
+//! note positions across clip boundaries, the loop region, the arrangement
+//! end, the playhead, seeking anywhere, and the range render.
 
 mod common;
 
 use common::*;
 use engine::rt::{RtGuard, rt_events};
-use engine::{SongRequest, render_song};
-use protocol::engine::{EngineCommand, EngineEvent, TransportMode};
-use protocol::ids::{ClipId, PatternId, PlaylistTrackId};
-use protocol::model::{Clip, PlaylistTrack, Project};
+use engine::{RangeRequest, render_range};
+use protocol::engine::{ChannelSlot, EngineCommand, EngineEvent};
+use protocol::ids::{ClipId, PatternId};
+use protocol::model::{Clip, LoopRegion, Project};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32};
 
 const SR: f64 = 48000.0;
-/// Song length in ticks: the last clip ends at 9600 + 100.
+/// Arrangement length in ticks: the last clip ends at 9600 + 100.
 const SONG_LEN: i128 = 9700;
+
+fn clip(id: u32, instrument: u32, pat: u32, start: u32, len: u32) -> Clip {
+    Clip {
+        id: ClipId(id),
+        instrument: protocol::ids::ChannelId(instrument),
+        pattern: PatternId(pat),
+        start,
+        len,
+        offset: 0,
+        muted: false,
+    }
+}
 
 fn song_project(bpm: f64) -> Project {
     let mut p = project(
         bpm,
         vec![],
-        vec![synth_channel(1, 0, tone_params())],
+        vec![
+            synth_channel(1, 0, tone_params()),
+            synth_channel(2, 0, tone_params()),
+        ],
         vec![
             // P1: 16 steps = 3840 ticks.
             pattern(
@@ -32,29 +47,22 @@ fn song_project(bpm: f64) -> Project {
             ),
             // P2: 8 steps = 1920 ticks.
             pattern(2, 8, &[(1, vec![(3, 480, 240, 64, 100)])]),
+            // P3: instrument 2's content, 8 steps.
+            pattern(3, 8, &[(2, vec![(4, 480, 240, 64, 100)])]),
         ],
     );
-    let clip = |id, pat, start, len| Clip {
-        id: ClipId(id),
-        pattern: PatternId(pat),
-        start,
-        len,
+    p.clips = vec![
+        clip(51, 1, 1, 0, 3840),    // exactly one P1
+        clip(52, 1, 2, 3840, 5760), // three P2 (repeats)
+        clip(53, 1, 1, 9600, 100),  // P1 cut after 100 ticks
+        // P3's note starts at 480, past this clip's 480 ticks: cut away.
+        clip(61, 2, 3, 960, 480),
+    ];
+    p.loop_region = LoopRegion {
+        start: 0,
+        end: SONG_LEN as u32,
+        enabled: false,
     };
-    p.playlist.push(Arc::new(PlaylistTrack {
-        id: PlaylistTrackId(50),
-        name: "A".into(),
-        clips: vec![
-            clip(51, 1, 0, 3840),    // exactly one P1
-            clip(52, 2, 3840, 5760), // three P2 (repeats)
-            clip(53, 1, 9600, 100),  // P1 cut after 100 ticks
-        ],
-    }));
-    p.playlist.push(Arc::new(PlaylistTrack {
-        id: PlaylistTrackId(60),
-        name: "B".into(),
-        // P2's note starts at 480, past this clip's 480 ticks: cut away.
-        clips: vec![clip(61, 2, 960, 480)],
-    }));
     p
 }
 
@@ -77,12 +85,16 @@ fn expected_pass() -> Vec<(i128, u8, u32, bool)> {
     v
 }
 
-fn song_rig(p: &Project, loop_song: bool) -> Rig {
-    let mut r = rig(p, SR, false);
-    r.rt.command(EngineCommand::SetTransportMode {
-        mode: TransportMode::Song,
-        loop_song,
-    });
+/// A rig playing from tick 0 with the loop region over the whole song when
+/// `looped`, else off.
+fn song_rig(p: &Project, looped: bool) -> Rig {
+    let mut p = p.clone();
+    p.loop_region = LoopRegion {
+        start: 0,
+        end: SONG_LEN as u32,
+        enabled: looped,
+    };
+    let mut r = rig(&p, SR, false);
     r.rt.command(EngineCommand::Play);
     r
 }
@@ -117,6 +129,16 @@ fn to_samples(
     out
 }
 
+fn stopped(r: &mut Rig) -> Option<u64> {
+    let mut out = None;
+    while let Ok(e) = r.ui.events.pop() {
+        if let EngineEvent::Stopped { tick } = e {
+            out = Some(tick);
+        }
+    }
+    out
+}
+
 #[test]
 fn note_positions_across_clips_match_the_closed_form() {
     for &(num, den) in &[(120i128, 1i128), (13333, 100), (999, 1)] {
@@ -136,7 +158,7 @@ fn note_positions_across_clips_match_the_closed_form() {
 }
 
 #[test]
-fn the_song_stops_at_its_end_and_reports_it() {
+fn playback_stops_at_the_arrangement_end_and_reports_it() {
     let p = song_project(120.0);
     let mut r = song_rig(&p, false);
     let end = ideal_sample(SONG_LEN, SR as i128, 120, 1) as usize;
@@ -144,14 +166,8 @@ fn the_song_stops_at_its_end_and_reports_it() {
     assert!(r.rt.is_playing());
     r.run(2000, 256);
     assert!(!r.rt.is_playing());
-    let mut stopped = None;
-    while let Ok(e) = r.ui.events.pop() {
-        if let EngineEvent::Stopped { tick } = e {
-            stopped = Some(tick);
-        }
-    }
-    assert_eq!(stopped, Some(SONG_LEN as u64));
-    assert_eq!(r.rt.live_notes(protocol::engine::ChannelSlot(0)), 0);
+    assert_eq!(stopped(&mut r), Some(SONG_LEN as u64));
+    assert_eq!(r.rt.live_notes(ChannelSlot(0)), 0);
     // Nothing more happens.
     let n = r.rt.trace().len();
     r.run(48000, 256);
@@ -159,7 +175,7 @@ fn the_song_stops_at_its_end_and_reports_it() {
 }
 
 #[test]
-fn a_looping_song_repeats_with_exact_positions() {
+fn a_loop_region_over_the_song_repeats_with_exact_positions() {
     let p = song_project(120.0);
     let total = ideal_sample(3 * SONG_LEN + 100, SR as i128, 120, 1);
     let want = to_samples(&expected_pass(), 4, 120, 1, total);
@@ -172,7 +188,84 @@ fn a_looping_song_repeats_with_exact_positions() {
 }
 
 #[test]
-fn the_playhead_counts_song_ticks() {
+fn a_loop_region_inside_the_song_wraps_to_its_start_exactly() {
+    // Region [3840, 7680): two repeats of P2, note id 3 at 4320 and 6240.
+    let mut p = song_project(133.33);
+    p.loop_region = LoopRegion {
+        start: 3840,
+        end: 7680,
+        enabled: true,
+    };
+    let mut r = rig(&p, SR, false);
+    r.rt.command(EngineCommand::Seek { tick: 3840 });
+    r.rt.command(EngineCommand::Play);
+    let (num, den) = (13333i128, 100i128);
+    let total = ideal_sample(3 * 3840 + 1000, SR as i128, num, den);
+    r.run(total as usize, 100);
+    let mut want = Vec::new();
+    for pass in 0..4i128 {
+        for rel in [480i128, 2400] {
+            for (dt, on) in [(0, true), (240, false)] {
+                let s = ideal_sample(pass * 3840 + rel + dt, SR as i128, num, den);
+                if s < total {
+                    want.push((s, 64u8, 3u32, on));
+                }
+            }
+        }
+    }
+    want.sort();
+    assert_eq!(traced(&r), want);
+    assert!(r.rt.is_playing());
+}
+
+#[test]
+fn starting_past_the_loop_end_plays_on_to_the_arrangement_end() {
+    let mut p = song_project(120.0);
+    p.loop_region = LoopRegion {
+        start: 0,
+        end: 3840,
+        enabled: true,
+    };
+    let mut r = rig(&p, SR, false);
+    // Seek works anywhere, also past the loop end and past the song.
+    r.rt.command(EngineCommand::Seek { tick: 7000 });
+    r.rt.command(EngineCommand::Play);
+    r.run(ideal_sample(5000, SR as i128, 120, 1) as usize, 256);
+    assert!(!r.rt.is_playing(), "ran past the loop to the song end");
+    assert_eq!(stopped(&mut r), Some(SONG_LEN as u64));
+    assert!(r.rt.trace().iter().any(|e| e.on && e.id == 3));
+
+    // Past the song: no clip, no stop; the playhead just advances.
+    let mut r = rig(&song_project(120.0), SR, false);
+    r.rt.command(EngineCommand::Seek { tick: 20000 });
+    r.rt.command(EngineCommand::Play);
+    r.run(48000, 256);
+    assert!(r.rt.is_playing());
+    assert!(r.rt.trace().is_empty());
+    assert_eq!(stopped(&mut r), None);
+    let tick = r
+        .shared
+        .status
+        .playhead_tick
+        .load(std::sync::atomic::Ordering::Relaxed);
+    assert!((20000 + 1900..20000 + 1925).contains(&tick), "{tick}");
+}
+
+#[test]
+fn seeking_while_playing_moves_the_playhead_and_notes() {
+    let p = song_project(120.0);
+    let mut r = song_rig(&p, false);
+    r.run(4800, 256);
+    r.rt.command(EngineCommand::Seek { tick: 3840 + 1920 });
+    let before = r.rt.trace().len();
+    // Next P2 note on is at 3840 + 1920 + 480 = 6240.
+    r.run(ideal_sample(480 + 100, SR as i128, 120, 1) as usize, 256);
+    let after = &r.rt.trace()[before..];
+    assert!(after.iter().any(|e| e.on && e.id == 3), "{after:?}");
+}
+
+#[test]
+fn the_playhead_counts_timeline_ticks() {
     let p = song_project(120.0);
     let mut r = song_rig(&p, false);
     // 120 BPM at 48 kHz: 25 frames per tick; 5000 ticks in.
@@ -186,44 +279,37 @@ fn the_playhead_counts_song_ticks() {
 }
 
 #[test]
-fn switching_modes_restarts_and_pattern_mode_is_unchanged() {
-    let p = song_project(120.0);
-    let mut r = rig(&p, SR, true);
-    // Pattern mode plays P1 and loops it at 3840 ticks.
-    r.run(ideal_sample(3840 + 960, SR as i128, 120, 1) as usize, 256);
-    assert!(r.rt.trace().iter().any(|e| e.id == 2));
-    r.rt.command(EngineCommand::SetTransportMode {
-        mode: TransportMode::Song,
-        loop_song: false,
-    });
-    let before = r.rt.trace().len();
-    r.run(4800, 256);
-    // Song mode restarted from tick 0: note 1 starts again right away.
-    let again = &r.rt.trace()[before..];
-    assert!(again.iter().any(|e| e.on && e.id == 1));
-    // And back to the pattern.
-    r.rt.command(EngineCommand::SetTransportMode {
-        mode: TransportMode::Pattern,
-        loop_song: false,
-    });
-    r.run(ideal_sample(3840, SR as i128, 120, 1) as usize, 256);
-    assert!(r.rt.is_playing());
+fn clip_offset_starts_into_the_content_and_muted_clips_are_skipped() {
+    let mut p = song_project(120.0);
+    // P1 from tick 3600 of its content: note 2 first, then the content
+    // repeats and note 1 follows at 240.
+    p.clips = vec![Clip {
+        offset: 3600,
+        ..clip(51, 1, 1, 0, 3840)
+    }];
+    let r = rig(&p, SR, false);
+    let c = r.rt.compiled().unwrap();
+    let s = r.slots.channel_slot(protocol::ids::ChannelId(1)).unwrap().0 as usize;
+    let notes: Vec<_> = c.song.notes[s]
+        .iter()
+        .map(|n| (n.start, n.end, n.id))
+        .collect();
+    assert_eq!(notes, vec![(0, 240, 2), (240, 480, 1)]);
+
+    // Muted: nothing plays, but the clip still counts toward the end.
+    p.clips[0].muted = true;
+    let r = rig(&p, SR, false);
+    let c = r.rt.compiled().unwrap();
+    assert!(c.song.notes.iter().all(Vec::is_empty));
+    assert_eq!(c.song_len_ticks, 3840);
 }
 
 #[test]
-fn an_empty_playlist_and_missing_patterns_are_harmless() {
+fn an_empty_timeline_and_missing_content_are_harmless() {
     let mut p = song_project(120.0);
-    {
-        let pt = Arc::make_mut(&mut p.playlist[0]);
-        pt.clips.push(Clip {
-            id: ClipId(70),
-            pattern: PatternId(999),
-            start: 20000,
-            len: 480,
-        });
-    }
+    p.clips.push(clip(70, 1, 999, 20000, 480));
     let r = rig(&p, SR, false);
-    // The missing pattern's clip is skipped, so it does not extend the song.
+    // The missing content's clip is skipped, so it does not extend the song.
     assert_eq!(r.rt.compiled().unwrap().song_len_ticks, SONG_LEN as u32);
     let empty = project(
         120.0,
@@ -231,25 +317,21 @@ fn an_empty_playlist_and_missing_patterns_are_harmless() {
         vec![synth_channel(1, 0, tone_params())],
         vec![pattern(1, 16, &[])],
     );
-    let mut r = song_rig(&empty, false);
+    let mut empty = empty;
+    empty.loop_region.enabled = false;
+    let mut r = rig(&empty, SR, true);
     r.run(4800, 256);
-    assert!(!r.rt.is_playing(), "an empty song ends at once");
+    assert!(r.rt.is_playing(), "an empty timeline plays on");
+    assert_eq!(stopped(&mut r), None);
 }
 
 #[test]
-fn a_huge_clip_over_a_tiny_pattern_is_bounded() {
+fn a_huge_clip_over_tiny_content_is_bounded() {
     let mut p = song_project(120.0);
-    {
-        let mut one = pattern(3, 1, &[(1, vec![(9, 0, 1, 60, 100)])]);
-        one.step_ticks = 1;
-        p.patterns.push(Arc::new(one));
-        Arc::make_mut(&mut p.playlist[1]).clips.push(Clip {
-            id: ClipId(80),
-            pattern: PatternId(3),
-            start: 0,
-            len: 1 << 30,
-        });
-    }
+    let mut one = pattern(4, 1, &[(1, vec![(9, 0, 1, 60, 100)])]);
+    one.contents[0].step_ticks = 1;
+    p.patterns.push(Arc::new(one.contents.remove(0)));
+    p.clips.push(clip(80, 1, 4, 0, 1 << 30));
     let r = rig(&p, SR, false);
     let c = r.rt.compiled().unwrap();
     let n: usize = c.song.notes.iter().map(Vec::len).sum();
@@ -257,7 +339,7 @@ fn a_huge_clip_over_a_tiny_pattern_is_bounded() {
 }
 
 #[test]
-fn song_playback_makes_no_allocations() {
+fn timeline_playback_makes_no_allocations() {
     let p = song_project(120.0);
     let mut r = song_rig(&p, true);
     let mut l = vec![0.0f32; 300];
@@ -272,19 +354,22 @@ fn song_playback_makes_no_allocations() {
 }
 
 #[test]
-fn render_song_matches_live_song_playback_and_has_the_right_length() {
-    let p = Arc::new(song_project(120.0));
+fn range_render_matches_live_playback_and_has_the_right_length() {
+    let mut q = song_project(120.0);
+    q.loop_region.enabled = false;
+    let p = Arc::new(q);
     let mut slots = engine::Slots::new();
     slots.sync(&p).unwrap();
     let progress = AtomicU32::new(0);
     let cancel = AtomicBool::new(false);
-    let req = SongRequest {
+    let req = RangeRequest {
         project: p.clone(),
+        range: None,
         tail_seconds: 0.5,
         sample_rate: 48000,
         store: None,
     };
-    let out = render_song(&req, &slots, &[], &progress, &cancel)
+    let out = render_range(&req, &slots, &[], &progress, &cancel)
         .unwrap()
         .audio;
     let main = ideal_sample(SONG_LEN, SR as i128, 120, 1) as usize;
@@ -297,13 +382,14 @@ fn render_song_matches_live_song_playback_and_has_the_right_length() {
     for (i, f) in out.iter().enumerate() {
         assert_eq!((f[0], f[1]), (l[i], rr[i]), "frame {i}");
     }
-    // An empty playlist is an error, and cancel works.
-    let mut q = (*p).clone();
-    q.playlist.clear();
+    // No clips and no loop is an error, and cancel works.
+    let mut empty = (*p).clone();
+    empty.clips.clear();
     assert!(
-        render_song(
-            &SongRequest {
-                project: Arc::new(q),
+        render_range(
+            &RangeRequest {
+                project: Arc::new(empty),
+                range: None,
                 tail_seconds: 0.0,
                 sample_rate: 48000,
                 store: None
@@ -317,7 +403,7 @@ fn render_song_matches_live_song_playback_and_has_the_right_length() {
     );
     cancel.store(true, std::sync::atomic::Ordering::Relaxed);
     assert!(matches!(
-        render_song(&req, &slots, &[], &progress, &cancel),
+        render_range(&req, &slots, &[], &progress, &cancel),
         Err(engine::EngineError::Cancelled)
     ));
 }

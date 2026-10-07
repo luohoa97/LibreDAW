@@ -69,16 +69,15 @@ fn sine_instrument_renders_offline_through_the_real_host() {
     );
     let mut slots = engine::Slots::new();
     slots.sync(&p).unwrap();
-    let req = engine::RenderRequest {
+    let req = engine::RangeRequest {
         project: Arc::new(p),
-        pattern: protocol::ids::PatternId(1),
-        loops: 1,
+        range: Some((0, 3840)),
         tail_seconds: 0.1,
         sample_rate: 48000,
         store: None,
     };
     let slot = PluginSlot::Instrument(ChannelSlot(0));
-    let out = engine::render_offline(
+    let out = engine::render_range(
         &req,
         &slots,
         &[(slot, inst.handle())],
