@@ -23,6 +23,52 @@ pub struct SeqEvent {
     pub id: u32,
 }
 
+/// A choke trigger: a note-on on `source` in choke `group` at `offset`
+/// stops the voices of every other channel in the group (15.1, 17.2).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ChokeEvent {
+    pub offset: u32,
+    pub group: u8,
+    pub source: u16,
+}
+
+/// One thing a channel reacts to inside a sub-block.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ChannelEvent {
+    Note(SeqEvent),
+    Choke,
+}
+
+/// The events of channel `slot` (choke group `group`, 0 = none) in offset
+/// order: its own note events, and chokes triggered by other channels in its
+/// group. A choke comes before the channel's own events at the same offset,
+/// so a note starting with the choke is not cut by it. Both inputs must be
+/// sorted by offset.
+pub fn channel_events<'a>(
+    slot: u16,
+    group: u8,
+    events: &'a [SeqEvent],
+    chokes: &'a [ChokeEvent],
+) -> impl Iterator<Item = (u32, ChannelEvent)> + 'a {
+    let mut notes = events.iter().filter(move |e| e.slot == slot).peekable();
+    let mut ch = chokes
+        .iter()
+        .filter(move |c| group != 0 && c.group == group && c.source != slot)
+        .peekable();
+    std::iter::from_fn(move || {
+        let take_choke = match (ch.peek(), notes.peek()) {
+            (Some(c), Some(n)) => c.offset <= n.offset,
+            (Some(_), None) => true,
+            _ => false,
+        };
+        if take_choke {
+            ch.next().map(|c| (c.offset, ChannelEvent::Choke))
+        } else {
+            notes.next().map(|n| (n.offset, ChannelEvent::Note(*n)))
+        }
+    })
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Beat {
     pub offset: u32,
