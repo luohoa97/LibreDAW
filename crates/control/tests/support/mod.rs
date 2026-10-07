@@ -444,7 +444,7 @@ impl RefDaw {
                     kind: "single sound".into(),
                     kit_name: Some("Trap Kit".into()),
                 }],
-                total: 1,
+                total: 99,
                 notes: vec![],
             }),
             RequestBody::KitAdd { kit, track, .. } | RequestBody::SoundAdd { id: kit, track } => {

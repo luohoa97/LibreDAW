@@ -110,7 +110,7 @@ pub fn sections(levels: &[BarLevels]) -> Vec<Section> {
     // Drops.
     let mut last_drop: Option<usize> = None;
     let mut drops = Vec::new();
-    for i in 1..n {
+    for i in 1usize..n {
         let prev = mean(&l[i.saturating_sub(4)..i]);
         let rises = l[i] - prev >= DROP_RISE_LU;
         let stays = l.get(i + 1).is_none_or(|next| next - prev >= DROP_STAYS_LU);

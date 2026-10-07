@@ -932,12 +932,10 @@ fn sounds_are_searched_then_added_by_id() {
     c.ok("sound_add", json!({"id": surge}));
     let reqs = rig.ui.requests();
     assert!(reqs.iter().any(|q| matches!(&q.body,
-        RequestBody::SoundSearch { tags, .. }
-            if tags.contains(&"kick".to_string())
-                && tags.contains(&"source:FL Studio".to_string())
-                && tags.contains(&"offset:20".to_string()))));
+        RequestBody::SoundSearch { query, source, offset: 20, .. }
+            if query.as_deref() == Some("kick") && source.as_deref() == Some("FL Studio"))));
     assert!(reqs.iter().any(|q| matches!(&q.body,
-        RequestBody::KitAdd { pack, kit, .. } if pack == "@sound" && kit == "fl:sound:abc")));
+        RequestBody::SoundAdd { id, .. } if id == "fl:sound:abc")));
     assert!(reqs.iter().any(|q| matches!(&q.body,
         RequestBody::Edit { edits } if edits.iter().any(|e| matches!(e,
             Edit::AddChannel { instrument: protocol::edit::NewInstrument::Clap { preset: Some(_), .. }, .. })))));
@@ -954,9 +952,9 @@ fn kit_get_asks_for_one_kit_and_sound_search_filters_by_kit() {
     c.ok("kit_get", json!({"id": "fl:kit:abc"}));
     let reqs = rig.ui.requests();
     assert!(reqs.iter().any(|q| matches!(&q.body,
-        RequestBody::SoundSearch { tags, .. } if tags.contains(&"kit:909".to_string()))));
+        RequestBody::SoundSearch { tags, .. } if kit.as_deref() == Some("909"))));
     assert!(reqs.iter().any(|q| matches!(&q.body,
-        RequestBody::SoundSearch { tags, limit: 1, .. } if tags == &["kit_id:fl:kit:abc".to_string()])));
+        RequestBody::SoundSearch { kit, .. } if kit.as_deref() == Some("fl:kit:abc"))));
 }
 
 #[test]
@@ -976,7 +974,9 @@ fn seek_goes_to_a_bar() {
         })
         .collect();
     assert_eq!(ticks, [8 * 3840, 960]);
+}
 
+#[test]
 fn hum_prepare_returns_declined_when_the_user_closes_the_sheet() {
     let mut daw = RefDaw::kick_and_hat();
     daw.hum_reply = support::HumReply::Decline;
