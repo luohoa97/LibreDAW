@@ -14,9 +14,16 @@ pub mod analysis;
 mod analysis_tests;
 mod client;
 pub mod fake_ui;
+pub mod mcp;
 mod socket;
 mod state;
+pub mod suggest;
 
+pub use mcp::PROTOCOL_VERSION;
 pub use state::{
     ClientInfo, ControlConfig, ControlServer, ControlStartError, Incoming, Polled, Ticket, UiEvent,
+};
+pub use suggest::{
+    PendingSuggestion, SuggestError, Suggestion, SuggestionEvent, SuggestionId, SuggestionKind,
+    SuggestionRequest,
 };
