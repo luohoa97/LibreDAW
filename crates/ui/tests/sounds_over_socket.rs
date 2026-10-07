@@ -278,9 +278,7 @@ fn fl_sounds_are_off_until_the_user_turns_them_on_then_found_and_added() {
     // An instrument plays from its root sample.
     let inst = talk(
         &rig,
-        vec![search(
-            r#""tags":["jazz","source:FL Studio"],"limit":50"#,
-        )],
+        vec![search(r#""tags":["jazz","source:FL Studio"],"limit":50"#)],
     )
     .remove(0);
     let inst = id_with(&inst, "fl:instrument:");
