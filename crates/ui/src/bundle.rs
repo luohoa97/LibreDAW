@@ -35,8 +35,10 @@ use crate::document::{Document, parse_state_file_name};
 pub const PROJECT_FILE: &str = "project.toml";
 pub const STATE_DIR: &str = "plugin-state";
 pub const AUTOSAVE_DIR: &str = ".autosave";
-/// Autosave period (7.6).
-pub const AUTOSAVE_INTERVAL: Duration = Duration::from_secs(120);
+/// Autosave timing (7.6, Amendment 10) and plugin state capture period.
+pub const AUTOSAVE_QUIET: Duration = Duration::from_secs(3);
+pub const AUTOSAVE_MAX: Duration = Duration::from_secs(15);
+pub const CAPTURE_PERIOD: Duration = Duration::from_secs(60);
 
 /// Largest `project.toml` and largest blob the loader reads.
 const MAX_PROJECT_FILE_BYTES: u64 = 256 << 20;
@@ -369,30 +371,102 @@ pub fn save_and_clear_autosave(dir: &Path, doc: &Document) -> Result<SaveReport,
     Ok(r)
 }
 
-/// Decides when the 2-minute autosave is due. The GTK side calls `due` from
-/// a timeout; plugin state capture (7.5 (c)) happens on the GTK thread
-/// before the document goes to the worker.
-pub struct AutosaveClock {
-    last: Instant,
-    interval: Duration,
+/// Decides when an autosave is due (7.6, Amendment 10): `QUIET` after the
+/// last edit, and at least every `MAX` while edits keep coming. The caller
+/// passes the time in, so tests need no real clock.
+#[derive(Debug)]
+pub struct AutosaveDebounce {
+    quiet: Duration,
+    max: Duration,
+    /// When the oldest unsaved change happened.
+    first: Option<Instant>,
+    last: Option<Instant>,
 }
 
-impl AutosaveClock {
-    pub fn new(now: Instant, interval: Duration) -> AutosaveClock {
-        AutosaveClock {
-            last: now,
-            interval,
+impl AutosaveDebounce {
+    pub fn new(quiet: Duration, max: Duration) -> AutosaveDebounce {
+        AutosaveDebounce {
+            quiet,
+            max,
+            first: None,
+            last: None,
         }
     }
 
-    /// True once per interval while the document is dirty. A clean document
-    /// restarts the wait.
-    pub fn due(&mut self, now: Instant, dirty: bool) -> bool {
-        if !dirty {
-            self.last = now;
+    /// The standard timing: 3 s after the last edit, 15 s at most.
+    pub fn standard() -> AutosaveDebounce {
+        AutosaveDebounce::new(AUTOSAVE_QUIET, AUTOSAVE_MAX)
+    }
+
+    /// Record that the document changed at `now`.
+    pub fn changed(&mut self, now: Instant) {
+        self.first.get_or_insert(now);
+        self.last = Some(now);
+    }
+
+    pub fn pending(&self) -> bool {
+        self.first.is_some()
+    }
+
+    /// True when a write should start now. Returns true once per batch of
+    /// changes.
+    pub fn due(&mut self, now: Instant) -> bool {
+        let (Some(first), Some(last)) = (self.first, self.last) else {
             return false;
+        };
+        if now.duration_since(last) >= self.quiet || now.duration_since(first) >= self.max {
+            self.first = None;
+            self.last = None;
+            true
+        } else {
+            false
         }
-        if now.duration_since(self.last) >= self.interval {
+    }
+
+    /// Forget pending changes (the document was saved).
+    pub fn clear(&mut self) {
+        self.first = None;
+        self.last = None;
+    }
+}
+
+/// Plugin state capture timing (7.5 (c), Amendment 10): every `PERIOD`
+/// while some plugin reported a change, and right after a plugin gesture.
+#[derive(Debug)]
+pub struct CaptureClock {
+    period: Duration,
+    last: Instant,
+    flagged: bool,
+}
+
+impl CaptureClock {
+    pub fn new(now: Instant, period: Duration) -> CaptureClock {
+        CaptureClock {
+            period,
+            last: now,
+            flagged: false,
+        }
+    }
+
+    pub fn standard(now: Instant) -> CaptureClock {
+        CaptureClock::new(now, CAPTURE_PERIOD)
+    }
+
+    /// A plugin called `state.mark_dirty`.
+    pub fn plugin_dirty(&mut self) {
+        self.flagged = true;
+    }
+
+    /// A plugin gesture ended: capture on the next check.
+    pub fn after_gesture(&mut self, now: Instant) {
+        self.flagged = true;
+        self.last = now.checked_sub(self.period).unwrap_or(now);
+    }
+
+    /// True when state should be captured now.
+    pub fn due(&mut self, now: Instant) -> bool {
+        if self.flagged && now.duration_since(self.last) >= self.period {
+            self.flagged = false;
             self.last = now;
             true
         } else {
@@ -443,7 +517,7 @@ impl AutosaveWorker {
                         }
                     }
                     if let Job::Write(bundle, doc) = job {
-                        let result = save_autosave(&bundle, &doc);
+                        let result = save(&bundle, &doc);
                         let _ = rtx.send(AutosaveResult {
                             bundle,
                             revision: doc.revision,
@@ -465,7 +539,8 @@ impl AutosaveWorker {
         }
     }
 
-    /// Queues `doc` for writing into `bundle/.autosave`.
+    /// Queues `doc` for writing into directory `bundle`: the `.autosave`
+    /// folder of a project, or a recovery bundle of a never-saved one.
     pub fn submit(&self, bundle: PathBuf, doc: Document) {
         let _ = self.tx.send(Job::Write(bundle, doc));
     }

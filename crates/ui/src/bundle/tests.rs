@@ -464,18 +464,80 @@ fn autosave_crash_leaves_previous_autosave_intact() {
     assert!(l.missing_blobs.is_empty());
 }
 
+fn secs(t0: Instant, s: f64) -> Instant {
+    t0 + Duration::from_secs_f64(s)
+}
+
 #[test]
-fn autosave_clock_fires_once_per_interval_when_dirty() {
+fn autosave_waits_for_three_quiet_seconds() {
     let t0 = Instant::now();
-    let mut c = AutosaveClock::new(t0, Duration::from_secs(120));
-    assert!(!c.due(t0 + Duration::from_secs(119), true));
-    assert!(c.due(t0 + Duration::from_secs(120), true));
-    assert!(!c.due(t0 + Duration::from_secs(121), true));
-    assert!(c.due(t0 + Duration::from_secs(240), true));
-    // Clean documents restart the wait.
-    assert!(!c.due(t0 + Duration::from_secs(300), false));
-    assert!(!c.due(t0 + Duration::from_secs(419), true));
-    assert!(c.due(t0 + Duration::from_secs(420), true));
+    let mut d = AutosaveDebounce::standard();
+    assert!(!d.due(secs(t0, 100.0)), "nothing changed, nothing to write");
+    d.changed(t0);
+    assert!(d.pending());
+    assert!(!d.due(secs(t0, 2.9)));
+    assert!(d.due(secs(t0, 3.0)));
+    assert!(!d.pending());
+    assert!(!d.due(secs(t0, 3.1)), "fires once per batch of changes");
+}
+
+#[test]
+fn each_edit_restarts_the_quiet_period() {
+    let t0 = Instant::now();
+    let mut d = AutosaveDebounce::standard();
+    d.changed(t0);
+    d.changed(secs(t0, 2.0));
+    assert!(!d.due(secs(t0, 4.9)), "3 s after the *last* edit");
+    assert!(d.due(secs(t0, 5.0)));
+}
+
+#[test]
+fn continuous_edits_still_autosave_every_fifteen_seconds() {
+    let t0 = Instant::now();
+    let mut d = AutosaveDebounce::standard();
+    let mut fired = Vec::new();
+    // An edit every second for 40 seconds.
+    for i in 0..=40 {
+        let now = secs(t0, i as f64);
+        d.changed(now);
+        if d.due(now) {
+            fired.push(i);
+        }
+    }
+    assert_eq!(fired, vec![15, 31], "at most 15 s of work is ever unsaved");
+}
+
+#[test]
+fn clearing_forgets_pending_changes() {
+    let t0 = Instant::now();
+    let mut d = AutosaveDebounce::standard();
+    d.changed(t0);
+    d.clear();
+    assert!(!d.due(secs(t0, 60.0)));
+    assert!(!d.pending());
+}
+
+#[test]
+fn plugin_state_is_captured_every_sixty_seconds_when_a_plugin_reported_changes() {
+    let t0 = Instant::now();
+    let mut c = CaptureClock::standard(t0);
+    assert!(!c.due(secs(t0, 61.0)), "no change reported");
+    c.plugin_dirty();
+    assert!(!c.due(secs(t0, 30.0)), "not before the period is over");
+    assert!(c.due(secs(t0, 61.0)));
+    assert!(!c.due(secs(t0, 62.0)), "flag was consumed");
+    c.plugin_dirty();
+    assert!(!c.due(secs(t0, 100.0)), "next period starts at the capture");
+    assert!(c.due(secs(t0, 121.0)));
+}
+
+#[test]
+fn plugin_state_is_captured_right_after_a_gesture() {
+    let t0 = Instant::now();
+    let mut c = CaptureClock::standard(t0);
+    c.after_gesture(secs(t0, 5.0));
+    assert!(c.due(secs(t0, 5.0)));
+    assert!(!c.due(secs(t0, 6.0)));
 }
 
 #[test]
@@ -493,7 +555,7 @@ fn autosave_worker_writes_and_coalesces() {
         )
         .unwrap()
         .0;
-        w.submit(t.bundle(), doc.clone());
+        w.submit(autosave_path(&t.bundle()), doc.clone());
     }
     let last_rev = doc.revision;
     let results = w.results.recv_timeout(Duration::from_secs(10)).unwrap();
@@ -518,7 +580,7 @@ fn autosave_worker_reports_errors() {
     // A file where the bundle directory should be.
     fs::write(t.bundle(), b"in the way").unwrap();
     let w = AutosaveWorker::spawn();
-    w.submit(t.bundle(), Document::new());
+    w.submit(autosave_path(&t.bundle()), Document::new());
     let r = w.results.recv_timeout(Duration::from_secs(10)).unwrap();
     assert!(r.result.is_err());
 }

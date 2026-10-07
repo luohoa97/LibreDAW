@@ -21,12 +21,14 @@
 
 use std::collections::{HashSet, VecDeque};
 use std::sync::atomic::Ordering;
+use std::time::Instant;
 
 use protocol::edit::Edit;
 use protocol::engine::{EngineEvent, PluginEvent, PluginSlot};
 use protocol::ids::InstanceId;
 use protocol::model::{Insert, Instrument, Project};
 
+use crate::bundle::CaptureClock;
 use crate::change::{needs_compile, param_diffs, removed_instances};
 use crate::compiler::{CompileJob, Compiler};
 use crate::document::{Document, commit_plugin_state};
@@ -63,6 +65,8 @@ pub struct Session {
     out_events: VecDeque<PluginEvent>,
     seen_overflows: u64,
     plugin_gesture: bool,
+    gesture_just_ended: bool,
+    capture_clock: CaptureClock,
     /// Messages for the user (toasts), drained with `take_messages`.
     messages: Vec<String>,
 }
@@ -93,6 +97,8 @@ impl Session {
             out_events: VecDeque::new(),
             seen_overflows: 0,
             plugin_gesture: false,
+            gesture_just_ended: false,
+            capture_clock: CaptureClock::standard(Instant::now()),
             messages: Vec::new(),
         };
         s.seen_overflows = s.link.status.event_overflows.load(Ordering::Relaxed);
@@ -209,6 +215,15 @@ impl Session {
         self.request_compile();
     }
 
+    /// Applies autosaved work on top of the open project as one undoable
+    /// step (Amendment 10).
+    pub fn apply_recovered(&mut self, recovered: &Document) {
+        let old = self.editor.document().project.clone();
+        self.editor
+            .push_state(Author::User, "Recovered unsaved work", recovered);
+        self.after_change(&old, Origin::External);
+    }
+
     // ---- plugin state (7.5) ----
 
     fn capture(&mut self, ids: &[InstanceId]) {
@@ -281,6 +296,11 @@ impl Session {
     // ---- the 10 ms tick (4.4) ----
 
     pub fn tick(&mut self) -> TickReport {
+        self.tick_at(Instant::now())
+    }
+
+    /// `tick` with the time passed in, for tests.
+    pub fn tick_at(&mut self, now: Instant) -> TickReport {
         let mut report = TickReport::default();
 
         // Discrete events from the audio thread.
@@ -323,6 +343,20 @@ impl Session {
         }
         if !polled.dirty.is_empty() {
             self.editor.touch();
+            self.capture_clock.plugin_dirty();
+            report.changed = true;
+        }
+        // Plugin state: every 60 s if a plugin reported changes, and right
+        // after a plugin gesture (7.5 (c), Amendment 10).
+        if self.gesture_just_ended {
+            self.gesture_just_ended = false;
+            self.capture_clock.after_gesture(now);
+        }
+        if self.capture_clock.due(now) {
+            let ids: Vec<_> = instance_ids(&self.editor.document().project)
+                .into_iter()
+                .collect();
+            self.capture(&ids);
             report.changed = true;
         }
 
@@ -366,6 +400,7 @@ impl Session {
     fn plugin_gesture_end(&mut self, report: &mut TickReport) {
         if self.plugin_gesture {
             self.plugin_gesture = false;
+            self.gesture_just_ended = true;
             let done = self.end_gesture();
             report.changed = true;
             report.done.extend(done);
