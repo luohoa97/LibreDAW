@@ -75,6 +75,7 @@ fn sine_instrument_renders_offline_through_the_real_host() {
         loops: 1,
         tail_seconds: 0.1,
         sample_rate: 48000,
+        store: None,
     };
     let slot = PluginSlot::Instrument(ChannelSlot(0));
     let out = engine::render_offline(
@@ -84,7 +85,8 @@ fn sine_instrument_renders_offline_through_the_real_host() {
         &AtomicU32::new(0),
         &AtomicBool::new(false),
     )
-    .unwrap();
+    .unwrap()
+    .audio;
     let on = ideal_sample(960, 48000, 120, 1) as usize;
     let before = out[..on]
         .iter()
