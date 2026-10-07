@@ -619,6 +619,9 @@ name = "libredaw-mcp"
 version = "0.0.0"
 dependencies = [
  "libredaw-protocol",
+ "libredaw-script",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

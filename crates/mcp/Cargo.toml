@@ -6,9 +6,19 @@ edition.workspace = true
 license.workspace = true
 publish.workspace = true
 
+[lib]
+name = "mcp"
+path = "src/lib.rs"
+
 [[bin]]
 name = "libredaw-mcp"
 path = "src/main.rs"
 
 [dependencies]
 libredaw-protocol = { path = "../protocol" }
+# Control socket client shared with the Deno bridge (SPEC 16.2).
+libredaw-script = { path = "../script" }
+# JSON-RPC 2.0 messages and tool results (SPEC 16.2).
+serde_json = "1"
+# Derive typed tool arguments so a bad argument gets a clear error (SPEC 16.3).
+serde = { version = "1", features = ["derive"] }
