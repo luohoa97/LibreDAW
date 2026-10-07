@@ -56,7 +56,8 @@ fn hello_then_call_matches_reply_by_id() {
         send(
             &mut w,
             json!({"id": id, "outcome": {"status": "ok", "body": {"kind": "transport",
-                "playing": true, "tick": 5, "tempo_bpm": 120.0, "pattern": 2}}}),
+                "playing": true, "tick": 5, "tempo_bpm": 120.0,
+                "loop_region": {"start": 0, "end": 7680, "enabled": true}}}}),
         );
     });
     let mut c = Client::connect(&path, Transport::Agent, "test", Duration::from_secs(2)).unwrap();

@@ -332,7 +332,13 @@ fn client_call_in_thread(
 fn approval_allowed_then_executed() {
     let env = start("allow", |_| {});
     let c = connect(&env, Transport::Agent).unwrap();
-    let t = client_call_in_thread(c, RequestBody::ProjectNew { template: None, name: None });
+    let t = client_call_in_thread(
+        c,
+        RequestBody::ProjectNew {
+            template: None,
+            name: None,
+        },
+    );
     let inc = next_request(&env.server);
     assert!(
         env.server
@@ -354,7 +360,13 @@ fn approval_allowed_then_executed() {
 fn approval_denied_replies_denied() {
     let env = start("deny", |_| {});
     let c = connect(&env, Transport::Agent).unwrap();
-    let t = client_call_in_thread(c, RequestBody::ProjectNew { template: None, name: None });
+    let t = client_call_in_thread(
+        c,
+        RequestBody::ProjectNew {
+            template: None,
+            name: None,
+        },
+    );
     let inc = next_request(&env.server);
     env.server.require_approval(inc.ticket, "x".into());
     assert!(!env.server.approval(inc.ticket, false));
@@ -373,7 +385,13 @@ fn approval_timeout_replies_needs_user_approval() {
         c.approval_timeout = Duration::from_millis(150)
     });
     let c = connect(&env, Transport::Agent).unwrap();
-    let t = client_call_in_thread(c, RequestBody::ProjectNew { template: None, name: None });
+    let t = client_call_in_thread(
+        c,
+        RequestBody::ProjectNew {
+            template: None,
+            name: None,
+        },
+    );
     let inc = next_request(&env.server);
     env.server.require_approval(inc.ticket, "x".into());
     let timed = poll_until(&env.server, |p| {
@@ -444,7 +462,13 @@ fn disabling_agents_disconnects_them_but_not_scripts() {
 fn client_leaving_cancels_held_tickets() {
     let env = start("cancel", |_| {});
     let c = connect(&env, Transport::Agent).unwrap();
-    let t = client_call_in_thread(c, RequestBody::ProjectNew { template: None, name: None });
+    let t = client_call_in_thread(
+        c,
+        RequestBody::ProjectNew {
+            template: None,
+            name: None,
+        },
+    );
     let inc = next_request(&env.server);
     env.server.require_approval(inc.ticket, "x".into());
     drop(t); // detach; the client thread owns the connection
