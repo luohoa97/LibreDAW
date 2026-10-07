@@ -1973,6 +1973,34 @@ bridge operation as the matching UI action.
 
 ---
 
+### 21.8 Asking an agent for vocals (Amendment 26)
+
+Owner: "ask Claude for vocals; it gives you options like using a local
+vocal or recording one with an MCP tool; the entire window glows orange
+with an indicator that your vocals are being recorded; recording is a
+feature in the app UI too."
+
+- **Options.** When asked for vocals, an agent offers:
+  - **Use a vocal you have:** it searches the sound catalogue (FL Studio
+    Vocals, the user's folders) through `sound_search`, or imports a
+    file with `audio_import` from a folder the user picked. The vocal
+    lands as an audio clip on an Audio row.
+  - **Record one now:** `record_prepare` arms a row, sets the range and
+    count-in, shows the lyrics, and asks the user to press Record.
+- **While an agent-prepared recording runs:**
+  - The whole window glows orange (18.1).
+  - The pill turns into a recording indicator: a red dot, "Recording
+    vocals", the time, and Stop.
+  - The microphone is still opened only by the human's press (21.2).
+- **Recording without an agent.** A Record button (R) in the transport
+  bar records into the selected Audio row with the same count-in. It
+  shows a red recording indicator in the pill area and no orange glow.
+- **After a take.** The tool returns the take's clip id and length, so
+  the agent can place, trim and mix it. Pitch correction and alignment
+  are later (21.4).
+- **Model.** This needs audio clips (21.1, format v4). It is built in the
+  Voice wave after hum to notes, reusing the hum capture path (the engine
+  input ring), with the take written to disk by the worker thread.
 ## 22. Provenance export (Amendment 22)
 
 Owner direction: one click gives a log of which parts the artist made and
@@ -2113,6 +2141,13 @@ the starter project open, on GNOME 50, Wayland, with PipeWire:
 ---
 
 ## Changelog
+
+### Amendment 26 (2026-10-07, owner)
+
+- Added 21.8: an agent offers vocals (use one you have, or record one
+  now). An agent-prepared recording glows the window orange with a
+  "Recording vocals" indicator. A Record button (R) records without an
+  agent. The human always starts the microphone.
 
 ### Amendment 25 (2026-10-07, owner)
 
