@@ -9,7 +9,7 @@ pub mod engine_adapter;
 pub mod history;
 pub mod plugin_adapter;
 pub mod registry;
+pub mod roll_logic;
 pub mod session;
 pub mod slots;
-pub mod roll_logic;
 pub mod view_math;

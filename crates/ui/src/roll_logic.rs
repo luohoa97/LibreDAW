@@ -312,7 +312,7 @@ mod tests {
             px_per_tick: 0.1,
             row_h: 10.0,
             scroll_x: 0.0,
-            scroll_y: 0.0,
+            scroll_y: 600.0,
             key_w: 50.0,
             ruler_h: 20.0,
             vel_h: 60.0,
@@ -377,9 +377,20 @@ mod tests {
         let sx1 = v.tick_to_x(0.0) + 1.0;
         let sx2 = v.tick_to_x(100.0) + 1.0;
         assert_eq!(hit_stem(&n, &v, sx1, y), Some(NoteId(1)));
-        assert_eq!(hit_stem(&n, &v, sx2 + 1.0, y.max(vel_to_y(&v, 50) + 3.0)), Some(NoteId(2)));
-        assert_eq!(hit_stem(&n, &v, sx1 + 20.0, y), None, "too far from any stem");
-        assert_eq!(hit_stem(&n, &v, sx1, v.vel_top() - 5.0), None, "not in the lane");
+        assert_eq!(
+            hit_stem(&n, &v, sx2 + 1.0, y.max(vel_to_y(&v, 50) + 3.0)),
+            Some(NoteId(2))
+        );
+        assert_eq!(
+            hit_stem(&n, &v, sx1 + 20.0, y),
+            None,
+            "too far from any stem"
+        );
+        assert_eq!(
+            hit_stem(&n, &v, sx1, v.vel_top() - 5.0),
+            None,
+            "not in the lane"
+        );
     }
 
     #[test]
@@ -396,7 +407,14 @@ mod tests {
         assert_eq!(notes_in_box(&n, &v, b, a), vec![NoteId(1)], "corner order");
     }
 
-    fn drag_of(kind: DragKind, notes: &[Note], ids: &[u32], v: &Viewport, px: f64, py: f64) -> Drag {
+    fn drag_of(
+        kind: DragKind,
+        notes: &[Note],
+        ids: &[u32],
+        v: &Viewport,
+        px: f64,
+        py: f64,
+    ) -> Drag {
         Drag::new(
             kind,
             ids.iter().map(|i| NoteId(*i)).collect(),
@@ -419,7 +437,11 @@ mod tests {
         let e = d.update(&v, px + 30.0, py - 10.0, 240).unwrap();
         assert!(matches!(
             e,
-            Edit::MoveNotes { dt: 240, dkey: 1, .. }
+            Edit::MoveNotes {
+                dt: 240,
+                dkey: 1,
+                ..
+            }
         ));
         // Same position again: nothing.
         assert!(d.update(&v, px + 30.0, py - 10.0, 240).is_none());
@@ -427,13 +449,21 @@ mod tests {
         let e = d.update(&v, px + 54.0, py - 10.0, 240).unwrap();
         assert!(matches!(
             e,
-            Edit::MoveNotes { dt: 240, dkey: 0, .. }
+            Edit::MoveNotes {
+                dt: 240,
+                dkey: 0,
+                ..
+            }
         ));
         // Back to the start: the negative of everything applied.
         let e = d.update(&v, px, py, 240).unwrap();
         assert!(matches!(
             e,
-            Edit::MoveNotes { dt: -480, dkey: -1, .. }
+            Edit::MoveNotes {
+                dt: -480,
+                dkey: -1,
+                ..
+            }
         ));
         assert_eq!((d.applied_dt, d.applied_dkey), (0, 0));
     }
@@ -479,7 +509,14 @@ mod tests {
     fn velocity_drag_sets_absolute_values_once() {
         let v = vp();
         let notes = [note(1, 0, 100, 60, 100), note(2, 100, 100, 60, 40)];
-        let mut d = drag_of(DragKind::Velocity, &notes, &[1, 2], &v, 60.0, vel_to_y(&v, 100));
+        let mut d = drag_of(
+            DragKind::Velocity,
+            &notes,
+            &[1, 2],
+            &v,
+            60.0,
+            vel_to_y(&v, 100),
+        );
         let y = vel_to_y(&v, 80);
         let e = d.update(&v, 60.0, y, 240).unwrap();
         assert!(matches!(e, Edit::SetNoteVelocity { vel: 80, .. }));
@@ -498,7 +535,13 @@ mod tests {
             },
             PatternId(9),
         );
-        assert!(matches!(e, Edit::ResizeNotes { pattern: PatternId(9), .. }));
+        assert!(matches!(
+            e,
+            Edit::ResizeNotes {
+                pattern: PatternId(9),
+                ..
+            }
+        ));
     }
 
     #[test]
@@ -506,7 +549,10 @@ mod tests {
         let sel = [NoteId(1), NoteId(2)];
         assert_eq!(click_selection(&sel, NoteId(3), false), vec![NoteId(3)]);
         assert_eq!(click_selection(&sel, NoteId(2), false), sel.to_vec());
-        assert_eq!(click_selection(&sel, NoteId(3), true), vec![NoteId(1), NoteId(2), NoteId(3)]);
+        assert_eq!(
+            click_selection(&sel, NoteId(3), true),
+            vec![NoteId(1), NoteId(2), NoteId(3)]
+        );
         assert_eq!(click_selection(&sel, NoteId(1), true), vec![NoteId(2)]);
     }
 
