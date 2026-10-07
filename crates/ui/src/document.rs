@@ -849,4 +849,4 @@ fn set_step_ticks(w: &mut Work, pattern: PatternId, new: u32) -> Result<(), Edit
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

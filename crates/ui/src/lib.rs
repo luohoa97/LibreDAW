@@ -2,3 +2,4 @@
 //! GTK4 application shell, widgets, document and undo.
 
 pub mod document;
+pub mod history;
