@@ -31,12 +31,17 @@ finish-args:
   - --system-talk-name=org.freedesktop.RealtimeKit1
   - --filesystem=xdg-music
   - --filesystem=~/.clap:ro
-  - --env=CLAP_PATH=/app/extensions/Plugins/clap
   # Agents: the control socket lives in the app's runtime dir ($XDG_RUNTIME_DIR/app/<id>),
   # which is private to the app and reachable via `flatpak run --command=oto-mcp`.
 
 # Flatpak Linux audio plugin extension point: plugin packs such as
-# org.freedesktop.LinuxAudio.Plugins.* mount under /app/extensions/Plugins.
+# org.freedesktop.LinuxAudio.Plugins.* mount under /app/extensions/Plugins/<Name>.
+# These packs ship files/clap, so each lands at /app/extensions/Plugins/<Name>/clap;
+# plugin-host scans those directories itself (no CLAP_PATH needed). First setup
+# offers the packs through appstream:// links opened in GNOME Software
+# (Amendment 23); nothing is downloaded with the app.
+# Reading an FL Studio install in another app's data (Bottles, Wine) goes
+# through the file chooser portal: the user picks the folder once.
 add-extensions:
   org.freedesktop.LinuxAudio.Plugins:
     directory: extensions/Plugins

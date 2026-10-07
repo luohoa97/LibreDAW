@@ -13,10 +13,12 @@ use clap_sys::ext::latency::CLAP_EXT_LATENCY;
 use clap_sys::ext::note_ports::CLAP_EXT_NOTE_PORTS;
 use clap_sys::ext::params::*;
 use clap_sys::ext::posix_fd_support::CLAP_EXT_POSIX_FD_SUPPORT;
+use clap_sys::ext::preset_load::*;
 use clap_sys::ext::render::*;
 use clap_sys::ext::state::CLAP_EXT_STATE;
 use clap_sys::ext::timer_support::CLAP_EXT_TIMER_SUPPORT;
 use clap_sys::factory::plugin_factory::*;
+use clap_sys::factory::preset_discovery::CLAP_PRESET_DISCOVERY_LOCATION_FILE;
 use clap_sys::plugin::clap_plugin;
 use clap_sys::stream::{clap_istream, clap_ostream};
 use clap_sys::version::clap_version_is_compatible;
@@ -254,6 +256,81 @@ pub fn clap_paths() -> Vec<PathBuf> {
     }
     v.push("/usr/lib/clap".into());
     v.push("/usr/lib64/clap".into());
+    v.extend(flatpak_extension_dirs());
+    v
+}
+
+/// Prefix of the Flatpak LinuxAudio plugin extensions (SPEC 19.3).
+const EXT_PREFIX: &str = "org.freedesktop.LinuxAudio.Plugins.";
+
+/// CLAP directories of the installed `org.freedesktop.LinuxAudio.Plugins.*`
+/// extensions: inside the Flatpak, the mounts under `/app/extensions/Plugins`;
+/// outside it, the user and system Flatpak runtime installs.
+pub fn flatpak_extension_dirs() -> Vec<PathBuf> {
+    if Path::new("/.flatpak-info").exists() {
+        return mounted_extension_dirs(Path::new("/app/extensions/Plugins"));
+    }
+    let mut roots = Vec::new();
+    if let Some(d) = std::env::var_os("XDG_DATA_HOME").filter(|d| !d.is_empty()) {
+        roots.push(Path::new(&d).join("flatpak"));
+    } else if let Some(h) = std::env::var_os("HOME") {
+        roots.push(Path::new(&h).join(".local/share/flatpak"));
+    }
+    roots.push("/var/lib/flatpak".into());
+    installed_extension_dirs(&roots)
+}
+
+/// Mounted extensions: `<root>/<Name>/clap` and `<root>/<Name>/lib/clap`
+/// (what Surge XT, Odin2 and Dexed ship), plus the merged `<root>/lib/clap`.
+pub fn mounted_extension_dirs(root: &Path) -> Vec<PathBuf> {
+    let mut out = vec![root.join("lib/clap"), root.join("clap")];
+    for d in sorted_dirs(root) {
+        if d.ends_with("lib") || d.ends_with("clap") {
+            continue;
+        }
+        out.push(d.join("clap"));
+        out.push(d.join("lib/clap"));
+    }
+    out.retain(|p| p.is_dir());
+    out
+}
+
+/// Flatpak installations (`<root>/runtime/<ext id>/<arch>/<branch>/active/
+/// files/clap`). When several branches of one extension are installed, only
+/// the highest branch is used, so a plugin does not appear twice.
+pub fn installed_extension_dirs(roots: &[PathBuf]) -> Vec<PathBuf> {
+    let arch = std::env::consts::ARCH;
+    let mut out = Vec::new();
+    for root in roots {
+        for ext in sorted_dirs(&root.join("runtime")) {
+            let named = ext
+                .file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.starts_with(EXT_PREFIX));
+            if !named {
+                continue;
+            }
+            let mut branches = sorted_dirs(&ext.join(arch));
+            branches.reverse();
+            let found = branches
+                .into_iter()
+                .map(|b| b.join("active/files/clap"))
+                .find(|p| p.is_dir());
+            out.extend(found);
+        }
+    }
+    out
+}
+
+fn sorted_dirs(dir: &Path) -> Vec<PathBuf> {
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut v: Vec<PathBuf> = rd
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| p.is_dir())
+        .collect();
+    v.sort();
     v
 }
 
@@ -316,10 +393,14 @@ pub struct Instance {
     _lib: Rc<LoadedLib>,
 }
 
+/// Port layout the host accepts: output port 0 is stereo (the sound), at
+/// most one input port that is stereo. Extra output ports (Surge XT has
+/// per-scene outputs) are fed scratch buffers and ignored. Returns whether
+/// there is an input and the channel counts of the extra outputs.
 fn check_ports(
     plugin: *const clap_plugin,
     ap: *const clap_plugin_audio_ports,
-) -> Result<bool, HostError> {
+) -> Result<(bool, Vec<u32>), HostError> {
     if ap.is_null() {
         return Err(HostError::PortLayout("no audio-ports extension".into()));
     }
@@ -327,28 +408,32 @@ fn check_ports(
     unsafe {
         let (count, get) = ((*ap).count.unwrap(), (*ap).get.unwrap());
         let (n_in, n_out) = (count(plugin, true), count(plugin, false));
-        if n_out != 1 || n_in > 1 {
+        if n_out < 1 || n_in > 1 {
             return Err(HostError::PortLayout(format!(
                 "{n_in} input and {n_out} output ports"
             )));
         }
+        let mut extra = Vec::new();
         for is_in in [true, false] {
-            if (is_in && n_in == 0) || (!is_in && n_out == 0) {
-                continue;
-            }
-            let mut info: clap_audio_port_info = std::mem::zeroed();
-            if !get(plugin, 0, is_in, &mut info) {
-                return Err(HostError::PortLayout("cannot query port 0".into()));
-            }
-            if info.channel_count != 2 {
-                return Err(HostError::PortLayout(format!(
-                    "{} port has {} channels",
-                    if is_in { "input" } else { "output" },
-                    info.channel_count
-                )));
+            let n = if is_in { n_in } else { n_out };
+            for i in 0..n {
+                let mut info: clap_audio_port_info = std::mem::zeroed();
+                if !get(plugin, i, is_in, &mut info) {
+                    return Err(HostError::PortLayout(format!("cannot query port {i}")));
+                }
+                if i == 0 && info.channel_count != 2 {
+                    return Err(HostError::PortLayout(format!(
+                        "{} port has {} channels",
+                        if is_in { "input" } else { "output" },
+                        info.channel_count
+                    )));
+                }
+                if !is_in && i > 0 {
+                    extra.push(info.channel_count);
+                }
             }
         }
-        Ok(n_in == 1)
+        Ok((n_in == 1, extra))
     }
 }
 
@@ -403,10 +488,17 @@ impl Instance {
             render: get_ext(plugin, CLAP_EXT_RENDER),
             timer: get_ext(plugin, CLAP_EXT_TIMER_SUPPORT),
             fd: get_ext(plugin, CLAP_EXT_POSIX_FD_SUPPORT),
+            preset_load: {
+                let p: *const clap_plugin_preset_load = get_ext(plugin, CLAP_EXT_PRESET_LOAD);
+                if p.is_null() {
+                    get_ext(plugin, CLAP_EXT_PRESET_LOAD_COMPAT)
+                } else {
+                    p
+                }
+            },
         });
-        let has_input = check_ports(plugin, me.inner.exts.get().audio_ports)?;
-        // SAFETY: not shared with any thread yet.
-        unsafe { (*me.inner.rt.get()).has_input = has_input };
+        let (has_input, extra) = check_ports(plugin, me.inner.exts.get().audio_ports)?;
+        me.inner.set_ports(has_input, &extra);
         Ok(me)
     }
 
@@ -495,6 +587,39 @@ impl Instance {
         }
         // SAFETY: valid ext and plugin; main thread.
         unsafe { (*e.latency).get.map_or(0, |g| g(self.inner.plugin())) }
+    }
+
+    /// Load a preset file through the `preset-load` extension (a Surge XT
+    /// `.fxp`, a Dexed `.syx`). Errors if the plugin does not support it or
+    /// rejects the file. Main thread; the plugin may be active.
+    pub fn load_preset(&mut self, path: &Path) -> Result<(), HostError> {
+        let e = self.inner.exts.get();
+        if e.preset_load.is_null() {
+            return Err(HostError::State(
+                "plugin has no preset-load extension".into(),
+            ));
+        }
+        let loc = CString::new(path.as_os_str().as_encoded_bytes())
+            .map_err(|_| HostError::State("bad preset path".into()))?;
+        // SAFETY: valid ext and plugin; main thread; `loc` outlives the call.
+        let ok = unsafe {
+            (*e.preset_load).from_location.is_some_and(|f| {
+                f(
+                    self.inner.plugin(),
+                    CLAP_PRESET_DISCOVERY_LOCATION_FILE,
+                    loc.as_ptr(),
+                    std::ptr::null(),
+                )
+            })
+        };
+        if ok {
+            Ok(())
+        } else {
+            Err(HostError::State(format!(
+                "cannot load preset {}",
+                path.display()
+            )))
+        }
     }
 
     pub fn save_state(&mut self) -> Result<Vec<u8>, HostError> {
@@ -766,4 +891,11 @@ impl RtOutEvent {
     pub fn is_gesture(&self) -> bool {
         self.kind != RtOutKind::ParamValue
     }
+}
+
+/// The root of the Flatpak extension (or install prefix) a plugin lives in:
+/// the parent of its `clap` directory. Factory presets sit under
+/// `<root>/share/...`.
+pub fn extension_root(desc: &PluginDesc) -> Option<PathBuf> {
+    Some(desc.path.parent()?.parent()?.to_path_buf())
 }

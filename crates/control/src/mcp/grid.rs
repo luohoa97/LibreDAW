@@ -4,7 +4,7 @@
 //!
 //! # Grammar
 //!
-//! A grid is one character per step of the pattern, first step first:
+//! A grid is one character per step of a clip content, first step first:
 //!
 //! | char | meaning |
 //! | --- | --- |
@@ -15,7 +15,7 @@
 //! | `\|` | visual separator (this server writes one every 4 steps), ignored; spaces are ignored too |
 //!
 //! After removing `|` and spaces the number of characters must equal the
-//! pattern's `length_steps`. A row may also carry `ratchet` (2, 3, 4, 6 or 8),
+//! content's `length_steps`. A row may also carry `ratchet` (2, 3, 4, 6 or 8),
 //! the ratchet count given to every hit that has no digit of its own, so an
 //! accent can be ratcheted (`X` with row ratchet 2). `beat_grid_get` shows a
 //! ratcheted hit as its digit even when it is also loud, so an accent that is
@@ -25,7 +25,7 @@
 
 use protocol::consts::RATCHETS;
 use protocol::edit::Edit;
-use protocol::ids::{ChannelId, PatternId};
+use protocol::ids::PatternId;
 use protocol::model::{Pattern, Project};
 
 /// Velocity of an `X` hit.
@@ -38,7 +38,7 @@ pub const GROUP: usize = 4;
 /// The text of the grammar, shared by the tool descriptions.
 pub const GRAMMAR: &str = "Grid text: one character per step, first step first. '.' = off, 'x' = hit, 'X' = accent (velocity 120), \
 digit 2, 3, 4, 6 or 8 = hit ratcheted into that many notes. '|' (and spaces) may separate bars and are ignored. \
-After removing them the length must equal the pattern's length_steps (16 = one bar of sixteenths). \
+After removing them the length must equal the content's length in steps (16 = one bar of sixteenths). \
 Example: \"x...|x...|x...|x.x.\". The row's `vel` (1-127, default 100) is the velocity of x and of ratcheted hits; \
 the row's `ratchet` (2, 3, 4, 6, 8) is applied to every x or X that has no digit of its own.";
 
@@ -52,7 +52,7 @@ pub struct Hit {
 
 pub type Row = Vec<Option<Hit>>;
 
-/// Parses a grid. `expected` is the pattern's `length_steps`; the error
+/// Parses a grid. `expected` is the content's `length_steps`; the error
 /// says exactly what is wrong.
 pub fn parse_grid(text: &str, expected: usize, pattern: PatternId) -> Result<Row, String> {
     let mut row: Row = Vec::new();
@@ -102,7 +102,7 @@ pub fn parse_grid(text: &str, expected: usize, pattern: PatternId) -> Result<Row
             format!("remove {} step(s)", n - expected)
         };
         return Err(format!(
-            "the grid has {n} steps but pattern {pattern} has {expected}: {fix} (change the pattern length with the edit tool's set_pattern_length first if you want a different length)"
+            "the grid has {n} steps but content {pattern} has {expected}: {fix} (or change the content length first with content_set)"
         ));
     }
     Ok(row)
@@ -138,17 +138,14 @@ pub struct Existing {
     pub repeat: u8,
 }
 
-/// The step notes of one channel in a pattern, by step.
-pub fn read_existing(
-    project: &Project,
-    pattern: &Pattern,
-    channel: ChannelId,
-) -> Vec<Option<Existing>> {
+/// The step notes of a clip content, by step. A content holds one
+/// instrument's notes (SPEC 20.2); steps play that instrument's root key.
+pub fn read_existing(project: &Project, pattern: &Pattern) -> Vec<Option<Existing>> {
     let mut out = vec![None; pattern.length_steps as usize];
-    let Some(ch) = project.channel(channel) else {
+    let Some(ch) = project.channel(pattern.instrument) else {
         return out;
     };
-    for n in pattern.notes_of(channel) {
+    for n in &pattern.notes {
         if n.is_step_note(ch.root_key, pattern) {
             let step = (n.start / pattern.step_ticks) as usize;
             if let Some(slot) = out.get_mut(step) {
@@ -231,7 +228,6 @@ pub fn check_row_args(vel: Option<u8>, ratchet: Option<u8>) -> Result<(), String
 /// velocity and ratchet are exactly as wanted. Empty if nothing changes.
 pub fn row_edits(
     pattern: PatternId,
-    channel: ChannelId,
     existing: &[Option<Existing>],
     wanted: &[Option<Wanted>],
 ) -> Vec<Edit> {
@@ -249,7 +245,6 @@ pub fn row_edits(
         if have.is_some() {
             edits.push(Edit::SetStep {
                 pattern,
-                channel,
                 step,
                 on: false,
                 vel: None,
@@ -258,7 +253,6 @@ pub fn row_edits(
         if let Some(w) = want {
             edits.push(Edit::SetStep {
                 pattern,
-                channel,
                 step,
                 on: true,
                 vel: Some(w.vel),
@@ -266,7 +260,6 @@ pub fn row_edits(
             if w.repeat > 1 {
                 edits.push(Edit::SetStepLanes {
                     pattern,
-                    channel,
                     step,
                     vel: None,
                     off: None,
@@ -335,7 +328,7 @@ mod tests {
         );
         let e = parse_grid("x...", 16, P).unwrap_err();
         assert!(
-            e.contains("4 steps") && e.contains("pattern 7 has 16") && e.contains("add 12"),
+            e.contains("4 steps") && e.contains("content 7 has 16") && e.contains("add 12"),
             "{e}"
         );
         let e = parse_grid("x.......x.......x", 16, P).unwrap_err();
@@ -380,14 +373,13 @@ mod tests {
 
     #[test]
     fn edits_skip_unchanged_steps_and_rewrite_changed_ones() {
-        let ch = ChannelId(1);
         let ex = Existing {
             vel: 100,
             repeat: 1,
         };
         let existing = vec![Some(ex), None, Some(ex), None];
         let r = parse_grid("x.2X", 4, P).unwrap();
-        let e = row_edits(P, ch, &existing, &wanted(&r, 100, None));
+        let e = row_edits(P, &existing, &wanted(&r, 100, None));
         assert_eq!(e.len(), 4);
         assert!(matches!(
             e[0],
@@ -424,7 +416,7 @@ mod tests {
             }
         ));
         let same = wanted(&parse_grid("x.x.", 4, P).unwrap(), 100, None);
-        assert!(row_edits(P, ch, &existing, &same).is_empty());
+        assert!(row_edits(P, &existing, &same).is_empty());
     }
 
     #[test]

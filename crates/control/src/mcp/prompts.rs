@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//! MCP prompts (SPEC 18.3): starter prompts with arguments.
+//! MCP prompts (SPEC 18.3, 15.12): starter prompts with arguments.
 
 use serde_json::{Map, Value, json};
 
@@ -19,7 +19,7 @@ pub fn list() -> Value {
         {
             "name": "make_beat",
             "title": "Make a <genre> beat",
-            "description": "Build a one-bar beat from an empty or open project: sounds, drums, an 808 line, levels, and a loudness check.",
+            "description": "Build a 4-bar beat from an empty or open project: drums, an 808 line, a loop, levels, and a loudness check.",
             "arguments": [
                 {"name": "genre", "description": "For example trap, boom bap, house, drill.", "required": true},
                 {"name": "tempo", "description": "BPM, 20 to 999. Default: typical for the genre.", "required": false}
@@ -28,10 +28,10 @@ pub fn list() -> Value {
         {
             "name": "add_hihat_roll",
             "title": "Add a hi-hat roll",
-            "description": "Add a ratcheted hi-hat roll to a pattern.",
+            "description": "Add a ratcheted hi-hat roll to the hat clip.",
             "arguments": [
                 {"name": "style", "description": "trap (fast triplet rolls), simple (a short roll at the end), or offbeat.", "required": false},
-                {"name": "pattern", "description": "Pattern id; default: the pattern that is playing.", "required": false}
+                {"name": "clip", "description": "Clip id of the hats; default: the hat instrument's clip.", "required": false}
             ]
         },
         {
@@ -40,6 +40,15 @@ pub fn list() -> Value {
             "description": "Analyze the project and correct clipping, loudness, and balance with mixer changes.",
             "arguments": [
                 {"name": "goal", "description": "For example louder, warmer, more space for the vocal.", "required": false}
+            ]
+        },
+        {
+            "name": "make_versions",
+            "title": "Make versions of this song",
+            "description": "Make several alternative versions of the open song as branches the user compares in the Versions panel.",
+            "arguments": [
+                {"name": "count", "description": "How many versions, 2 to 5. Default 3.", "required": false},
+                {"name": "ideas", "description": "What should differ, for example darker, faster, sparser.", "required": false}
             ]
         }
     ]})
@@ -69,15 +78,15 @@ pub fn get(name: &str, args: &Map<String, Value>) -> Result<Value, String> {
                 }
             };
             Ok(user(format!(
-                "Make a {genre} beat{tempo} in LibreDAW. The user watches the project while you work and can undo anything.\n\
+                "Make a 4-bar {genre} beat{tempo} in LibreDAW. The user watches the project while you work and can undo anything.\n\
 1. activity_set: say what you are doing (\"Making a {genre} beat\").\n\
-2. project_summary: see what exists. Reuse channels and patterns that fit; do not start over unless asked.\n\
-3. set_tempo if a tempo was given or the genre calls for one.\n\
-4. Sounds: sound_search by role (kick, snare or clap, hat, bass) and genre. kit_add for a whole drum kit if one fits; otherwise channel_add with the built-in synth.\n\
-5. pattern_new (16 steps = one bar), then ONE beat_grid_set call with a row per drum channel, for example kick \"x...|..x.|x...|....\", snare \"....|x...|....|x...\", hat \"x.x.|x.x.|x.x.|x.4.\" (X accents, digits ratchet).\n\
-6. An 808 or bass line with notes_write, for example \"C1:0:1/4 C1:3/8:1/8 G0:1/2:1/4\" (fractions of a bar).\n\
-7. mix_set: kick and 808 around -6 dB, hats lower, master below 0 dB.\n\
-8. set_playing_pattern, then analyze. Aim for no clipping and true peak below -1 dBTP; fix with mix_set and analyze again.\n\
+2. project_summary: see what exists. Reuse instruments and clips that fit; do not start over unless asked.\n\
+3. song_set tempo if a tempo was given or the genre calls for one.\n\
+4. Sounds: sound_search by role (kick, snare or clap, hat, 808) and genre; kit_add for a whole drum kit if one fits, then clips_add with a grid for each kit piece. Otherwise ONE instruments_add call: kick, snare, hats and an 808, each with its first one-bar clip and its grid or notes, for example kick grid \"x...|..x.|x...|....\", snare \"....|x...|....|x...\", hat \"x.x.|x.x.|x.x.|x.4.\" (X accents, digits ratchet) and 808 notes \"C2:0:1/4 C2:3/8:1/8 G1:1/2:1/4\" (fractions of a bar).\n\
+5. clips_copy those clips with times 3 to fill 4 bars as linked copies (edit one, all follow). Make one copy unique (clips_change make_unique) for a fill in bar 4 if you like.\n\
+6. loop_set over the 4 bars, then play.\n\
+7. mix_set: kick and 808 around -6 dB, hats lower, master below 0 dB. Later changes: beat_grid_set for drum rows, notes_write for notes.\n\
+8. analyze. Aim for no clipping and true peak below -1 dBTP; fix with mix_set and analyze again.\n\
 9. Tell the user what you made in two or three sentences. You cannot hear it: say what you measured, not what it sounds like."
             )))
         }
@@ -94,15 +103,15 @@ pub fn get(name: &str, args: &Map<String, Value>) -> Result<Value, String> {
                     "fast triplet rolls: ratchet digit 3 or 6 on steps 8, 11 and 14 and 8 on the last step, for example \"x.x.|x.x.|x.3.|x.68\""
                 }
             };
-            let pattern = arg("pattern")
+            let target = arg("clip")
                 .filter(|p| p.chars().all(|c| c.is_ascii_digit()) && !p.is_empty())
-                .map(|p| format!("pattern {p}"))
-                .unwrap_or_else(|| "the pattern that is playing".into());
+                .map(|p| format!("clip {p}"))
+                .unwrap_or_else(|| "the hat clip".into());
             Ok(user(format!(
-                "Add a hi-hat roll to {pattern} in LibreDAW ({style} style).\n\
-1. activity_set: \"Adding a hi-hat roll\".\n\
-2. project_summary: find the hat channel and its current row (beat_grid_get shows it as text). If there is no hat channel, add one with channel_add or kit_add.\n\
-3. beat_grid_set with ONE row for the hat channel: keep the existing hits and add {how}. Digits 2, 3, 4, 6, 8 mean that step is played that many times; X is an accent.\n\
+                "Add a hi-hat roll to {target} in LibreDAW ({style} style).\n\
+1. activity_set: \"Adding a hi-hat roll\", with the hat instrument as focus.\n\
+2. project_summary: find the hat instrument and its clip; content_get shows its row as text. If there is no hat, add one with instruments_add or kit_add.\n\
+3. beat_grid_set with ONE row for that clip: keep the existing hits and add {how}. Digits 2, 3, 4, 6, 8 mean that step is played that many times; X is an accent. Linked copies change too; to roll only one bar, clips_change make_unique that clip first.\n\
 4. Lower the hat with mix_set if the roll sounds busy (levels around -12 dB), then analyze to check for clipping."
             )))
         }
@@ -114,15 +123,37 @@ pub fn get(name: &str, args: &Map<String, Value>) -> Result<Value, String> {
             Ok(user(format!(
                 "Fix the mix of the open LibreDAW project.{goal}\n\
 1. activity_set: \"Checking the mix\".\n\
-2. project_summary, then analyze the playing pattern (or analyze it with loops 2 for a steadier reading).\n\
-3. Read the numbers: clipped samples must be 0; true peak below -1 dBTP; integrated loudness roughly -14 to -9 LUFS for a loud genre; the low/mid/high balance should not be extremely lopsided; a kick and an 808 that overlap a lot fight each other.\n\
+2. project_summary, then analyze (the loop region, or the whole song if there is none).\n\
+3. Read the numbers: clipped samples must be 0; true peak below -1 dBTP; integrated loudness roughly -14 to -9 LUFS for a loud genre; the low/mid/high balance should not be extremely lopsided; a kick and an 808 that overlap a lot fight each other (fx_add a compressor on the 808 track keyed by the kick track with fx_set sidechain).\n\
 4. Fix with ONE mix_set call: lower the loudest tracks first, keep the master below 0 dB, pan hats and percussion slightly, mute nothing the user did not mute.\n\
 5. analyze again and compare. If it got worse, undo (only your own changes are undone) and try a smaller change.\n\
 6. Report the before and after numbers and what you changed."
             )))
         }
+        "make_versions" => {
+            let count = match args.get("count") {
+                None | Some(Value::Null) => 3,
+                Some(v) => v
+                    .as_u64()
+                    .or_else(|| v.as_str().and_then(|s| s.trim().parse().ok()))
+                    .filter(|n| (2..=5).contains(n))
+                    .ok_or("`count` must be 2 to 5")?,
+            };
+            let ideas = arg("ideas")
+                .filter(|g| !g.is_empty())
+                .map(|g| format!(" Directions the user asked for: {g}."))
+                .unwrap_or_default();
+            Ok(user(format!(
+                "Make {count} versions of the open song in LibreDAW for the user to compare.{ideas}\n\
+1. activity_set: \"Making {count} versions\".\n\
+2. project_summary and branch_list: note the current branch and the head commit (history with limit 1 shows it).\n\
+3. For each version: branch_create with a short descriptive name (\"Version A: darker\") and from = that same head commit, so every version starts from the original; then edit it (mix_set, instrument_set params, beat_grid_set, notes_write, song_set tempo...). Each branch_create switches to the new branch, so edits land there.\n\
+4. history_diff from the original commit to each branch head to check what each version changed; analyze each (branch_switch, analyze) so none clips.\n\
+5. branch_switch back to the version you think is strongest, and tell the user the versions are in the Versions panel, where they can listen, compare and pick one. Do not archive or remove any version yourself."
+            )))
+        }
         other => Err(format!(
-            "unknown prompt: {}; use make_beat, add_hihat_roll or fix_my_mix",
+            "unknown prompt: {}; use make_beat, add_hihat_roll, fix_my_mix or make_versions",
             clean_arg(other)
         )),
     }
@@ -140,7 +171,7 @@ mod tests {
     fn make_beat_takes_genre_and_tempo() {
         let r = get("make_beat", &args(json!({"genre": "trap", "tempo": "140"}))).unwrap();
         let t = r["messages"][0]["content"]["text"].as_str().unwrap();
-        assert!(t.contains("Make a trap beat at 140 BPM"), "{t}");
+        assert!(t.contains("Make a 4-bar trap beat at 140 BPM"), "{t}");
         assert!(t.contains("beat_grid_set") && t.contains("notes_write"));
         assert!(
             get("make_beat", &args(json!({})))
@@ -167,12 +198,24 @@ mod tests {
         assert!(
             get(
                 "add_hihat_roll",
-                &args(json!({"style": "simple", "pattern": "3"}))
+                &args(json!({"style": "simple", "clip": "3"}))
             )
             .is_ok()
         );
         assert!(get("fix_my_mix", &args(json!({"goal": "louder"}))).is_ok());
         assert!(get("nope", &args(json!({}))).is_err());
-        assert_eq!(list()["prompts"].as_array().unwrap().len(), 3);
+        assert_eq!(list()["prompts"].as_array().unwrap().len(), 4);
+        let v = get(
+            "make_versions",
+            &args(json!({"count": "3", "ideas": "darker"})),
+        )
+        .unwrap();
+        assert!(
+            v["messages"][0]["content"]["text"]
+                .as_str()
+                .unwrap()
+                .contains("branch_create")
+        );
+        assert!(get("make_versions", &args(json!({"count": 9}))).is_err());
     }
 }
