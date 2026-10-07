@@ -3,6 +3,7 @@
 
 pub mod metronome;
 pub mod recorder;
+pub mod report;
 pub mod rt;
 pub mod transport;
 
