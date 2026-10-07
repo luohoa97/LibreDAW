@@ -368,3 +368,95 @@ fn wav_clips_and_writes_files() {
     assert_eq!(parse(&bytes).data.len(), 1000 * 8);
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+#[test]
+fn offline_render_with_audio_clips_and_shapes_is_bit_identical_for_any_callback_size() {
+    use engine::samples::{SampleData, SampleStore, hash_hex};
+    use protocol::ids::{ChannelId, ClipId, PatternId, ShapeId};
+    use protocol::model::{
+        AudioSource, Channel, Clip, Curve, Instrument, Mix, SampleHash, Shape, ShapePoint,
+        ShapeTarget,
+    };
+    let mut p = song();
+    p.channels.push(Arc::new(Channel {
+        id: protocol::ids::ChannelId(9),
+        name: "audio".into(),
+        root_key: 60,
+        track: protocol::ids::TrackId(1),
+        mix: Mix::default(),
+        instrument: Instrument::Audio,
+        choke_group: 0,
+    }));
+    let hash = SampleHash([7; 32]);
+    p.clips.push(Clip {
+        id: ClipId(900),
+        instrument: ChannelId(9),
+        pattern: PatternId::NONE,
+        start: 300,
+        len: 2500,
+        offset: 123,
+        muted: false,
+        audio: Some(AudioSource {
+            sample: hash,
+            gain_mdb: -3000,
+            fade_in: 200,
+            fade_out: 400,
+        }),
+        group: None,
+    });
+    for (id, target, pts) in [
+        (
+            1,
+            ShapeTarget::Volume {
+                track: protocol::ids::TrackId(1),
+            },
+            vec![
+                (0, -30.0, Curve::Smooth),
+                (1920, 0.0, Curve::Wave),
+                (3840, -6.0, Curve::Hold),
+            ],
+        ),
+        (
+            2,
+            ShapeTarget::Pitch {
+                instrument: ChannelId(1),
+            },
+            vec![(0, 0.0, Curve::Linear), (3840, 7.0, Curve::Hold)],
+        ),
+    ] {
+        p.shapes.push(Shape {
+            id: ShapeId(id),
+            target,
+            points: pts
+                .into_iter()
+                .map(|(tick, value, curve)| ShapePoint { tick, value, curve })
+                .collect(),
+        });
+    }
+    let store = SampleStore::new(44100, 1 << 28);
+    let data: Vec<f32> = (0..300000)
+        .flat_map(|i| {
+            let x = (i as f32 * 0.05).sin() * 0.6;
+            [x, -x]
+        })
+        .collect();
+    store.insert(&hash_hex(&hash.0), SampleData::from_vec(2, 44100, data));
+    let (mut req, slots) = request(p);
+    req.store = Some(Arc::new(store));
+    let progress = AtomicU32::new(0);
+    let cancel = AtomicBool::new(false);
+    let reference = render_range_with_block(&req, &slots, &[], &progress, &cancel, 512)
+        .unwrap()
+        .audio;
+    assert!(peak_of(&reference) > 0.1);
+    for cb in [1usize, 7, 64, 65, 255, 256, 257, 1000, 4096] {
+        let out = render_range_with_block(&req, &slots, &[], &progress, &cancel, cb)
+            .unwrap()
+            .audio;
+        assert!(bits(&out) == bits(&reference), "callback size {cb} differs");
+    }
+}
+
+fn peak_of(v: &[[f32; 2]]) -> f32 {
+    v.iter().flatten().fold(0.0f32, |m, x| m.max(x.abs()))
+}
