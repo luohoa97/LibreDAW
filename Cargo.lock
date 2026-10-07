@@ -886,6 +886,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "libredaw-library"
+version = "0.0.0"
+dependencies = [
+ "libredaw-doc",
+ "libredaw-protocol",
+ "serde",
+ "toml",
+]
+
+[[package]]
 name = "libredaw-mcp"
 version = "0.0.0"
 dependencies = [
