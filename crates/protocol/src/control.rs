@@ -160,6 +160,27 @@ pub enum RequestBody {
         genre: Option<String>,
         tags: Vec<String>,
         limit: u32,
+        /// Free text over name, role, tags, kit and pack.
+        #[serde(default)]
+        query: Option<String>,
+        /// "Surge XT", "FL Studio", "Your Folder".
+        #[serde(default)]
+        source: Option<String>,
+        /// Only sounds in this kit id.
+        #[serde(default)]
+        kit: Option<String>,
+        #[serde(default)]
+        offset: u32,
+    },
+    /// Adds one sound from the catalogue by id, exactly like the Sounds
+    /// pane's "+" (Amendment 19). Needs `base_revision`; replies `Applied`.
+    SoundAdd {
+        id: String,
+        track: Option<crate::ids::TrackId>,
+    },
+    /// Moves the playhead (play from here, go to a drop). Plays on if playing.
+    Seek {
+        tick: u64,
     },
     /// Adds one sampler channel per kit piece in one undo group. `track:
     /// None` creates one new mixer track named after the kit. Needs
@@ -230,6 +251,15 @@ pub struct SoundInfo {
     pub tags: Vec<String>,
     pub pack: String,
     pub kit: Option<String>,
+    /// "Surge XT", "FL Studio", "Your Folder".
+    #[serde(default)]
+    pub source: String,
+    /// "drum kit", "instrument", "single sound".
+    #[serde(default)]
+    pub kind: String,
+    /// Name of the kit the sound belongs to, when `kit` is set.
+    #[serde(default)]
+    pub kit_name: Option<String>,
 }
 
 /// What an agent is working on (18.1, 18.2); the DAW outlines it.
@@ -324,6 +354,10 @@ pub enum ReplyBody {
     Project {
         revision: u64,
         project: Arc<Project>,
+        /// The next id the document will hand out, so batches can name
+        /// what they create without guessing.
+        #[serde(default)]
+        next_id: u32,
     },
     ProjectInfo(ProjectInfo),
     Projects {
@@ -373,6 +407,13 @@ pub enum ReplyBody {
     },
     Sounds {
         sounds: Vec<SoundInfo>,
+        /// Matches before paging.
+        #[serde(default)]
+        total: u32,
+        /// Plain-language notes for the agent, for example that the
+        /// user's FL Studio sounds are not turned on.
+        #[serde(default)]
+        notes: Vec<String>,
     },
     Done,
 }
@@ -445,6 +486,37 @@ pub struct Analysis {
     pub tracks: Vec<TrackLevels>,
     /// Energy share in low (<250 Hz), mid, high (>4 kHz) bands; sums to 1.
     pub band_balance: [f64; 3],
+    /// Levels per bar over the analysed range, so an agent can see where
+    /// the song is quiet, builds, or drops (Amendment 30).
+    #[serde(default)]
+    pub bars: Vec<BarLevels>,
+    /// Sections found from the energy curve.
+    #[serde(default)]
+    pub sections: Vec<Section>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct BarLevels {
+    /// 0-based bar.
+    pub bar: u32,
+    /// Short-term loudness over the bar (LUFS).
+    pub lufs: f64,
+    pub peak_dbfs: f64,
+    /// Low, mid, high energy share; sums to 1 (0s when silent).
+    pub band_balance: [f64; 3],
+    /// Tracks louder than -50 dBFS RMS in this bar.
+    pub active_tracks: Vec<u32>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Section {
+    pub start_bar: u32,
+    /// Exclusive.
+    pub end_bar: u32,
+    /// "intro", "build", "drop", "break" or "outro".
+    pub kind: String,
+    /// Mean short-term loudness (LUFS).
+    pub lufs: f64,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
