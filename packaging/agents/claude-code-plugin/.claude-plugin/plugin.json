@@ -1,0 +1,9 @@
+{
+  "name": "libredaw",
+  "displayName": "LibreDAW",
+  "version": "0.0.0",
+  "description": "Control a running LibreDAW (beats, mixer, export, loudness analysis) through its MCP server.",
+  "author": { "name": "LibreDAW contributors" },
+  "license": "GPL-3.0-or-later",
+  "keywords": ["daw", "music", "audio", "mcp"]
+}
