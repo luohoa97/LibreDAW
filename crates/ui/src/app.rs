@@ -97,6 +97,8 @@ pub enum UiCommand {
     ShowSounds,
     /// Show the notes page of the selected channel and focus the piano roll.
     EditNotes,
+    /// Start renaming a channel in place.
+    RenameChannel(protocol::ids::ChannelId),
     /// Open the inspector on the Agent page.
     ShowAgent,
     /// The agent state changed (banner, indicator, Agent page).
