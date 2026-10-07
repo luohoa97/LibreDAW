@@ -8,6 +8,7 @@ pub mod live;
 pub mod metronome;
 pub mod mixer;
 pub mod plugins;
+pub mod preview;
 pub mod recorder;
 pub mod render;
 pub mod report;

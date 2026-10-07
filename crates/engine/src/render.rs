@@ -74,6 +74,7 @@ pub fn render_with_block(
     let (_ui, ends) = rings();
     let mut rt = Runtime::new(sr, shared, ends);
     rt.set_metronome_allowed(false);
+    rt.set_previews_allowed(false);
     let _ = rt.install(compile(p, slots, sr));
     for &(slot, handle) in plugins {
         rt.command(EngineCommand::AttachPlugin { slot, handle });
