@@ -19,7 +19,7 @@ use serde_json::{Value, json};
 
 use super::exec::{Exec, ToolOutput, call_tool};
 use super::sanitize::clean_text;
-use super::session::{SUGGESTIONS_URI, Session};
+use super::session::{HISTORY_URI, SUGGESTIONS_URI, Session};
 use super::{PROTOCOL_VERSION, prompts, resources, tools};
 use crate::client::{LineReader, ReadLine};
 use crate::state::{HelloErr, MAX_IN_FLIGHT, Out, Shared};
@@ -408,6 +408,16 @@ fn resources_read(ctx: &Ctx, params: &Value) -> Result<Value, RpcError> {
     }
     let (mime, text) = if uri == SUGGESTIONS_URI {
         ("application/json", suggest::pending_resource(&ctx.shared))
+    } else if uri == HISTORY_URI {
+        let exec = Exec::new(Arc::clone(&ctx.shared), Arc::clone(&ctx.session));
+        let out = exec.run(tools::Plan::History {
+            since: None,
+            limit: 30,
+        });
+        if out.is_error {
+            return Err(rpc_err(REFUSED, out.message()));
+        }
+        ("application/json", out.value.to_string())
     } else {
         let exec = Exec::new(Arc::clone(&ctx.shared), Arc::clone(&ctx.session));
         let (rev, project) = exec.project().map_err(|o| rpc_err(REFUSED, o.message()))?;
@@ -416,7 +426,7 @@ fn resources_read(ctx: &Ctx, params: &Value) -> Result<Value, RpcError> {
             None => {
                 return Err(rpc_err(
                     RESOURCE_NOT_FOUND,
-                    format!("that pattern does not exist: {}", clip(uri)),
+                    format!("that content does not exist: {}", clip(uri)),
                 ));
             }
         }
