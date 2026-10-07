@@ -191,7 +191,9 @@ impl Exec {
             Plan::ContentGet(t) => self.content_get(&t),
             Plan::Transport => self.transport(),
             Plan::Job(a) => self.job(&a),
+            Plan::JobQuery { job, cancel } if job == crate::hum::JOB => self.hum_query(cancel),
             Plan::JobQuery { job, cancel } => self.job_query(job, cancel),
+            Plan::Hum(p) => self.hum(&p),
             Plan::Undo { redo, steps } => self.undo(redo, steps),
             Plan::History { since, limit } => self.history(since, limit),
             Plan::HistoryDiff { from, to } => self.history_diff(from, to),
@@ -640,6 +642,91 @@ impl Exec {
         }
     }
 
+    /// `hum_prepare`: shows the Hum sheet, waits for the user, and reports
+    /// the notes. Only the user opens the microphone.
+    fn hum(&self, p: &crate::hum::Prepare) -> Out<ToolOutput> {
+        let focus = p
+            .instrument
+            .map(|i| protocol::control::Focus::Channel(protocol::ids::ChannelId(i)));
+        self.body(
+            RequestBody::SetActivity {
+                text: Some(crate::hum::encode(p)),
+                focus,
+            },
+            None,
+        )?;
+        let deadline = Instant::now() + self.shared.job_wait;
+        loop {
+            let ReplyBody::JobStatus { state, .. } =
+                self.body(RequestBody::JobStatus { job: crate::hum::JOB }, None)?
+            else {
+                return Err(unexpected("the hum state"));
+            };
+            match state {
+                JobState::Done => return self.hum_done(),
+                JobState::Cancelled | JobState::Failed => return Ok(hum_declined()),
+                JobState::Queued | JobState::Running => {}
+            }
+            if Instant::now() >= deadline {
+                return Ok(hum_waiting());
+            }
+            thread::sleep(Duration::from_millis(100));
+        }
+    }
+
+    /// `job` with the hum job id: the same answers as `hum_prepare`.
+    fn hum_query(&self, cancel: bool) -> Out<ToolOutput> {
+        if cancel {
+            self.body(RequestBody::JobCancel { job: crate::hum::JOB }, None)?;
+            return Ok(hum_declined());
+        }
+        let ReplyBody::JobStatus { state, .. } =
+            self.body(RequestBody::JobStatus { job: crate::hum::JOB }, None)?
+        else {
+            return Err(unexpected("the hum state"));
+        };
+        match state {
+            JobState::Done => self.hum_done(),
+            JobState::Cancelled | JobState::Failed => Ok(hum_declined()),
+            JobState::Queued | JobState::Running => Ok(hum_waiting()),
+        }
+    }
+
+    fn hum_done(&self) -> Out<ToolOutput> {
+        let ReplyBody::Applied(applied) =
+            self.body(RequestBody::JobResult { job: crate::hum::JOB }, None)?
+        else {
+            return Err(unexpected("the hum result"));
+        };
+        let (_, project) = self.project()?;
+        let clip = applied
+            .created
+            .last()
+            .and_then(|id| project.clips.iter().find(|c| c.id.0 == *id))
+            .ok_or_else(|| ToolOutput::error("not_found", "the hum clip is gone"))?;
+        let pattern = project
+            .pattern(clip.pattern)
+            .ok_or_else(|| ToolOutput::error("not_found", "the hum content is gone"))?;
+        let tpb = ticks_per_bar(project.time_sig_num);
+        let weights: Vec<(u8, f32)> = pattern.notes.iter().map(|n| (n.key, n.len as f32)).collect();
+        let key = crate::hum::detect_key(&weights).map(|k| k.name());
+        let text = notes::format_notes(&pattern.notes, tpb);
+        Ok(ToolOutput::ok(json!({
+            "state": "done",
+            "clip": clip.id.0,
+            "content": pattern.id.0,
+            "instrument": clip.instrument.0,
+            "starts_at_bar": notes::fraction(clip.start, tpb),
+            "bars": notes::fraction(clip.len, tpb),
+            "key": key,
+            "tempo_bpm": project.tempo_bpm,
+            "time_signature": format!("{}/4", project.time_sig_num),
+            "note_count": pattern.notes.len(),
+            "notes": text,
+            "note": "Notes are note:start:length in bars from the clip start. Compose around them with clips_add and notes edits.",
+        })))
+    }
+
     fn job_result(&self, job: u64) -> Out<ToolOutput> {
         let body = self.body(RequestBody::JobResult { job }, None)?;
         let mut v = serde_json::to_value(&body).unwrap_or(Value::Null);
@@ -984,4 +1071,19 @@ fn wrong_guess(e: &ControlError, predicted: &[u32]) -> bool {
         _ => return false,
     };
     predicted.contains(&id)
+}
+
+fn hum_declined() -> ToolOutput {
+    ToolOutput::ok(json!({
+        "state": "declined",
+        "note": "The user closed the hum sheet without humming. Carry on without a hum, and do not ask again unless they say so.",
+    }))
+}
+
+fn hum_waiting() -> ToolOutput {
+    ToolOutput::ok(json!({
+        "state": "waiting",
+        "job": crate::hum::JOB,
+        "note": "The user has not finished humming yet. Call job with this job id to check again.",
+    }))
 }
