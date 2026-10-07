@@ -33,4 +33,16 @@ lockfile) under `cargo/vendor/`, with `.cargo-checksum.json` files and a
   from `~/.clap` (read-only). Host plugins in `/usr/lib/clap` are not visible
   inside the sandbox.
 - Scripting is disabled in the Flatpak (no `deno` in the sandbox).
+- Findings from the first test build (Flatpak 1.18, GNOME 50):
+  - Flatpak 1.18 rejects `--socket=pipewire`; the manifest uses
+    `--filesystem=xdg-run/pipewire-0` for now.
+  - `APP_ID` in `crates/ui/src/run.rs` must be `io.github.luohoa97.LibreDAW`
+    (the app cannot own another D-Bus name in the sandbox).
+  - Real-time priority is not granted inside the sandbox: audio runs through
+    PipeWire but `pw_out` stays SCHED_OTHER (the host build gets SCHED_RR).
+    RealtimeKit calls from a sandbox carry sandbox pid/tid; the realtime
+    portal (`org.freedesktop.portal.Realtime.MakeThreadRealtimeWithPID`)
+    translates them. The engine needs a portal path when `/.flatpak-info` exists.
+  - `flatpak-builder` needs the system `appstreamcli` (with compose) first on
+    `PATH`; the Homebrew build lacks `appstreamcli-compose`.
 - Agents: `flatpak run --command=libredaw-mcp io.github.luohoa97.LibreDAW`.

@@ -18,14 +18,17 @@ sdk-extensions:
 command: libredaw
 
 finish-args:
-  - --socket=pipewire
+  # Flatpak 1.18 rejects --socket=pipewire; use the PipeWire socket path.
+  # TODO: switch to --socket=pipewire when the minimum Flatpak supports it.
+  - --filesystem=xdg-run/pipewire-0
   - --socket=wayland
   - --socket=fallback-x11 # also needed for plugin windows (SPEC 9.2)
   - --share=ipc
   - --device=dri
-  # Real-time priority: rtkit over the session bus (the realtime portal
-  # also uses it).
+  # Real-time priority: RealtimeKit lives on the system bus; the session talk
+  # name is kept for the realtime portal. See packaging/flatpak/README.md.
   - --talk-name=org.freedesktop.RealtimeKit1
+  - --system-talk-name=org.freedesktop.RealtimeKit1
   - --filesystem=xdg-music
   - --filesystem=~/.clap:ro
   - --env=CLAP_PATH=/app/extensions/Plugins/clap
