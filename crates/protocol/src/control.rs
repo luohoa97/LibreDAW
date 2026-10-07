@@ -337,7 +337,10 @@ pub enum ControlError {
     Denied,
     /// This transport may not send this request.
     NotAllowed,
+    /// An edit in a batch failed; nothing in the batch was applied.
+    /// `index` is the position of the failing edit in `RequestBody::Edit`.
     Edit {
+        index: Option<u32>,
         error: EditError,
     },
     NotFound {
@@ -357,7 +360,7 @@ pub enum ControlError {
 
 impl From<EditError> for ControlError {
     fn from(error: EditError) -> ControlError {
-        ControlError::Edit { error }
+        ControlError::Edit { index: None, error }
     }
 }
 
