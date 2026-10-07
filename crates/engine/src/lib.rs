@@ -3,9 +3,11 @@
 //! stream, offline render and WAV writer.
 
 pub mod api;
+pub mod audioclip;
 pub mod audition;
 pub mod bass808;
 pub mod capture;
+pub mod chanfilter;
 pub mod compiled;
 pub mod fx;
 pub mod groove;
@@ -25,6 +27,7 @@ pub mod runtime;
 pub mod sampler;
 pub mod samples;
 pub mod sequencer;
+pub mod shapes;
 pub mod synth;
 pub mod tables;
 #[cfg(test)]

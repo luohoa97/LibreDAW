@@ -45,6 +45,11 @@ fn exp_coef(ms: f64, sr: f64) -> f64 {
 }
 
 impl BassCtl {
+    /// Adds a pitch shape's offset (24.2-1).
+    pub fn shift_semitones(&mut self, st: f32) {
+        self.tune += st;
+    }
+
     pub fn read(params: &ParamTable, slot: ChannelSlot, sr: f64) -> BassCtl {
         let p = |q: Bass808Param| params.get(param_index(slot, q.index()));
         use Bass808Param::*;

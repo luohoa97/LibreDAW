@@ -123,7 +123,19 @@ pub struct Sequencer {
     /// Absolute sample of the next sub-block start.
     pub pos: u64,
     pub loops: u64,
+    /// Musical position inside the last scheduled sub-block: `(offset,
+    /// tick at offset)`, one entry per stretch that runs at the tempo
+    /// without a jump (a loop wrap starts a new one). Empty when not
+    /// playing. Audio clips follow it (21.1).
+    segs: [(u32, f64); MAX_SEGS],
+    n_segs: usize,
+    /// Frame at which playback ended inside the last sub-block (the
+    /// arrangement end), else the block length.
+    play_until: u32,
 }
+
+/// Stretches per sub-block (a loop shorter than a block can wrap more).
+pub const MAX_SEGS: usize = 8;
 
 impl Sequencer {
     pub fn new(sample_rate: f64, bpm: f64) -> Sequencer {
@@ -147,6 +159,31 @@ impl Sequencer {
             next_beat: 0,
             pos: 0,
             loops: 0,
+            segs: [(0, 0.0); MAX_SEGS],
+            n_segs: 0,
+            play_until: 0,
+        }
+    }
+
+    /// Samples per tick at the current tempo.
+    pub fn samples_per_tick(&self) -> f64 {
+        self.spt
+    }
+
+    /// The stretches of the last scheduled sub-block and the frame where
+    /// playback stopped inside it.
+    pub fn segments(&self) -> (&[(u32, f64)], u32) {
+        (&self.segs[..self.n_segs], self.play_until)
+    }
+
+    /// Exact position in ticks at absolute sample `sample` on the current
+    /// anchor while playing; the resting playhead while stopped. Never
+    /// negative.
+    pub fn tick_at(&self, sample: u64) -> f64 {
+        if self.playing {
+            self.transport.tick_at(sample).max(0.0)
+        } else {
+            self.start_tick.max(0) as f64
         }
     }
 
@@ -344,11 +381,15 @@ impl Sequencer {
         events: &mut Vec<SeqEvent>,
         beats: &mut Vec<Beat>,
     ) {
+        self.n_segs = 0;
+        self.play_until = n as u32;
         if !self.playing {
             return;
         }
         let start = self.pos;
         let end = start + n as u64;
+        self.segs[0] = (0, self.transport.tick_at(start));
+        self.n_segs = 1;
         let pat = &c.song;
         // The boundary that can still fire: the loop end, else the
         // arrangement end (20.2).
@@ -415,6 +456,13 @@ impl Sequencer {
                     self.live_slots = 0;
                     let (ls, le) = wrap.expect("wrap needs a loop region");
                     self.transport.wrap(le - ls);
+                    let seg = (offset, self.transport.tick_at(s));
+                    if self.segs[self.n_segs - 1].0 == offset {
+                        self.segs[self.n_segs - 1] = seg;
+                    } else if self.n_segs < MAX_SEGS {
+                        self.segs[self.n_segs] = seg;
+                        self.n_segs += 1;
+                    }
                     for &s in &c.song.active_slots {
                         self.cursors[s as usize] = c.song.notes[s as usize]
                             .partition_point(|n| (n.start as i64) < ls)
@@ -428,6 +476,7 @@ impl Sequencer {
                     self.playing = false;
                     self.start_tick = 0;
                     self.finished = true;
+                    self.play_until = offset;
                     break;
                 }
                 Kind::On => {
