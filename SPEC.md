@@ -639,8 +639,11 @@ Audio sync (needs approval: syscall exception):
 
 - Runtime: the `deno` CLI as a child process, found on `PATH`, minimum
   version pinned in the code. LibreDAW never ships or downloads `deno`.
-  Launched with `deno run --no-prompt --deny-all` plus `--allow-read` of the
-  script file only. Protocol: newline-delimited JSON over stdin/stdout
+  Launched with no permissions except read of the script file: `deno run
+  --no-prompt --deny-net --deny-env --deny-run --deny-write --deny-sys
+  --deny-ffi --deny-import --allow-read=<script> --no-remote --no-npm
+  --no-config --no-lock` plus an import map for `libredaw` (deno 2.x has no
+  `--deny-all`). Protocol: newline-delimited JSON over stdin/stdout
   (`serde_json`).
 - Why not embedded `deno_core`: no prebuilt V8 static library and hundreds
   of crates in our build; a hung or crashed script cannot freeze the UI;
