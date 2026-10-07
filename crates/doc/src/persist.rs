@@ -85,7 +85,9 @@ pub struct LastSession {
     pub note: Option<String>,
 }
 
-pub(crate) fn quote(s: &str) -> String {
+/// Wraps `s` in double quotes, escaping `"`, `\` and newlines; other control
+/// characters are dropped. The inverse of [`unquote`].
+pub fn quote(s: &str) -> String {
     let mut o = String::from("\"");
     for c in s.chars() {
         match c {
@@ -100,7 +102,9 @@ pub(crate) fn quote(s: &str) -> String {
     o
 }
 
-pub(crate) fn unquote(s: &str) -> Option<String> {
+/// Reads a string written by [`quote`]; `None` if it is not a well-formed
+/// quoted string.
+pub fn unquote(s: &str) -> Option<String> {
     let s = s.trim().strip_prefix('"')?.strip_suffix('"')?;
     let mut o = String::new();
     let mut it = s.chars();
@@ -119,7 +123,9 @@ pub(crate) fn unquote(s: &str) -> Option<String> {
     Some(o)
 }
 
-pub(crate) fn key_values(text: &str) -> Vec<(&str, &str)> {
+/// The `key = value` lines of a tiny TOML-like file, trimmed; comments, blank
+/// lines and lines without `=` are skipped.
+pub fn key_values(text: &str) -> Vec<(&str, &str)> {
     text.lines()
         .filter_map(|l| {
             let l = l.trim();
@@ -175,6 +181,9 @@ impl LastSession {
 // ---------------------------------------------------------------------------
 // .view.toml: how the window looked (not part of the project format).
 
+const PAGES: [&str; 3] = ["pattern", "song", "mixer"];
+const FOCUSES: [&str; 3] = ["both", "steps", "notes"];
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct ViewState {
     pub pattern: Option<u32>,
@@ -185,9 +194,14 @@ pub struct ViewState {
     pub scroll_x: f64,
     pub scroll_y: f64,
     pub snap: u32,
-    /// Divider positions in pixels: rack over roll, and left over mixer.
-    pub split_rack: i32,
-    pub split_mixer: i32,
+    /// Page shown: "pattern", "song", or "mixer".
+    pub page: String,
+    /// "both", "steps", or "notes": what the Pattern page shows.
+    pub focus: String,
+    pub sounds_open: bool,
+    pub inspector_open: bool,
+    /// Share of the Pattern page height given to steps, 0.1 to 0.9.
+    pub split: f64,
 }
 
 impl Default for ViewState {
@@ -201,8 +215,11 @@ impl Default for ViewState {
             scroll_x: 0.0,
             scroll_y: 0.0,
             snap: 0,
-            split_rack: 250,
-            split_mixer: 820,
+            page: "pattern".into(),
+            focus: "both".into(),
+            sounds_open: false,
+            inspector_open: false,
+            split: 0.42,
         }
     }
 }
@@ -224,8 +241,11 @@ impl ViewState {
         o.push_str(&format!("scroll_x = {}\n", self.scroll_x));
         o.push_str(&format!("scroll_y = {}\n", self.scroll_y));
         o.push_str(&format!("snap = {}\n", self.snap));
-        o.push_str(&format!("split_rack = {}\n", self.split_rack));
-        o.push_str(&format!("split_mixer = {}\n", self.split_mixer));
+        o.push_str(&format!("page = {}\n", quote(&self.page)));
+        o.push_str(&format!("focus = {}\n", quote(&self.focus)));
+        o.push_str(&format!("sounds_open = {}\n", self.sounds_open));
+        o.push_str(&format!("inspector_open = {}\n", self.inspector_open));
+        o.push_str(&format!("split = {}\n", self.split));
         o
     }
 
@@ -244,8 +264,19 @@ impl ViewState {
                 "scroll_x" => v.scroll_x = f(val).unwrap_or(v.scroll_x),
                 "scroll_y" => v.scroll_y = f(val).unwrap_or(v.scroll_y),
                 "snap" => v.snap = val.parse().unwrap_or(v.snap),
-                "split_rack" => v.split_rack = val.parse().unwrap_or(v.split_rack),
-                "split_mixer" => v.split_mixer = val.parse().unwrap_or(v.split_mixer),
+                "page" => {
+                    if let Some(p) = unquote(val).filter(|p| PAGES.contains(&p.as_str())) {
+                        v.page = p;
+                    }
+                }
+                "focus" => {
+                    if let Some(p) = unquote(val).filter(|p| FOCUSES.contains(&p.as_str())) {
+                        v.focus = p;
+                    }
+                }
+                "sounds_open" => v.sounds_open = val.parse().unwrap_or(v.sounds_open),
+                "inspector_open" => v.inspector_open = val.parse().unwrap_or(v.inspector_open),
+                "split" => v.split = f(val).map(|x| x.clamp(0.1, 0.9)).unwrap_or(v.split),
                 _ => {}
             }
         }
