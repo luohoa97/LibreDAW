@@ -13,7 +13,7 @@ use protocol::engine::{ControlTable, EngineCommand, EngineEvent, EngineStatus, P
 use rtrb::Consumer;
 use rtrb::PushError;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering::Relaxed};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering::Relaxed};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
@@ -70,6 +70,56 @@ struct Flags {
 /// Callback index at which the scheduling policy is read (cpal promotes the
 /// thread from a helper, so the first callbacks may still be SCHED_OTHER).
 const SCHED_PROBE_AFTER: u32 = 100;
+
+/// Per-callback timing the audio thread records for load measurements
+/// (`loadbench`). All storage is allocated up front; the callback only does
+/// relaxed atomic stores, so recording never allocates or blocks.
+pub struct CallbackProbe {
+    /// Time spent in the engine's process call, nanoseconds.
+    proc_ns: Box<[AtomicU64]>,
+    /// Frames of the callback.
+    frames: Box<[AtomicU32]>,
+    count: AtomicUsize,
+    /// Callbacks that did not fit.
+    pub overflow: AtomicU64,
+    /// Starts more than 1.5 periods after the previous one (after warm-up).
+    pub gap_xruns: AtomicU64,
+    /// `ErrorKind::Xrun` reported by the backend.
+    pub backend_xruns: AtomicU64,
+}
+
+impl CallbackProbe {
+    pub fn new(capacity: usize) -> Arc<CallbackProbe> {
+        Arc::new(CallbackProbe {
+            proc_ns: (0..capacity).map(|_| AtomicU64::new(0)).collect(),
+            frames: (0..capacity).map(|_| AtomicU32::new(0)).collect(),
+            count: AtomicUsize::new(0),
+            overflow: AtomicU64::new(0),
+            gap_xruns: AtomicU64::new(0),
+            backend_xruns: AtomicU64::new(0),
+        })
+    }
+
+    fn record(&self, frames: usize, proc_ns: u64) {
+        let i = self.count.load(Relaxed);
+        if i < self.proc_ns.len() {
+            self.proc_ns[i].store(proc_ns, Relaxed);
+            self.frames[i].store(frames as u32, Relaxed);
+            self.count.store(i + 1, Relaxed);
+        } else {
+            self.overflow.fetch_add(1, Relaxed);
+        }
+    }
+
+    /// `(process nanoseconds, frames)` per callback, in order. Call after
+    /// the engine has stopped.
+    pub fn samples(&self) -> Vec<(u64, u32)> {
+        let n = self.count.load(Relaxed);
+        (0..n)
+            .map(|i| (self.proc_ns[i].load(Relaxed), self.frames[i].load(Relaxed)))
+            .collect()
+    }
+}
 
 /// Frees compiled states the audio thread retired (SPEC 3.1, 4.2).
 struct Disposal {
@@ -159,6 +209,15 @@ impl Engine {
     /// Opens the stream and starts calling the engine. Per SPEC 4.7 the
     /// caller recompiles and restarts after a device or rate change.
     pub fn start(cfg: &EngineConfig, first: Box<Compiled>) -> Result<Engine, EngineError> {
+        Engine::start_with_probe(cfg, first, None)
+    }
+
+    /// As `start`, and records every callback's processing time in `probe`.
+    pub fn start_with_probe(
+        cfg: &EngineConfig,
+        first: Box<Compiled>,
+        probe: Option<Arc<CallbackProbe>>,
+    ) -> Result<Engine, EngineError> {
         let (id, host_name) = host_id(cfg.host);
         let host = cpal::host_from_id(id)
             .map_err(|e| EngineError::Device(format!("{host_name} host unavailable: {e}")))?;
@@ -219,6 +278,8 @@ impl Engine {
         let err_status = shared.status.clone();
         let mut calls: u32 = 0;
         let mut last: Option<Instant> = None;
+        let cb_probe = probe.clone();
+        let err_probe = probe;
 
         let stream = device
             .build_output_stream::<f32, _, _>(
@@ -233,9 +294,15 @@ impl Engine {
                             > 1.5 * frames as f64 / rate as f64
                     {
                         cb_status.xruns.fetch_add(1, Relaxed);
+                        if let Some(p) = &cb_probe {
+                            p.gap_xruns.fetch_add(1, Relaxed);
+                        }
                     }
                     last = Some(now);
                     runtime.process_interleaved(data);
+                    if let Some(p) = &cb_probe {
+                        p.record(frames, now.elapsed().as_nanos() as u64);
+                    }
                     if calls == SCHED_PROBE_AFTER {
                         let (policy, prio, _) = crate::rt::thread_sched();
                         let v = (1u64 << 63) | ((policy as u32 as u64) << 32) | prio as u32 as u64;
@@ -245,6 +312,9 @@ impl Engine {
                 move |e| match e.kind() {
                     ErrorKind::Xrun => {
                         err_status.xruns.fetch_add(1, Relaxed);
+                        if let Some(p) = &err_probe {
+                            p.backend_xruns.fetch_add(1, Relaxed);
+                        }
                     }
                     ErrorKind::DeviceNotAvailable
                     | ErrorKind::StreamInvalidated
