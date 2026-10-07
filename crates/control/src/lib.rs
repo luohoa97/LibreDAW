@@ -10,6 +10,8 @@
 //! No GTK dependency: `ui` calls `poll` from its 10 ms tick.
 
 pub mod analysis;
+#[cfg(test)]
+mod analysis_tests;
 mod client;
 mod socket;
 mod state;
