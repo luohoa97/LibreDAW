@@ -225,11 +225,11 @@ mod tests {
     #[test]
     fn a_climb_is_a_build_and_a_dip_after_the_drop_is_a_break() {
         let v = [
-            -30.0, -30.0, -28.0, -25.0, -22.0, -19.0, // build from bar 1.. to the drop
-            -12.0, -12.0, -12.0, -12.0, // drop
-            -26.0, -26.0, // break
-            -12.0, -12.0, -12.0, // drop again
-            -24.0, -28.0, // outro
+            -30.0, -30.0, -29.0, -28.0, -27.0, -26.0, // a slow climb from bar 1
+            -17.0, -17.0, -17.0, -17.0, // drop
+            -30.0, -30.0, // break
+            -17.0, -17.0, -17.0, // drop again
+            -26.0, -30.0, // outro
         ];
         let s = sections(&levels(&v));
         let k: Vec<&str> = s.iter().map(|s| s.kind.as_str()).collect();
