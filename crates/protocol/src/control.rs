@@ -62,6 +62,47 @@ pub enum RequestBody {
     Undo,
     Redo,
     History,
+    /// The change tree (15.11, 15.12): every commit with its parent, author, and
+    /// name, newest first; `since` returns only commits after that one.
+    HistoryTree {
+        since: Option<String>,
+        limit: u32,
+    },
+    /// Compact description of what changed between two commits.
+    HistoryDiff {
+        from: String,
+        to: String,
+    },
+    /// Names the current commit (a version).
+    VersionSave {
+        name: String,
+    },
+    /// Starts a named branch at `from` (default: the current commit) and
+    /// makes it current; following edits go onto it (15.11). Used for
+    /// alternatives such as "three versions of this song".
+    BranchCreate {
+        name: String,
+        from: Option<String>,
+    },
+    /// Makes a branch current (its head becomes the project state).
+    /// Undoable; needs `base_revision`.
+    BranchSwitch {
+        branch: String,
+    },
+    BranchList,
+    BranchRename {
+        branch: String,
+        name: String,
+    },
+    /// Hides a branch from the version list; its commits are kept.
+    BranchArchive {
+        branch: String,
+    },
+    /// Makes an older commit current again as a new commit on top of the
+    /// head (nothing is lost; undoable). Needs `base_revision`.
+    VersionRestore {
+        commit: String,
+    },
 
     // Jobs (17.1)
     /// Renders the timeline from `start` to `end` ticks (default: the loop
@@ -285,6 +326,17 @@ pub enum ReplyBody {
     History {
         entries: Vec<HistoryEntry>,
     },
+    HistoryTree {
+        head: String,
+        nodes: Vec<HistoryNode>,
+    },
+    HistoryDiff {
+        lines: Vec<String>,
+    },
+    Branches {
+        current: String,
+        branches: Vec<BranchInfo>,
+    },
     /// A job was started; poll it with `JobStatus`.
     Job {
         job: u64,
@@ -317,6 +369,34 @@ pub struct ProjectInfo {
     pub tempo_bpm: f64,
     pub modified_unix_s: u64,
     pub dirty: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct BranchInfo {
+    /// Stable id (also accepted wherever a branch is named).
+    pub branch: String,
+    /// Display name, untrusted when an agent chose it.
+    pub name: String,
+    pub head: String,
+    /// Commit the branch started from.
+    pub base: String,
+    pub author: String,
+    pub archived: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct HistoryNode {
+    pub commit: String,
+    pub parent: Option<String>,
+    /// Branch the commit belongs to.
+    pub branch: String,
+    /// `user`, `script`, or `agent:<session>`.
+    pub author: String,
+    /// Untrusted when written by an agent (`agent_string`).
+    pub description: String,
+    pub unix_ms: u64,
+    /// Version name, if the commit was named.
+    pub name: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
