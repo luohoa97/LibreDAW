@@ -12,6 +12,7 @@ members = [
     "crates/doc",
     "crates/library",
     "crates/audiofile",
+    "crates/transcribe",
 ]
 
 [workspace.package]
@@ -19,3 +20,8 @@ version = "0.0.0"
 edition = "2024"
 license = "GPL-3.0-or-later"
 publish = false
+
+# tract's debug assertions reject a fact its own optimizer produces for the
+# Basic Pitch model (crates/transcribe); release builds are unaffected.
+[profile.dev.package.tract-core]
+debug-assertions = false
