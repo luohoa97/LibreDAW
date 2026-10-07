@@ -232,7 +232,7 @@ impl ChannelList {
                         s.document().project.channel(id).map(|c| c.root_key)
                     };
                     if let Some(k) = key {
-                        a.preview_pulse(id, k, crate::document::DEFAULT_STEP_VEL, 250);
+                        a.preview_pulse(id, k, doc::document::DEFAULT_STEP_VEL, 250);
                     }
                 }
             });

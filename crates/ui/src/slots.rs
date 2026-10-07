@@ -16,8 +16,9 @@ use std::collections::HashMap;
 
 use protocol::engine::{ChannelSlot, PluginSlot, SlotGen, TrackSlot};
 use protocol::ids::{ChannelId, InstanceId, TrackId};
-use protocol::model::{Insert, Instrument, Project};
+use protocol::model::{Instrument, Project};
 
+use crate::change::clap_of;
 use crate::engine_adapter::Slots;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -78,7 +79,12 @@ impl SlotAllocator {
         }
         for t in &p.tracks {
             if let Some((slot, _)) = self.track_slot(t.id) {
-                for (i, Insert::Clap(r)) in t.inserts.iter().enumerate() {
+                for (i, r) in t
+                    .inserts
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(i, x)| clap_of(x).map(|r| (i, r)))
+                {
                     m.insert(
                         r.instance,
                         PluginSlot::Insert {
@@ -96,12 +102,49 @@ impl SlotAllocator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::document::tests::{Rng, random_edit};
-    use crate::document::{Document, apply};
+    use doc::document::{Document, apply};
     use protocol::consts::TRACK_SLOTS;
     use protocol::edit::{Edit, NewInstrument};
     use protocol::model::SynthParams;
     use std::collections::HashSet;
+
+    /// A small seeded generator: enough edits to churn slots.
+    struct Rng(u64);
+
+    impl Rng {
+        fn next(&mut self) -> u64 {
+            self.0 ^= self.0 << 13;
+            self.0 ^= self.0 >> 7;
+            self.0 ^= self.0 << 17;
+            self.0
+        }
+    }
+
+    fn random_edit(r: &mut Rng, d: &Document) -> Edit {
+        let p = &d.project;
+        match r.next() % 6 {
+            0 | 1 => Edit::AddChannel {
+                name: "c".into(),
+                instrument: NewInstrument::Synth {
+                    params: SynthParams::default(),
+                },
+                root_key: 60,
+                track: TrackId::MASTER,
+            },
+            2 => Edit::AddTrack { name: "t".into() },
+            3 if !p.channels.is_empty() => Edit::RemoveChannel {
+                channel: p.channels[r.next() as usize % p.channels.len()].id,
+            },
+            4 if p.tracks.len() > 1 => Edit::RemoveTrack {
+                track: p.tracks[1 + r.next() as usize % (p.tracks.len() - 1)].id,
+            },
+            _ => Edit::AddInsert {
+                track: p.tracks[r.next() as usize % p.tracks.len()].id,
+                index: 0,
+                plugin_id: "a.b".into(),
+            },
+        }
+    }
 
     fn add_channel(d: &Document) -> (Document, ChannelId) {
         let (d, ids) = apply(

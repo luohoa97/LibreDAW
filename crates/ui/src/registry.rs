@@ -19,12 +19,13 @@ use std::sync::Arc;
 use protocol::consts::MAX_BLOCK;
 use protocol::engine::{EngineCommand, PluginEvent, PluginSlot};
 use protocol::ids::InstanceId;
-use protocol::model::{ClapRef, Insert, Instrument, Project};
+use protocol::model::{ClapRef, Instrument, Project};
 
-use crate::document::{next_generation, state_file_name};
+use crate::change::clap_of;
 use crate::engine_adapter::EngineLink;
 use crate::plugin_adapter::{self, HostError, Instance, PluginDesc, PluginOut};
 use crate::slots::SlotAllocator;
+use doc::document::{next_generation, state_file_name};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Phase {
@@ -119,7 +120,7 @@ pub fn clap_ref(p: &Project, id: InstanceId) -> Option<&ClapRef> {
         }
     }
     for t in &p.tracks {
-        for Insert::Clap(r) in &t.inserts {
+        for r in t.inserts.iter().filter_map(clap_of) {
             if r.instance == id {
                 return Some(r);
             }
@@ -487,7 +488,7 @@ mod tests {
 
     #[test]
     fn registry_without_plugins_reconciles_to_nothing() {
-        use crate::document::Document;
+        use doc::document::Document;
         let mut reg = Registry::new(Vec::new(), 48000.0);
         let mut slots = SlotAllocator::new();
         let d = Document::new();
@@ -500,7 +501,7 @@ mod tests {
 
     #[test]
     fn missing_plugin_becomes_a_notice_once() {
-        use crate::document::{Document, apply};
+        use doc::document::{Document, apply};
         use protocol::edit::{Edit, NewInstrument};
         use protocol::ids::TrackId;
         let (d, _) = apply(

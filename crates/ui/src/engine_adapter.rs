@@ -24,11 +24,16 @@ use protocol::model::Project;
 use crate::compiler::CompileJob;
 use crate::slots::SlotAllocator;
 
-pub use engine::{Compiled, EngineConfig, EngineError, Host, Slots};
+pub use engine::{Compiled, EngineConfig, EngineError, Host, SampleStore, Slots};
 
 /// Runs on the compiler thread.
 pub fn compile(job: &CompileJob) -> Box<Compiled> {
-    engine::compile(&job.project, &job.slots.inner, job.sample_rate)
+    engine::compile_with(
+        &job.project,
+        &job.slots.inner,
+        job.sample_rate,
+        job.store.as_deref(),
+    )
 }
 
 /// Writes every control and parameter value of `project` (4.3, 17.1).
@@ -49,12 +54,18 @@ pub fn devices(host: Host) -> Vec<String> {
     engine::Engine::devices(host)
 }
 
-/// What to render: a pinned project, a pattern, loops, and a rate.
+/// What to render: a pinned project, a pattern (or the whole song), loops,
+/// and a rate.
 pub struct RenderJob {
     pub project: Arc<Project>,
     pub pattern: PatternId,
     pub loops: u32,
     pub sample_rate: u32,
+    /// `Some(tail)` renders the whole playlist plus `tail` seconds instead
+    /// of `pattern` (15.6).
+    pub song_tail: Option<f64>,
+    /// Decoded samples for samplers.
+    pub store: Option<Arc<SampleStore>>,
 }
 
 /// Offline render on the calling thread (8). `plugins` are export instances
@@ -66,6 +77,14 @@ pub fn render(
     progress: &AtomicU32,
     cancel: &AtomicBool,
 ) -> Result<Vec<[f32; 2]>, EngineError> {
+    if let Some(tail) = job.song_tail {
+        let req = engine::SongRequest {
+            project: job.project,
+            tail_seconds: tail,
+            sample_rate: job.sample_rate,
+        };
+        return engine::render_song(&req, &slots.inner, plugins, progress, cancel);
+    }
     let req = engine::RenderRequest {
         project: job.project,
         pattern: job.pattern,

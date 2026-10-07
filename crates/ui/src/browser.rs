@@ -14,7 +14,7 @@ use protocol::model::Instrument;
 
 use crate::app::App;
 use crate::channels::{self, NewChannel};
-use crate::presets::{self, Preset};
+use doc::presets::{self, Preset};
 
 /// The label of a role in the filter row and the subtitle.
 pub fn role_label(role: &str) -> &str {

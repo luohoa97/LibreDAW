@@ -37,7 +37,6 @@ use protocol::ids::{ChannelId, NoteId, PatternId};
 use protocol::model::Note;
 
 use crate::app::App;
-use crate::document::DEFAULT_STEP_VEL;
 use crate::draw::{self, Palette, mix};
 use crate::palette::{self, Role};
 use crate::perf;
@@ -47,6 +46,7 @@ use crate::roll_logic::{
     note_rect, notes_in_box, prune_selection, vel_to_y, with_pattern,
 };
 use crate::view_math::{self as vm, SNAPS, Viewport, note_name};
+use doc::document::DEFAULT_STEP_VEL;
 
 /// Corner points of a box selection.
 type Marquee = ((f64, f64), (f64, f64));
@@ -722,6 +722,8 @@ impl PianoRoll {
                             len: snap,
                             key: key as u8,
                             vel: DEFAULT_STEP_VEL,
+                            off: 0,
+                            repeat: 1,
                         };
                         *imp.drag.borrow_mut() = Some(Drag::new(
                             DragKind::Resize,
@@ -1475,6 +1477,8 @@ mod tests {
             len: 240,
             key,
             vel: 100,
+            off: 0,
+            repeat: 1,
         }
     }
 

@@ -7,12 +7,29 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use protocol::beats::BuiltinFx;
 use protocol::edit::Edit;
 use protocol::engine::PluginEvent;
 use protocol::ids::InstanceId;
 use protocol::model::{Channel, Insert, Instrument, Mix, Project, SynthParams, Track};
 
 use crate::slots::SlotAllocator;
+use protocol::model::ClapRef;
+
+/// The CLAP plugin of an insert, if it is one.
+pub fn clap_of(i: &Insert) -> Option<&ClapRef> {
+    match i {
+        Insert::Clap(r) => Some(r),
+        Insert::Builtin { .. } => None,
+    }
+}
+
+fn clap_mut(i: &mut Insert) -> Option<&mut ClapRef> {
+    match i {
+        Insert::Clap(r) => Some(r),
+        Insert::Builtin { .. } => None,
+    }
+}
 
 fn norm_channel(c: &Channel) -> Channel {
     let mut c = c.clone();
@@ -32,19 +49,49 @@ fn norm_channel(c: &Channel) -> Channel {
             r.state_bytes = None;
             r.plugin_version.clear();
         }
+        Instrument::Sampler(s) => {
+            // Sample, mode and direction are structural; the knobs are not.
+            s.params = Default::default();
+        }
+        Instrument::Bass808(b) => {
+            // Mono is structural; the knobs are not.
+            b.params = Default::default();
+        }
     }
     c
+}
+
+/// A built-in effect with its continuous parameters reset; kind, curve,
+/// ping-pong and sidechain source stay because they are structural.
+fn norm_fx(fx: &mut BuiltinFx) {
+    match fx {
+        BuiltinFx::Eq { params } => *params = Default::default(),
+        BuiltinFx::Compressor { params, .. } => *params = Default::default(),
+        BuiltinFx::Saturator { params, .. } => *params = Default::default(),
+        BuiltinFx::Reverb { params } => *params = Default::default(),
+        BuiltinFx::Delay { params, .. } => *params = Default::default(),
+        BuiltinFx::Limiter { params } => *params = Default::default(),
+    }
 }
 
 fn norm_track(t: &Track) -> Track {
     let mut t = t.clone();
     t.name.clear();
     t.mix = Mix::default();
-    for Insert::Clap(r) in &mut t.inserts {
+    for r in t.inserts.iter_mut().filter_map(clap_mut) {
         r.params.clear();
         r.state_file = None;
         r.state_bytes = None;
         r.plugin_version.clear();
+    }
+    for i in &mut t.inserts {
+        if let Insert::Builtin { fx, .. } = i {
+            norm_fx(fx);
+        }
+    }
+    // Send levels are control values; the target and tap point are not.
+    for s in &mut t.sends {
+        s.level_db = 0.0;
     }
     t
 }
@@ -58,6 +105,7 @@ pub fn needs_compile(old: &Project, new: &Project) -> bool {
         || old.patterns.len() != new.patterns.len()
         || old.channels.len() != new.channels.len()
         || old.tracks.len() != new.tracks.len()
+        || old.playlist != new.playlist
     {
         return true;
     }
@@ -91,7 +139,7 @@ fn plugin_params(p: &Project) -> HashMap<InstanceId, &[protocol::model::ParamVal
         }
     }
     for t in &p.tracks {
-        for Insert::Clap(r) in &t.inserts {
+        for r in t.inserts.iter().filter_map(clap_of) {
             m.insert(r.instance, r.params.as_slice());
         }
     }
@@ -140,7 +188,7 @@ pub fn removed_instances(p: &Project, edits: &[Edit]) -> Vec<InstanceId> {
             }
             Edit::RemoveTrack { track } => {
                 if let Some(t) = p.track(*track) {
-                    out.extend(t.inserts.iter().map(|Insert::Clap(r)| r.instance));
+                    out.extend(t.inserts.iter().filter_map(clap_of).map(|r| r.instance));
                 }
             }
             Edit::RemoveInsert { instance, .. } => out.push(*instance),
@@ -155,7 +203,7 @@ pub fn removed_instances(p: &Project, edits: &[Edit]) -> Vec<InstanceId> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::document::{Document, apply, apply_batch};
+    use doc::document::{Document, apply, apply_batch};
     use protocol::edit::{MixValue, NewInstrument, NewNote};
     use protocol::engine::PluginSlot;
     use protocol::ids::{ChannelId, PatternId, TrackId};

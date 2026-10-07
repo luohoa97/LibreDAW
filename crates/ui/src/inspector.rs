@@ -16,10 +16,10 @@ use protocol::model::{Instrument, SynthParam, SynthParams, Wave};
 
 use crate::app::{App, UiCommand};
 use crate::knob_logic::{MACROS, MORE, format_value, from_unit, to_unit, vary};
-use crate::presets;
 use crate::shortcuts;
 use crate::widgets::color_bar::ColorBar;
 use crate::widgets::knob::Knob;
+use doc::presets;
 
 pub struct Inspector {
     pub widget: gtk::Widget,
@@ -302,7 +302,7 @@ impl SoundPage {
         let c = s.document().project.channel(self.channel()?)?;
         match &c.instrument {
             Instrument::Synth(p) => Some(*p),
-            Instrument::Clap(_) => None,
+            Instrument::Clap(_) | Instrument::Sampler(_) | Instrument::Bass808(_) => None,
         }
     }
 
@@ -432,7 +432,7 @@ impl SoundPage {
         };
         if let Some(k) = key {
             self.app
-                .preview_pulse(ch, k, crate::document::DEFAULT_STEP_VEL, 400);
+                .preview_pulse(ch, k, doc::document::DEFAULT_STEP_VEL, 400);
         }
     }
 
@@ -481,6 +481,9 @@ impl SoundPage {
                         self.waves[i].set_selected(idx as u32);
                     }
                 }
+            }
+            Instrument::Sampler(_) | Instrument::Bass808(_) => {
+                self.stack.set_visible_child_name("none");
             }
             Instrument::Clap(r) => {
                 self.stack.set_visible_child_name("clap");

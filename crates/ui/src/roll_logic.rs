@@ -304,6 +304,8 @@ mod tests {
             len,
             key,
             vel,
+            off: 0,
+            repeat: 1,
         }
     }
 

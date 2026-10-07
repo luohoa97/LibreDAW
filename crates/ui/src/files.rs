@@ -17,9 +17,9 @@ use gtk::glib;
 use gtk::prelude::*;
 
 use crate::app::App;
-use crate::bundle;
-use crate::document::Document;
-use crate::persist::{self, Dirs, LastSession, ViewState};
+use doc::bundle;
+use doc::document::Document;
+use doc::persist::{self, Dirs, LastSession, ViewState};
 
 /// The user's real directories.
 pub fn real_dirs() -> Dirs {
@@ -117,13 +117,31 @@ pub fn save_current(app: &Rc<App>, then: impl FnOnce(Result<PathBuf, String>) + 
         return;
     }
     let doc = app.session.borrow_mut().snapshot_for_save();
+    // Samples that undo and redo can still reach stay in the bundle (17.2).
+    let keep = app.session.borrow().editor.history().keep();
+    let home = app.session.borrow().sample_home().map(Path::to_path_buf);
     let view = app.collect_view();
     let t2 = target.clone();
     let a = app.clone();
     app.tasks.spawn(
         "save",
         move || {
-            let r = bundle::save_and_clear_autosave(&t2, &doc).map_err(|e| e.to_string());
+            let r = (|| {
+                if let Some(home) = &home {
+                    let mut hashes: std::collections::BTreeSet<String> =
+                        keep.samples.iter().cloned().collect();
+                    hashes.extend(
+                        doc.project
+                            .samples
+                            .iter()
+                            .filter(|s| !s.local_only)
+                            .map(|s| s.hash.clone()),
+                    );
+                    copy_samples(home, &t2, hashes).map_err(|e| e.to_string())?;
+                }
+                bundle::save_keeping(&t2, &doc, &keep).map_err(|e| e.to_string())?;
+                bundle::clear_autosave(&t2).map_err(|e| e.to_string())
+            })();
             if r.is_ok()
                 && let Some(v) = view
             {
@@ -147,6 +165,7 @@ pub fn save_current(app: &Rc<App>, then: impl FnOnce(Result<PathBuf, String>) + 
 
 fn after_saved(app: &Rc<App>, path: &Path, was_untitled: bool) {
     app.ui.borrow_mut().path = Some(path.to_path_buf());
+    point_samples_at(app, Some(path));
     app.session.borrow_mut().editor.mark_saved();
     persist::remove_recovery(&app.dirs, &app.session_id);
     let note =
@@ -238,6 +257,7 @@ pub fn new_project(app: &Rc<App>) {
 
 /// An empty project with one pattern so the grid is usable.
 pub fn fresh_project(a: &Rc<App>) {
+    point_samples_at(a, None);
     a.session
         .borrow_mut()
         .replace_document(Document::new(), false);
@@ -271,6 +291,7 @@ pub fn open_path(app: &Rc<App>, path: PathBuf) {
                         o.saved.missing_blobs.len()
                     ));
                 }
+                point_samples_at(&a, Some(&path));
                 a.session.borrow_mut().replace_document(o.saved.doc, true);
                 {
                     let mut ui = a.ui.borrow_mut();
@@ -306,6 +327,20 @@ pub fn open_recovery_bundle(app: &Rc<App>, bundle_dir: PathBuf, modified: System
         move || bundle::load(&d),
         move |r| match r {
             Ok(l) => {
+                // The crashed session's bundle goes away later; keep its
+                // samples in this run's recovery bundle.
+                let ours = a.dirs.recovery_bundle(&a.session_id);
+                let hashes: Vec<String> = l
+                    .doc
+                    .project
+                    .samples
+                    .iter()
+                    .map(|s| s.hash.clone())
+                    .collect();
+                if let Err(e) = copy_samples(&bundle_dir, &ours, hashes) {
+                    a.toast(&format!("Could not keep the recovered samples: {e}"));
+                }
+                point_samples_at(&a, None);
                 a.session
                     .borrow_mut()
                     .replace_document(Document::new(), true);
@@ -345,6 +380,47 @@ pub fn restore_last_session(app: &Rc<App>) {
         return;
     }
     fresh_project(app);
+}
+
+// ---------------------------------------------------------------------------
+// Samples (15.1, 17.2)
+
+/// Where the samples of the open project live: the saved bundle, or this
+/// run's recovery bundle while the project has no path yet.
+pub fn point_samples_at(app: &Rc<App>, path: Option<&Path>) {
+    let home = match path {
+        Some(p) => p.to_path_buf(),
+        None => app.dirs.recovery_bundle(&app.session_id),
+    };
+    app.session.borrow_mut().set_sample_home(Some(home));
+}
+
+/// Copies the sample files `hashes` that exist under `from` into `to`,
+/// never overwriting. Both are bundle directories.
+pub fn copy_samples(
+    from: &Path,
+    to: &Path,
+    hashes: impl IntoIterator<Item = String>,
+) -> std::io::Result<()> {
+    if from == to {
+        return Ok(());
+    }
+    let (src, dst) = (
+        doc::samples::samples_root(from),
+        doc::samples::samples_root(to),
+    );
+    for h in hashes {
+        let name = doc::samples::sample_file_name(&h);
+        let (s, d) = (src.join(&name), dst.join(&name));
+        if !s.is_file() || d.exists() {
+            continue;
+        }
+        std::fs::create_dir_all(&dst)?;
+        let tmp = dst.join(format!(".copy-{name}.tmp"));
+        std::fs::copy(&s, &tmp)?;
+        std::fs::rename(&tmp, &d)?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]

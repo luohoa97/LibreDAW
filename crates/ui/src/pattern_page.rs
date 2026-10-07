@@ -17,12 +17,12 @@ use protocol::ids::{ChannelId, PatternId};
 
 use crate::app::{App, UiCommand};
 use crate::channel_list::ChannelList;
-use crate::presets;
 use crate::shortcuts;
 use crate::size_class::{PatternFocus, split_position};
 use crate::view_math::SNAPS;
 use crate::widgets::piano_roll::PianoRoll;
 use crate::widgets::step_grid::StepGrid;
+use doc::presets;
 
 pub struct PatternPage {
     pub widget: gtk::Widget,

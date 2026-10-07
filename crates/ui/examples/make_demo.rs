@@ -3,11 +3,11 @@
 //! as the first argument, for trying the app and for screenshots:
 //! `cargo run -p libredaw-ui --example make_demo -- /tmp/Demo.ldaw`
 
+use doc::bundle;
+use doc::document::{Document, apply_batch};
 use protocol::edit::{Edit, MixValue, NewInstrument, NewNote};
 use protocol::ids::{ChannelId, PatternId, TrackId};
 use protocol::model::SynthParams;
-use ui::bundle;
-use ui::document::{Document, apply_batch};
 
 fn main() {
     let Some(path) = std::env::args().nth(1) else {

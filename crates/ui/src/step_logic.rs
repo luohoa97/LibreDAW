@@ -229,6 +229,7 @@ mod tests {
             track: TrackId::MASTER,
             mix: Mix::default(),
             instrument: Instrument::Synth(SynthParams::default()),
+            choke_group: 0,
         }
     }
 
@@ -248,6 +249,8 @@ mod tests {
             len,
             key,
             vel,
+            off: 0,
+            repeat: 1,
         }
     }
 
@@ -353,7 +356,7 @@ mod tests {
     #[test]
     fn row_stays_editable_after_root_key_and_step_changes() {
         // 5.2 test, seen from the view: the same steps stay on.
-        use crate::document::{Document, apply};
+        use doc::document::{Document, apply};
         use protocol::edit::{Edit, NewInstrument};
         let d = Document::new();
         let (d, ids) = apply(

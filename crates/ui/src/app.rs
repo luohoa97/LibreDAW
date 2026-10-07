@@ -15,14 +15,14 @@ use std::rc::Rc;
 use std::sync::atomic::Ordering;
 
 use protocol::edit::Edit;
-use protocol::engine::EngineCommand;
+use protocol::engine::{EngineCommand, TransportMode};
 use protocol::ids::{ChannelId, PatternId, TrackId};
 
-use crate::history::{Applied, Author, HistoryError, Scope, Submitted};
-use crate::persist::ViewState;
 use crate::session::Session;
 use crate::settings::Settings;
 use crate::size_class::{PatternFocus, SizeClass};
+use doc::history::{Applied, Author, HistoryError, Scope, Submitted};
+use doc::persist::ViewState;
 
 /// What the user picked. Not part of the document and not undoable (6).
 pub struct UiState {
@@ -39,6 +39,9 @@ pub struct UiState {
     pub preview_held: Option<(ChannelId, u8)>,
     /// The Play button is suggested until the first play of a new project.
     pub played_once: bool,
+    /// Pattern loops one pattern; Song plays the playlist (15.6).
+    pub mode: TransportMode,
+    pub loop_song: bool,
 }
 
 /// How the window reads and restores its view (`.view.toml`).
@@ -55,7 +58,7 @@ pub struct App {
     pub session: RefCell<Session>,
     pub ui: RefCell<UiState>,
     pub tasks: crate::tasks::Tasks,
-    pub dirs: crate::persist::Dirs,
+    pub dirs: doc::persist::Dirs,
     /// Names this run's recovery bundle.
     pub session_id: String,
     /// A crashed session's recovery bundle to delete once ours exists.
@@ -107,7 +110,7 @@ impl App {
     }
 
     /// As `new`, with explicit directories (tests use a temp dir).
-    pub fn with_dirs(session: Session, dirs: crate::persist::Dirs) -> Rc<App> {
+    pub fn with_dirs(session: Session, dirs: doc::persist::Dirs) -> Rc<App> {
         let settings = Settings::read(&dirs);
         let app = Rc::new(App {
             session: RefCell::new(session),
@@ -122,7 +125,7 @@ impl App {
             command_listeners: RefCell::new(Vec::new()),
             peaks: RefCell::default(),
             dirs,
-            session_id: crate::persist::session_id(
+            session_id: doc::persist::session_id(
                 std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .map(|d| d.as_secs())
@@ -140,6 +143,8 @@ impl App {
                 audio_error: None,
                 preview_held: None,
                 played_once: false,
+                mode: TransportMode::Pattern,
+                loop_song: true,
             }),
             listeners: RefCell::new(Vec::new()),
             toaster: RefCell::new(None),
@@ -581,8 +586,32 @@ impl App {
         *self.preview_timer.borrow_mut() = Some(id);
     }
 
+    /// Pattern or Song transport (15.6). Takes effect on the next play.
+    pub fn set_transport_mode(&self, mode: TransportMode, loop_song: bool) {
+        {
+            let mut ui = self.ui.borrow_mut();
+            ui.mode = mode;
+            ui.loop_song = loop_song;
+        }
+        self.send_mode();
+        self.notify();
+    }
+
+    fn send_mode(&self) {
+        let (mode, loop_song) = {
+            let ui = self.ui.borrow();
+            (ui.mode, ui.loop_song)
+        };
+        let _ = self
+            .session
+            .borrow_mut()
+            .link
+            .command(EngineCommand::SetTransportMode { mode, loop_song });
+    }
+
     pub fn play(&self) {
         self.send_pattern();
+        self.send_mode();
         let r = self.session.borrow_mut().link.command(EngineCommand::Play);
         if r.is_ok() {
             let mut ui = self.ui.borrow_mut();
@@ -631,10 +660,10 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::document::Document;
     use crate::engine_adapter::EngineLink;
-    use crate::persist::Dirs;
     use crate::registry::Registry;
+    use doc::document::Document;
+    use doc::persist::Dirs;
     use protocol::edit::NewInstrument;
     use protocol::model::SynthParams;
 

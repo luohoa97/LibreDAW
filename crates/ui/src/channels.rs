@@ -11,7 +11,7 @@ use protocol::ids::{ChannelId, TrackId};
 use protocol::model::SynthParams;
 
 use crate::app::App;
-use crate::presets::{self, unique_name};
+use doc::presets::{self, unique_name};
 
 /// What a new channel plays.
 pub enum NewChannel {
@@ -136,11 +136,11 @@ pub fn remove(app: &Rc<App>, id: ChannelId) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::document::Document;
     use crate::engine_adapter::EngineLink;
-    use crate::persist::Dirs;
     use crate::registry::Registry;
     use crate::session::Session;
+    use doc::document::Document;
+    use doc::persist::Dirs;
 
     fn app() -> Rc<App> {
         let dir = std::env::temp_dir().join(format!("ldaw-chan-{}", std::process::id()));

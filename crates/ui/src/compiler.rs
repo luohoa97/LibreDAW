@@ -27,6 +27,8 @@ pub struct CompileJob {
     pub project: Arc<Project>,
     pub slots: SlotAllocator,
     pub sample_rate: f64,
+    /// Decoded samples for samplers; `None` compiles samplers as silence.
+    pub store: Option<Arc<crate::engine_adapter::SampleStore>>,
 }
 
 struct State<T> {
@@ -176,6 +178,7 @@ mod tests {
             project: Arc::new(Project::empty()),
             slots: SlotAllocator::new(),
             sample_rate: 48000.0,
+            store: None,
         }
     }
 

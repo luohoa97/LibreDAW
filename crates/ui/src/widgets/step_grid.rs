@@ -318,7 +318,7 @@ impl StepGrid {
             s.document().project.channel(channel).map(|c| c.root_key)
         };
         if let Some(key) = key {
-            app.preview_pulse(channel, key, crate::document::DEFAULT_STEP_VEL, 250);
+            app.preview_pulse(channel, key, doc::document::DEFAULT_STEP_VEL, 250);
         }
     }
 

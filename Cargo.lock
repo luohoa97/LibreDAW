@@ -926,6 +926,7 @@ dependencies = [
  "gtk4",
  "libadwaita",
  "libredaw-control",
+ "libredaw-doc",
  "libredaw-engine",
  "libredaw-plugin-host",
  "libredaw-protocol",

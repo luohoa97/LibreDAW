@@ -19,7 +19,7 @@ use gtk::glib;
 use protocol::consts::{MAX_GAIN_DB, MIN_GAIN_DB};
 use protocol::edit::{Edit, MixValue};
 use protocol::ids::{InstanceId, TrackId};
-use protocol::model::{Insert, Project};
+use protocol::model::Project;
 
 use crate::app::{App, MeterUser};
 use crate::dialogs::{self, PluginKind};
@@ -164,7 +164,7 @@ impl Mixer {
         let mut s = String::new();
         for t in &p.tracks {
             s.push_str(&format!("t{}:{}", t.id, t.name));
-            for Insert::Clap(r) in &t.inserts {
+            for r in t.inserts.iter().filter_map(crate::change::clap_of) {
                 s.push_str(&format!(",{}={}", r.instance, r.plugin_id));
             }
             s.push(';');
@@ -319,7 +319,7 @@ impl Mixer {
         fx_label.add_css_class("caption-heading");
         fx_label.set_xalign(0.0);
         inner.append(&fx_label);
-        for Insert::Clap(r) in &track.inserts {
+        for r in track.inserts.iter().filter_map(crate::change::clap_of) {
             inner.append(&self.insert_row(id, r.instance, &r.plugin_id));
         }
         let add = gtk::Button::from_icon_name("list-add-symbolic");
@@ -757,7 +757,7 @@ mod tests {
 
     #[test]
     fn signature_changes_with_structure_and_names_only() {
-        use crate::document::{Document, apply};
+        use doc::document::{Document, apply};
         use protocol::edit::NewInstrument;
         let (d, ids) = apply(
             &Document::new(),

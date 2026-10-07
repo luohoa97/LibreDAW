@@ -4,7 +4,7 @@
 
 use std::fs;
 
-use crate::persist::{Dirs, key_values, quote, unquote};
+use doc::persist::{Dirs, key_values, quote, unquote};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum ColorScheme {

@@ -5,13 +5,13 @@
 
 use std::path::PathBuf;
 
+use doc::document::Document;
+use doc::history::{Author, Scope, Submitted};
 use protocol::edit::Edit;
 use protocol::engine::{EngineCommand, EngineEvent, PluginSlot, TrackSlot};
 use protocol::ids::{InstanceId, TrackId};
 use protocol::model::{Insert, Instrument};
-use ui::document::Document;
 use ui::engine_adapter::EngineLink;
-use ui::history::{Author, Scope, Submitted};
 use ui::plugin_adapter::{PluginDesc, scan_paths};
 use ui::registry::{Phase, Registry};
 use ui::session::Session;
@@ -197,7 +197,9 @@ fn removal_captures_state_first_and_undo_brings_the_patch_back() {
     // Undo: the document gets the insert back, with the captured blob.
     s.undo(&Scope::Any).unwrap();
     let t = &s.document().project.tracks[0];
-    let Insert::Clap(r) = &t.inserts[0];
+    let Insert::Clap(r) = &t.inserts[0] else {
+        panic!("clap insert");
+    };
     assert_eq!(r.instance, a);
     assert!(r.state_bytes.is_some(), "state was captured before removal");
     assert!(r.state_file.is_some());

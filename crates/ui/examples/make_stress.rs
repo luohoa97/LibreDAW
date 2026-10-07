@@ -3,12 +3,12 @@
 //! are visible, for the drawing numbers (`LIBREDAW_DEBUG`):
 //! `cargo run -p libredaw-ui --example make_stress -- /tmp/Stress.ldaw`
 
+use doc::bundle;
+use doc::document::{Document, apply_batch};
+use doc::persist::ViewState;
 use protocol::edit::{Edit, NewInstrument, NewNote};
 use protocol::ids::{ChannelId, PatternId, TrackId};
 use protocol::model::SynthParams;
-use ui::bundle;
-use ui::document::{Document, apply_batch};
-use ui::persist::ViewState;
 
 fn main() {
     let Some(path) = std::env::args().nth(1) else {

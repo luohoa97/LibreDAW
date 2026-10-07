@@ -20,23 +20,26 @@
 //! `glib::timeout_add_local(10 ms)` source.
 
 use std::collections::{HashSet, VecDeque};
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::Instant;
 
 use protocol::edit::Edit;
 use protocol::engine::{EngineEvent, PluginEvent, PluginSlot};
 use protocol::ids::InstanceId;
-use protocol::model::{Insert, Instrument, Project};
+use protocol::model::{Instrument, Project};
 
-use crate::bundle::CaptureClock;
-use crate::change::{needs_compile, param_diffs, removed_instances};
+use crate::change::{clap_of, needs_compile, param_diffs, removed_instances};
 use crate::compiler::{CompileJob, Compiler};
-use crate::document::{Document, commit_plugin_state};
-use crate::engine_adapter::{Compiled, EngineLink, compile, write_controls};
-use crate::history::{Applied, Author, Done, EditFailure, Editor, HistoryError, Scope, Submitted};
+use crate::engine_adapter::{Compiled, EngineLink, SampleStore, compile, write_controls};
 use crate::plugin_adapter::PluginOut;
 use crate::registry::{Notice, Registry, clap_ref};
 use crate::slots::SlotAllocator;
+use doc::bundle::CaptureClock;
+use doc::document::{Document, commit_plugin_state};
+use doc::history::{Applied, Author, Done, EditFailure, Editor, HistoryError, Scope, Submitted};
+use doc::samples::{LocalSamples, resolve_sample};
 
 /// Who caused a document change, for parameter replay.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -56,12 +59,22 @@ pub struct TickReport {
     pub changed: bool,
 }
 
+/// Decoded sample memory, bytes (SPEC 15.1).
+const SAMPLE_BUDGET: usize = 512 << 20;
+
 pub struct Session {
     pub editor: Editor,
     pub slots: SlotAllocator,
     pub link: EngineLink,
     pub registry: Registry,
     compiler: Compiler<Box<Compiled>>,
+    /// Decoded samples for sampler channels (15.1).
+    pub store: Arc<SampleStore>,
+    /// Bundle directory the project samples live under, if known.
+    sample_home: Option<PathBuf>,
+    local_samples: LocalSamples,
+    /// Hashes whose audio file cannot be found: placeholders.
+    pub missing_samples: HashSet<String>,
     out_events: VecDeque<PluginEvent>,
     seen_overflows: u64,
     plugin_gesture: bool,
@@ -79,7 +92,7 @@ fn instance_ids(p: &Project) -> HashSet<InstanceId> {
         }
     }
     for t in &p.tracks {
-        for Insert::Clap(r) in &t.inserts {
+        for r in t.inserts.iter().filter_map(clap_of) {
             s.insert(r.instance);
         }
     }
@@ -88,12 +101,19 @@ fn instance_ids(p: &Project) -> HashSet<InstanceId> {
 
 impl Session {
     pub fn new(doc: Document, clean: bool, link: EngineLink, registry: Registry) -> Session {
+        let rate = link.sample_rate().round() as u32;
         let mut s = Session {
             editor: Editor::new(doc, clean),
             slots: SlotAllocator::new(),
             link,
             registry,
             compiler: Compiler::spawn(|j: &CompileJob| compile(j)),
+            store: Arc::new(SampleStore::new(rate, SAMPLE_BUDGET)),
+            sample_home: None,
+            local_samples: LocalSamples::load(
+                &doc::samples::default_local_samples_path().unwrap_or_default(),
+            ),
+            missing_samples: HashSet::new(),
             out_events: VecDeque::new(),
             seen_overflows: 0,
             plugin_gesture: false,
@@ -212,6 +232,7 @@ impl Session {
         self.after_change(&old, Origin::External);
         let p = self.editor.document().project.clone();
         self.slots.sync(&p).ok();
+        self.request_samples();
         self.request_compile();
     }
 
@@ -260,6 +281,50 @@ impl Session {
         self.editor.document().clone()
     }
 
+    // ---- samples (15.1, 17.2) ----
+
+    /// Tells the session which bundle directory holds the project samples:
+    /// the saved project, or the recovery bundle of an unsaved one.
+    pub fn set_sample_home(&mut self, home: Option<PathBuf>) {
+        if self.sample_home != home {
+            self.sample_home = home;
+            self.request_samples();
+        }
+    }
+
+    pub fn sample_home(&self) -> Option<&Path> {
+        self.sample_home.as_deref()
+    }
+
+    /// Reloads the local-only registry (after an import added to it).
+    pub fn reload_local_samples(&mut self) {
+        if let Some(p) = doc::samples::default_local_samples_path() {
+            self.local_samples = LocalSamples::load(&p);
+        }
+        self.request_samples();
+    }
+
+    /// Asks the loader for every sample the project names and records the
+    /// ones whose file is missing.
+    pub fn request_samples(&mut self) {
+        let Some(home) = self.sample_home.clone() else {
+            return;
+        };
+        let p = self.editor.document().project.clone();
+        self.missing_samples.clear();
+        for s in &p.samples {
+            match resolve_sample(&home, s, &self.local_samples) {
+                Some(path) => {
+                    self.store.retry(&s.hash);
+                    self.store.request(&s.hash, path);
+                }
+                None => {
+                    self.missing_samples.insert(s.hash.clone());
+                }
+            }
+        }
+    }
+
     // ---- the pipeline after a replacement ----
 
     fn request_compile(&mut self) {
@@ -269,6 +334,7 @@ impl Session {
             project: d.project.clone(),
             slots: self.slots.clone(),
             sample_rate: self.link.sample_rate(),
+            store: Some(self.store.clone()),
         });
     }
 
@@ -287,6 +353,9 @@ impl Session {
             } = n;
             self.messages
                 .push(format!("Plugin {plugin_id} is unavailable: {reason}"));
+        }
+        if old.samples != new.samples {
+            self.request_samples();
         }
         if needs_compile(old, &new) {
             self.request_compile();
@@ -373,6 +442,22 @@ impl Session {
             // Retry attaches and detaches the command ring refused.
             let p = self.editor.document().project.clone();
             self.registry.reconcile(&p, &self.slots, &mut self.link);
+        }
+
+        // Samples: follow a device rate change, and recompile when a load
+        // finished so the sampler stops being silent (15.1).
+        let rate = self.link.sample_rate().round() as u32;
+        if rate != 0 && self.store.sample_rate() != rate {
+            self.store.set_sample_rate(rate);
+        }
+        let loaded = self.store.poll();
+        if !loaded.is_empty() {
+            for ev in &loaded {
+                if let Err(e) = &ev.result {
+                    self.messages.push(format!("Could not load a sample: {e}"));
+                }
+            }
+            self.request_compile();
         }
 
         // Rings: parameter events, then the newest compiled state.

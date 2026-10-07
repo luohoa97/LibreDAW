@@ -29,8 +29,8 @@ use protocol::edit::{Edit, NewInstrument};
 use crate::app::{App, UiCommand};
 use crate::engine_adapter::{self, RenderJob};
 use crate::files;
-use crate::history::{Author, Done, EditFailure, HistoryError, Scope, Submitted, describe_edit};
 use crate::settings::{BUFFER_SIZES, ColorScheme};
+use doc::history::{Author, Done, EditFailure, HistoryError, Scope, Submitted, describe_edit};
 
 /// One request waiting for the human.
 #[derive(Clone, Debug)]
@@ -123,7 +123,7 @@ fn scope_of(a: &Author) -> Scope {
 }
 
 /// The wire form of an applied batch.
-fn wire(a: crate::history::Applied) -> protocol::edit::Applied {
+fn wire(a: doc::history::Applied) -> protocol::edit::Applied {
     protocol::edit::Applied {
         revision: a.revision,
         created: a.created,
@@ -435,10 +435,10 @@ fn list_projects(app: &App) -> Vec<ProjectInfo> {
     };
     for e in rd.flatten().take(200) {
         let p = e.path();
-        if !crate::persist::is_bundle(&p) {
+        if !doc::persist::is_bundle(&p) {
             continue;
         }
-        let tempo = std::fs::read_to_string(p.join(crate::bundle::PROJECT_FILE))
+        let tempo = std::fs::read_to_string(p.join(doc::bundle::PROJECT_FILE))
             .ok()
             .and_then(|t| tempo_from_text(&t))
             .unwrap_or(0.0);
@@ -690,9 +690,32 @@ fn execute(app: &Rc<App>, ticket: Ticket, author: &Author, req: Request) -> Opti
             pattern,
             loops,
             format,
-        } => return Some(start_job(app, pattern, loops, Some(format))),
+        } => {
+            return Some(start_job(
+                app,
+                JobTarget::Pattern { pattern, loops },
+                Some(format),
+            ));
+        }
+        RequestBody::ExportSongWav {
+            format,
+            tail_seconds,
+        } => {
+            return Some(start_job(
+                app,
+                JobTarget::Song { tail: tail_seconds },
+                Some(format),
+            ));
+        }
+        RequestBody::AnalyzeSong => {
+            return Some(start_job(app, JobTarget::Song { tail: 2.0 }, None));
+        }
+        RequestBody::SetTransportMode { mode, loop_song } => {
+            app.set_transport_mode(mode, loop_song);
+            ok(ReplyBody::Done)
+        }
         RequestBody::Analyze { pattern, loops } => {
-            return Some(start_job(app, pattern, loops, None));
+            return Some(start_job(app, JobTarget::Pattern { pattern, loops }, None));
         }
         RequestBody::JobStatus { job } => {
             let guard = app.bridge.borrow();
@@ -799,27 +822,54 @@ pub fn on_done(app: &Rc<App>, done: Vec<Done>) {
     }
 }
 
-fn start_job(
-    app: &Rc<App>,
-    pattern: protocol::ids::PatternId,
-    loops: u32,
-    fmt: Option<WavFormat>,
-) -> Outcome {
-    if !(1..=64).contains(&loops) {
-        return bad("loops must be between 1 and 64");
-    }
-    let (project, slots, rate, rev) = {
+/// What an export or analysis job renders.
+#[derive(Clone, Copy)]
+enum JobTarget {
+    Pattern {
+        pattern: protocol::ids::PatternId,
+        loops: u32,
+    },
+    /// The whole playlist plus a tail in seconds (15.6).
+    Song { tail: f64 },
+}
+
+fn start_job(app: &Rc<App>, target: JobTarget, fmt: Option<WavFormat>) -> Outcome {
+    let (pattern, loops, song_tail) = match target {
+        JobTarget::Pattern { pattern, loops } => {
+            if !(1..=64).contains(&loops) {
+                return bad("loops must be between 1 and 64");
+            }
+            (pattern, loops, None)
+        }
+        JobTarget::Song { tail } => {
+            if !(0.0..=30.0).contains(&tail) {
+                return bad("tail_seconds must be between 0 and 30");
+            }
+            (protocol::ids::PatternId(0), 1, Some(tail))
+        }
+    };
+    let (project, slots, rate, rev, store) = {
         let s = app.session.borrow();
-        if s.document().project.pattern(pattern).is_none() {
+        if song_tail.is_none() && s.document().project.pattern(pattern).is_none() {
             return err(ControlError::NotFound {
                 what: "pattern".into(),
             });
+        }
+        if song_tail.is_some()
+            && s.document()
+                .project
+                .playlist
+                .iter()
+                .all(|t| t.clips.is_empty())
+        {
+            return bad("the song has no clips");
         }
         (
             s.document().project.clone(),
             s.slots.clone(),
             s.link.sample_rate().round() as u32,
             s.document().revision,
+            s.store.clone(),
         )
     };
     let exports = app.dirs.projects().join("exports");
@@ -857,6 +907,8 @@ fn start_job(
                     pattern,
                     loops,
                     sample_rate: rate,
+                    song_tail,
+                    store: Some(store),
                 },
                 &slots,
                 &[],
@@ -1008,11 +1060,11 @@ mod tests {
 
     // ---- over the real socket ----
 
-    use crate::document::Document;
     use crate::engine_adapter::EngineLink;
-    use crate::persist::Dirs;
     use crate::registry::Registry;
     use crate::session::Session;
+    use doc::document::Document;
+    use doc::persist::Dirs;
     use std::io::{BufRead, BufReader, Write};
     use std::os::unix::net::UnixStream;
 

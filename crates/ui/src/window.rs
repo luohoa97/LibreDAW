@@ -17,7 +17,6 @@ use gtk::glib;
 use protocol::edit::Edit;
 
 use crate::app::{App, UiCommand};
-use crate::bundle::{AutosaveDebounce, AutosaveWorker};
 use crate::channels::{self, NewChannel};
 use crate::dialogs::{self, PluginKind};
 use crate::files;
@@ -25,12 +24,13 @@ use crate::help;
 use crate::mixer::Mixer;
 use crate::palette;
 use crate::pattern_page::{self, PatternPage};
-use crate::persist::ViewState;
 use crate::prefs;
 use crate::shortcuts::{self, SHORTCUTS};
 use crate::size_class::{self, PatternFocus, SizeClass, split_position};
 use crate::transport::Transport;
 use crate::{browser, export, inspector};
+use doc::bundle::{AutosaveDebounce, AutosaveWorker};
+use doc::persist::ViewState;
 
 const DEFAULT_WIDTH: i32 = 1360;
 const DEFAULT_HEIGHT: i32 = 800;

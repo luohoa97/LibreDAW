@@ -40,7 +40,11 @@ pub fn has_plugins(p: &protocol::model::Project) -> bool {
     p.channels
         .iter()
         .any(|c| matches!(c.instrument, Instrument::Clap(_)))
-        || p.tracks.iter().any(|t| !t.inserts.is_empty())
+        || p.tracks.iter().any(|t| {
+            t.inserts
+                .iter()
+                .any(|i| matches!(i, protocol::model::Insert::Clap(_)))
+        })
 }
 
 pub fn show(window: &adw::ApplicationWindow, app: &Rc<App>) {
@@ -165,12 +169,13 @@ fn start(
     progress_bar.set_visible(true);
     progress_bar.set_fraction(0.0);
 
-    let (project, slots, rate) = {
+    let (project, slots, rate, store) = {
         let s = app.session.borrow();
         (
             s.document().project.clone(),
             s.slots.clone(),
             s.link.sample_rate().round() as u32,
+            s.store.clone(),
         )
     };
     let progress = Arc::new(AtomicU32::new(0));
@@ -199,6 +204,8 @@ fn start(
                     pattern,
                     loops,
                     sample_rate: rate,
+                    song_tail: None,
+                    store: Some(store),
                 },
                 &slots,
                 &[],

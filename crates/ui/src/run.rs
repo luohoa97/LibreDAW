@@ -7,13 +7,13 @@ use adw::prelude::*;
 use gtk::glib;
 
 use crate::app::App;
-use crate::document::Document;
 use crate::engine_adapter::{self, EngineConfig, EngineLink, Host};
 use crate::plugin_adapter;
 use crate::registry::Registry;
 use crate::session::Session;
 use crate::slots::SlotAllocator;
 use crate::window;
+use doc::document::Document;
 
 pub const APP_ID: &str = "org.libredaw.LibreDAW";
 
@@ -42,6 +42,7 @@ fn start_audio(settings: &crate::settings::Settings) -> (EngineLink, Option<Stri
             project: empty.project.clone(),
             slots: slots.clone(),
             sample_rate: 48000.0,
+            store: None,
         });
         match EngineLink::start(&cfg, first) {
             Ok(l) => return (l, None),
@@ -78,6 +79,7 @@ pub fn run() -> glib::ExitCode {
         trace(&format!("{} plugins found", catalog.len()));
         let session = Session::new(Document::new(), false, link, Registry::new(catalog, rate));
         let app: Rc<App> = App::new(session);
+        crate::files::point_samples_at(&app, None);
         app.ui.borrow_mut().audio_error = audio_err.clone();
         // The control socket for scripts and agents. Agents stay off until
         // the user allows them (Preferences or the banner).
