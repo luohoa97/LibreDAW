@@ -6,3 +6,14 @@
 //! validated requests to the GTK thread through `ControlServer::poll`; the
 //! `ui` crate answers them with access to the document. See
 //! `docs/phase2-interfaces.md`.
+//!
+//! No GTK dependency: `ui` calls `poll` from its 10 ms tick.
+
+pub mod analysis;
+mod client;
+mod socket;
+mod state;
+
+pub use state::{
+    ClientInfo, ControlConfig, ControlServer, ControlStartError, Incoming, Polled, Ticket, UiEvent,
+};
