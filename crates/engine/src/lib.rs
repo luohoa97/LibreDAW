@@ -16,6 +16,7 @@ pub mod render;
 pub mod report;
 pub mod rt;
 pub mod runtime;
+pub mod samples;
 pub mod sequencer;
 pub mod synth;
 pub mod tables;
@@ -23,6 +24,7 @@ pub mod tables;
 mod testutil;
 pub mod transport;
 pub mod wav;
+pub mod wavread;
 
 pub use api::{Engine, EngineConfig, EngineError, Host};
 pub use compiled::{Compiled, Slots, SlotsFull, compile};
