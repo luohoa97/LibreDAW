@@ -8,3 +8,13 @@ publish.workspace = true
 
 [lib]
 name = "protocol"
+
+[dependencies]
+# Derive (de)serialization for the project file and the JSON control API.
+serde = { version = "1", features = ["derive", "rc"] }
+# Parse the project file (SPEC 7.2); saving uses our own emitter.
+toml = "1"
+
+[dev-dependencies]
+# Tests check the JSON shape the control API uses (10, 16).
+serde_json = "1"

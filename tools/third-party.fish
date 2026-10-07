@@ -19,6 +19,12 @@ function justification
     switch $argv[1]
         case cpal
             echo "audio I/O (fixed stack); its `pipewire` feature adds the native PipeWire host (pipewire, libspa, and bindgen at build time) and its `jack` feature the JACK backend"
+        case serde
+            echo "derive (de)serialization for the project file and the control API (protocol)"
+        case toml
+            echo "parse the project file, SPEC 7.2 (protocol); saving uses our own emitter"
+        case serde_json
+            echo "JSON for the control API used by scripts and agents (protocol tests now; ui, script, mcp later)"
         case '*'
             return 1
     end

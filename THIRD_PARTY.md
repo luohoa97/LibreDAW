@@ -9,6 +9,9 @@ CI fails if this file is out of date.
 | Crate | Version | License | Why |
 |---|---|---|---|
 | cpal | 0.18.2 | Apache-2.0 | audio I/O (fixed stack); its `pipewire` feature adds the native PipeWire host (pipewire, libspa, and bindgen at build time) and its `jack` feature the JACK backend |
+| serde | 1.0.229 | MIT OR Apache-2.0 | derive (de)serialization for the project file and the control API (protocol) |
+| serde_json | 1.0.151 | MIT OR Apache-2.0 | JSON for the control API used by scripts and agents (protocol tests now; ui, script, mcp later) |
+| toml | 1.1.6+spec-1.1.0 | MIT OR Apache-2.0 | parse the project file, SPEC 7.2 (protocol); saving uses our own emitter |
 
 ## All crates in the dependency graph (x86_64-unknown-linux-gnu)
 
@@ -39,6 +42,7 @@ CI fails if this file is out of date.
 | heck | 0.5.0 | MIT OR Apache-2.0 |
 | indexmap | 2.14.2 | Apache-2.0 OR MIT |
 | itertools | 0.13.0 | MIT OR Apache-2.0 |
+| itoa | 1.0.18 | MIT OR Apache-2.0 |
 | jack | 0.13.5 | MIT |
 | jack-sys | 0.5.1 | MIT OR Apache-2.0 |
 | lazy_static | 1.5.1 | MIT OR Apache-2.0 |
@@ -63,12 +67,16 @@ CI fails if this file is out of date.
 | regex-syntax | 0.8.11 | MIT OR Apache-2.0 |
 | rustc-hash | 2.1.3 | Apache-2.0 OR MIT |
 | rustix | 1.1.5 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT |
+| serde | 1.0.229 | MIT OR Apache-2.0 |
 | serde_core | 1.0.229 | MIT OR Apache-2.0 |
+| serde_derive | 1.0.229 | MIT OR Apache-2.0 |
+| serde_json | 1.0.151 | MIT OR Apache-2.0 |
 | serde_spanned | 1.1.1 | MIT OR Apache-2.0 |
 | shlex | 1.3.0 | MIT OR Apache-2.0 |
 | shlex | 2.0.1 | MIT OR Apache-2.0 |
 | smallvec | 1.16.2 | MIT OR Apache-2.0 |
 | syn | 2.0.119 | MIT OR Apache-2.0 |
+| syn | 3.0.6 | MIT OR Apache-2.0 |
 | system-deps | 7.0.8 | MIT OR Apache-2.0 |
 | target-lexicon | 0.13.5 | Apache-2.0 WITH LLVM-exception |
 | toml | 1.1.6+spec-1.1.0 | MIT OR Apache-2.0 |
@@ -79,6 +87,7 @@ CI fails if this file is out of date.
 | unicode-width | 0.2.2 | MIT OR Apache-2.0 |
 | version-compare | 0.2.1 | MIT |
 | winnow | 1.0.4 | MIT |
+| zmij | 1.0.23 | MIT |
 
 ## System libraries (hand-maintained)
 
