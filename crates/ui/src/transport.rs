@@ -211,6 +211,21 @@ impl Transport {
         bar.append(&tempo_btn);
         bar.append(&extras);
         bar.append(&settings_btn);
+        // Hum a melody: the microphone opens only after this press (21.2).
+        let hum = gtk::Button::new();
+        hum.set_child(Some(
+            &adw::ButtonContent::builder()
+                .icon_name("audio-input-microphone-symbolic")
+                .label("Hum")
+                .build(),
+        ));
+        hum.add_css_class("flat");
+        hum.set_action_name(Some("win.hum"));
+        hum.set_tooltip_text(Some("Hum a melody and Oto turns it into notes"));
+        hum.update_property(&[gtk::accessible::Property::Label(
+            "Hum a melody and Oto turns it into notes",
+        )]);
+        bar.append(&hum);
         bar.append(&spacer);
         let master = Meter::new_horizontal();
         master.set_label("Main output level");

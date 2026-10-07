@@ -24,6 +24,8 @@ pub mod fl_library;
 pub mod help;
 pub mod home;
 pub mod home_logic;
+pub mod hum;
+pub mod hum_logic;
 pub mod inspector;
 pub mod inspector_native;
 pub mod keys;

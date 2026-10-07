@@ -113,6 +113,10 @@ pub struct EngineLink {
     pub plugin_events: Vec<PluginEvent>,
     /// Stub only: events the test wants the "audio thread" to have sent.
     pub events: VecDeque<EngineEvent>,
+    /// Stub only: what a recording returns. Without it the stub has no
+    /// microphone; tests never open the real one.
+    pub stub_capture: Option<engine::Captured>,
+    stub_capturing: bool,
 }
 
 /// How many submitted states the stub keeps.
@@ -132,6 +136,8 @@ impl EngineLink {
             commands: Vec::new(),
             plugin_events: Vec::new(),
             events: VecDeque::new(),
+            stub_capture: None,
+            stub_capturing: false,
         }
     }
 
@@ -149,7 +155,43 @@ impl EngineLink {
             commands: Vec::new(),
             plugin_events: Vec::new(),
             events: VecDeque::new(),
+            stub_capture: None,
+            stub_capturing: false,
         })
+    }
+
+    /// Opens the microphone (SPEC 21.2). Only from the user's Start press.
+    pub fn start_capture(&mut self) -> Result<(), String> {
+        match &mut self.live {
+            Some(e) => e.start_capture().map_err(|e| e.to_string()),
+            None if self.stub_capture.is_some() => {
+                self.stub_capturing = true;
+                Ok(())
+            }
+            None => Err("Oto has no audio device to listen with".into()),
+        }
+    }
+
+    pub fn is_capturing(&self) -> bool {
+        self.live
+            .as_ref()
+            .map_or(self.stub_capturing, |e| e.is_capturing())
+    }
+
+    /// Peak level of the latest input block, 0 to 1.
+    pub fn capture_level(&self) -> f32 {
+        self.live.as_ref().map_or(0.0, |e| e.capture_level())
+    }
+
+    /// Closes the microphone and returns the recording (in memory only).
+    pub fn stop_capture(&mut self) -> engine::Captured {
+        match &mut self.live {
+            Some(e) => e.stop_capture(),
+            None => {
+                self.stub_capturing = false;
+                self.stub_capture.take().unwrap_or_default()
+            }
+        }
     }
 
     pub fn is_live(&self) -> bool {
