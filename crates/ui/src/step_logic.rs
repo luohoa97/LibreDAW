@@ -626,7 +626,7 @@ mod tests {
         assert!(!r.piano_roll_data, "a pitched step is still a step note");
         assert_eq!(
             cell_label("c", 2, r.cells[2], false),
-            "c, step 3, on, velocity 64, pitch -5 semitones, ratchet 4"
+            "c, square 3, on, volume 64, pitch -5 semitones, repeats 4"
         );
     }
 
