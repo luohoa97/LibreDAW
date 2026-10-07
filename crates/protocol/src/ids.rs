@@ -28,8 +28,12 @@ id_type!(
     NoteId,
     /// A mixer track. `TrackId::MASTER` is the master track.
     TrackId,
-    /// A CLAP plugin instance (channel instrument or track insert).
+    /// A plugin or built-in effect instance (channel instrument or track insert).
     InstanceId,
+    /// A playlist track (15.6).
+    PlaylistTrackId,
+    /// A pattern clip on the playlist (15.6).
+    ClipId,
 );
 
 impl TrackId {

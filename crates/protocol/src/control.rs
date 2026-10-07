@@ -96,6 +96,19 @@ pub enum RequestBody {
     // Plugins
     PluginScan,
     PluginList,
+
+    // Milestone B (15.6)
+    SetTransportMode {
+        mode: crate::engine::TransportMode,
+        loop_song: bool,
+    },
+    /// Renders the whole playlist plus `tail_seconds` (job).
+    ExportSongWav {
+        format: WavFormat,
+        tail_seconds: f64,
+    },
+    /// Analyzes the whole playlist (job).
+    AnalyzeSong,
 }
 
 /// Which client kinds may send a request (17.1).

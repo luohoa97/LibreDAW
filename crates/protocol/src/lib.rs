@@ -8,6 +8,7 @@
 //!
 //! Section numbers in comments refer to `SPEC.md`.
 
+pub mod beats;
 pub mod consts;
 pub mod control;
 pub mod edit;

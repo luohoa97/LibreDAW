@@ -10,8 +10,9 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
+use crate::beats::{Bass808, BuiltinFx, Sampler};
 use crate::consts::{DEFAULT_STEP_TICKS, PPQ};
-use crate::ids::{ChannelId, InstanceId, NoteId, PatternId, TrackId};
+use crate::ids::{ChannelId, ClipId, InstanceId, NoteId, PatternId, PlaylistTrackId, TrackId};
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Project {
@@ -23,6 +24,12 @@ pub struct Project {
     pub patterns: Vec<Arc<Pattern>>,
     /// Mixer tracks. `tracks[0]` is the master (`TrackId::MASTER`).
     pub tracks: Vec<Arc<Track>>,
+    /// Samples used by the project, sorted by hash (17.2).
+    #[serde(default)]
+    pub samples: Vec<SampleRef>,
+    /// Song arrangement (15.6), sorted by id.
+    #[serde(default)]
+    pub playlist: Vec<Arc<PlaylistTrack>>,
 }
 
 impl Project {
@@ -39,7 +46,10 @@ impl Project {
                 name: "Master".to_string(),
                 mix: Mix::default(),
                 inserts: Vec::new(),
+                sends: Vec::new(),
             })],
+            samples: Vec::new(),
+            playlist: Vec::new(),
         }
     }
 
@@ -74,8 +84,14 @@ impl Project {
         }
         for t in &self.tracks {
             m = m.max(t.id.0);
-            for Insert::Clap(r) in &t.inserts {
-                m = m.max(r.instance.0);
+            for i in &t.inserts {
+                m = m.max(i.instance().0);
+            }
+        }
+        for pt in &self.playlist {
+            m = m.max(pt.id.0);
+            for c in &pt.clips {
+                m = m.max(c.id.0);
             }
         }
         m
@@ -137,6 +153,10 @@ pub struct Channel {
     pub track: TrackId,
     pub mix: Mix,
     pub instrument: Instrument,
+    /// Choke group 1 to 16; 0 = none (15.1). A note on a channel stops the
+    /// voices of the other channels in the same group.
+    #[serde(default)]
+    pub choke_group: u8,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -144,6 +164,8 @@ pub struct Channel {
 pub enum Instrument {
     Synth(SynthParams),
     Clap(ClapRef),
+    Sampler(Sampler),
+    Bass808(Bass808),
 }
 
 /// A CLAP plugin instance as stored in the document (5.1, 7.5, 17.1).
@@ -384,6 +406,10 @@ pub struct Pattern {
     pub name: String,
     pub length_steps: u8,
     pub step_ticks: u32,
+    /// Swing in 1/1000 of a step (0 to `MAX_SWING`), applied by the
+    /// compiler to step notes on odd steps (17.2).
+    #[serde(default)]
+    pub swing: u16,
     /// Notes per channel, sorted by channel id. Channels with no notes in
     /// this pattern have no entry.
     #[serde(default)]
@@ -397,6 +423,7 @@ impl Pattern {
             name,
             length_steps: 16,
             step_ticks: DEFAULT_STEP_TICKS,
+            swing: 0,
             notes: Vec::new(),
         }
     }
@@ -437,6 +464,17 @@ pub struct Note {
     pub key: u8,
     /// 1 to 127.
     pub vel: u8,
+    /// Step pitch-lane offset, -24 to 24 (17.2). Non-zero only on step
+    /// notes, where `key == root_key + off`.
+    #[serde(default)]
+    pub off: i8,
+    /// Ratchet: notes played inside this note, one of `RATCHETS` (17.2).
+    #[serde(default = "one")]
+    pub repeat: u8,
+}
+
+fn one() -> u8 {
+    1
 }
 
 impl Note {
@@ -444,12 +482,12 @@ impl Note {
         self.start + self.len
     }
 
-    /// The step-note predicate of 5.2 for Milestone A. Milestone B adds the
-    /// pitch offset of 17.2 with a format version bump.
+    /// The step-note predicate of 5.2 with the pitch lane of 17.2: on the
+    /// step grid, one step long, `key == root_key + off`, inside the pattern.
     pub fn is_step_note(&self, root_key: u8, pattern: &Pattern) -> bool {
         self.start.is_multiple_of(pattern.step_ticks)
             && self.len == pattern.step_ticks
-            && self.key == root_key
+            && self.key as i16 == root_key as i16 + self.off as i16
             && self.start < pattern.length_ticks()
     }
 }
@@ -462,14 +500,77 @@ pub struct Track {
     pub mix: Mix,
     #[serde(default)]
     pub inserts: Vec<Insert>,
+    /// Sends to other tracks, sorted by target id, at most `MAX_SENDS`.
+    #[serde(default)]
+    pub sends: Vec<Send>,
 }
 
-/// An insert slot on a mixer track. Milestone B adds built-in effects as a
-/// second variant (15.5).
+/// An insert slot on a mixer track: a CLAP plugin or a built-in effect (15.5).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Insert {
     Clap(ClapRef),
+    Builtin { instance: InstanceId, fx: BuiltinFx },
+}
+
+impl Insert {
+    pub fn instance(&self) -> InstanceId {
+        match self {
+            Insert::Clap(r) => r.instance,
+            Insert::Builtin { instance, .. } => *instance,
+        }
+    }
+}
+
+/// A send from a track to another (return) track (15.5).
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Send {
+    pub to: TrackId,
+    pub level_db: f64,
+    /// Tap before the fader (true) or after it (false).
+    pub pre_fader: bool,
+}
+
+/// A sample in the bundle (17.2): `samples/<hash>.wav`, or for
+/// `local_only` samples a per-machine path outside the bundle.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SampleRef {
+    /// SHA-256 of the file, 64 lowercase hex digits.
+    pub hash: String,
+    /// Original file name, for display.
+    pub orig_name: String,
+    pub size: u64,
+    pub local_only: bool,
+}
+
+/// A playlist track (15.6): a lane of pattern clips.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PlaylistTrack {
+    pub id: PlaylistTrackId,
+    pub name: String,
+    /// Sorted by `(start, id)`, never overlapping.
+    #[serde(default)]
+    pub clips: Vec<Clip>,
+}
+
+/// A pattern placed on the timeline. When `len` is longer than the pattern,
+/// the pattern repeats; when shorter, it is cut.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Clip {
+    pub id: ClipId,
+    pub pattern: PatternId,
+    pub start: u32,
+    pub len: u32,
+}
+
+impl Clip {
+    pub fn end(&self) -> u32 {
+        self.start + self.len
+    }
 }
 
 /// Ticks per bar for a project's time signature.

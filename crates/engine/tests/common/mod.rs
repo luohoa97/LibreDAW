@@ -50,6 +50,7 @@ pub fn synth_channel(id: u32, track: u32, params: SynthParams) -> Channel {
         track: TrackId(track),
         mix: Mix::default(),
         instrument: Instrument::Synth(params),
+        choke_group: 0,
     }
 }
 
@@ -59,6 +60,7 @@ pub fn track(id: u32) -> Track {
         name: format!("t{id}"),
         mix: Mix::default(),
         inserts: Vec::new(),
+        sends: Vec::new(),
     }
 }
 
@@ -77,6 +79,8 @@ pub fn pattern(id: u32, steps: u8, notes: &[(u32, Vec<N>)]) -> Pattern {
                 len,
                 key,
                 vel,
+                off: 0,
+                repeat: 1,
             })
             .collect();
         v.sort_by_key(|n| (n.start, n.key, n.id));

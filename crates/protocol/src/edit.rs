@@ -9,8 +9,9 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::ids::{ChannelId, InstanceId, NoteId, PatternId, TrackId};
-use crate::model::{Mix, SynthParam, SynthParams, Wave};
+use crate::beats::{Bass808Param, BuiltinFxKind, SampleMode, SamplerParam, SaturatorCurve};
+use crate::ids::{ChannelId, ClipId, InstanceId, NoteId, PatternId, PlaylistTrackId, TrackId};
+use crate::model::{Mix, SampleRef, SynthParam, SynthParams, Wave};
 use crate::validate::ValidationError;
 
 /// One fader-like value on a channel or track (4.3).
@@ -45,6 +46,16 @@ pub enum NewInstrument {
     /// found by the plugin scan (16.3).
     Clap {
         plugin_id: String,
+    },
+    /// A sampler playing a registered sample (15.1). `sample` must already be
+    /// in the project (`Edit::AddSample`), or `None` for an empty sampler.
+    Sampler {
+        sample: Option<String>,
+        mode: SampleMode,
+    },
+    /// The native 808 (15.2) with default parameters.
+    Bass808 {
+        mono: bool,
     },
 }
 
@@ -201,6 +212,155 @@ pub enum Edit {
         instance: InstanceId,
         state_file: String,
     },
+
+    // ----- Milestone B (15, 17.2) -----
+
+    // Steps and groove
+    /// Sets the lanes of an existing step note: velocity, pitch offset
+    /// (`key` becomes `root_key + off`), ratchet count. `None` keeps a value.
+    /// Fails if there is no step note at that step.
+    SetStepLanes {
+        pattern: PatternId,
+        channel: ChannelId,
+        step: u8,
+        vel: Option<u8>,
+        off: Option<i8>,
+        repeat: Option<u8>,
+    },
+    /// Ratchet count of piano-roll notes; `len` must be divisible by it.
+    SetNoteRepeat {
+        pattern: PatternId,
+        notes: Vec<NoteId>,
+        repeat: u8,
+    },
+    SetSwing {
+        pattern: PatternId,
+        swing: u16,
+    },
+    SetChokeGroup {
+        channel: ChannelId,
+        group: u8,
+    },
+
+    // Samples
+    /// Registers a sample file already written to the bundle (or recorded
+    /// as local-only, 17.2). Adding an existing hash is a no-op.
+    AddSample {
+        sample: SampleRef,
+    },
+    /// Fails if a sampler still uses it.
+    RemoveSample {
+        hash: String,
+    },
+
+    // Sampler
+    SetSamplerSample {
+        channel: ChannelId,
+        sample: Option<String>,
+    },
+    SetSamplerMode {
+        channel: ChannelId,
+        mode: SampleMode,
+        reverse: bool,
+    },
+    SetSamplerParam {
+        channel: ChannelId,
+        param: SamplerParam,
+        value: f64,
+    },
+
+    // 808
+    SetBass808Mono {
+        channel: ChannelId,
+        mono: bool,
+    },
+    SetBass808Param {
+        channel: ChannelId,
+        param: Bass808Param,
+        value: f64,
+    },
+
+    // Built-in effects and routing
+    /// Adds a built-in effect with default parameters at `index`.
+    AddBuiltinInsert {
+        track: TrackId,
+        index: u8,
+        fx: BuiltinFxKind,
+    },
+    /// Continuous parameter by table index (`BuiltinFx::param_name`).
+    SetFxParam {
+        track: TrackId,
+        instance: InstanceId,
+        param: u8,
+        value: f64,
+    },
+    SetSaturatorCurve {
+        track: TrackId,
+        instance: InstanceId,
+        curve: SaturatorCurve,
+    },
+    SetDelayPingPong {
+        track: TrackId,
+        instance: InstanceId,
+        ping_pong: bool,
+    },
+    /// Key input of a compressor; fails if it would create a loop.
+    SetSidechain {
+        track: TrackId,
+        instance: InstanceId,
+        source: Option<TrackId>,
+    },
+    /// Moves an insert to a new position on the same track.
+    MoveInsert {
+        track: TrackId,
+        instance: InstanceId,
+        index: u8,
+    },
+    /// Adds or updates the send from `track` to `to`.
+    SetSend {
+        track: TrackId,
+        to: TrackId,
+        level_db: f64,
+        pre_fader: bool,
+    },
+    RemoveSend {
+        track: TrackId,
+        to: TrackId,
+    },
+
+    // Playlist (15.6)
+    AddPlaylistTrack {
+        name: String,
+    },
+    /// Removes the track and its clips.
+    RemovePlaylistTrack {
+        track: PlaylistTrackId,
+    },
+    RenamePlaylistTrack {
+        track: PlaylistTrackId,
+        name: String,
+    },
+    /// Fails if it would overlap another clip on that track.
+    AddClip {
+        track: PlaylistTrackId,
+        pattern: PatternId,
+        start: u32,
+        len: u32,
+    },
+    RemoveClips {
+        clips: Vec<ClipId>,
+    },
+    /// Moves clips by `dt` ticks and `dtrack` playlist rows (in id order).
+    /// Fails on overlap or out of range; nothing is clamped silently.
+    MoveClips {
+        clips: Vec<ClipId>,
+        dt: i64,
+        dtrack: i32,
+    },
+    ResizeClips {
+        clips: Vec<ClipId>,
+        dlen: i64,
+    },
 }
 
 impl Edit {
@@ -215,6 +375,9 @@ impl Edit {
                 | Edit::SetTrackMix { .. }
                 | Edit::SetSynthParam { .. }
                 | Edit::SetPluginParam { .. }
+                | Edit::SetSamplerParam { .. }
+                | Edit::SetBass808Param { .. }
+                | Edit::SetFxParam { .. }
         )
     }
 }

@@ -8,7 +8,11 @@
 
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
-use crate::consts::{MAX_CHANNELS, MAX_INSERTS, MAX_PARAMS_PER_SLOT, TRACK_SLOTS};
+use serde::{Deserialize, Serialize};
+
+use crate::consts::{
+    FX_PARAMS_PER_INSERT, MAX_CHANNELS, MAX_INSERTS, MAX_PARAMS_PER_SLOT, MAX_SENDS, TRACK_SLOTS,
+};
 use crate::ids::PatternId;
 
 /// Stable per-channel slot index, `0..MAX_CHANNELS`, assigned by the GTK
@@ -75,7 +79,15 @@ pub const CTL_METRONOME_GAIN_DB: usize = TRACK_BASE + TRACK_SLOTS * MIX_CONTROLS
 /// Metronome on (1.0) or off (0.0).
 pub const CTL_METRONOME_ENABLED: usize = CTL_METRONOME_GAIN_DB + 1;
 /// Number of `f32` entries in the control table.
-pub const CONTROL_TABLE_LEN: usize = CTL_METRONOME_ENABLED + 1;
+const SEND_BASE: usize = CTL_METRONOME_ENABLED + 1;
+/// Number of `f32` entries in the control table.
+pub const CONTROL_TABLE_LEN: usize = SEND_BASE + TRACK_SLOTS * MAX_SENDS;
+
+/// Level in dB of send `index` (position in `Track::sends`) of a track (15.5).
+pub fn send_control(slot: TrackSlot, index: usize) -> usize {
+    debug_assert!(index < MAX_SENDS);
+    SEND_BASE + slot.0 as usize * MAX_SENDS + index
+}
 
 pub fn channel_control(slot: ChannelSlot, c: MixControl) -> usize {
     CHANNEL_BASE + slot.0 as usize * MIX_CONTROLS + c as usize
@@ -137,9 +149,20 @@ pub fn param_index(slot: ChannelSlot, param: usize) -> usize {
     slot.0 as usize * MAX_PARAMS_PER_SLOT + param
 }
 
-pub const PARAM_TABLE_LEN: usize = MAX_CHANNELS * MAX_PARAMS_PER_SLOT;
+const FX_PARAM_BASE: usize = MAX_CHANNELS * MAX_PARAMS_PER_SLOT;
 
-/// Native instrument parameters, same rules as `ControlTable`.
+/// Index of continuous parameter `param` of the built-in effect at insert
+/// position `insert` on a track (15.5, 17.2).
+pub fn fx_param_index(track: TrackSlot, insert: usize, param: usize) -> usize {
+    debug_assert!(insert < MAX_INSERTS && param < FX_PARAMS_PER_INSERT);
+    FX_PARAM_BASE + (track.0 as usize * MAX_INSERTS + insert) * FX_PARAMS_PER_INSERT + param
+}
+
+/// Channel instrument parameters, then built-in effect parameters.
+pub const PARAM_TABLE_LEN: usize = FX_PARAM_BASE + TRACK_SLOTS * MAX_INSERTS * FX_PARAMS_PER_INSERT;
+
+/// Native instrument and built-in effect parameters, same rules as
+/// `ControlTable`.
 pub struct ParamTable {
     values: Box<[AtomicU32]>,
 }
@@ -238,6 +261,12 @@ pub enum EngineCommand {
     SetPlayingPattern {
         pattern: PatternId,
     },
+    /// Pattern mode loops the playing pattern; song mode plays the playlist
+    /// (15.6), looping the whole song when `loop_song` is true.
+    SetTransportMode {
+        mode: TransportMode,
+        loop_song: bool,
+    },
     /// Fill a plugin slot. `start_processing` happens on first use.
     AttachPlugin {
         slot: PluginSlot,
@@ -260,6 +289,14 @@ pub enum EngineCommand {
         vel: u8,
         on: bool,
     },
+}
+
+/// What the transport plays (15.6).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TransportMode {
+    Pattern,
+    Song,
 }
 
 /// Longest a preview note sounds without a release (seconds).
@@ -323,6 +360,11 @@ mod tests {
         }
         assert!(seen.insert(CTL_METRONOME_GAIN_DB));
         assert!(seen.insert(CTL_METRONOME_ENABLED));
+        for s in 0..TRACK_SLOTS {
+            for i in 0..MAX_SENDS {
+                assert!(seen.insert(send_control(TrackSlot(s as u16), i)));
+            }
+        }
         assert_eq!(seen.len(), CONTROL_TABLE_LEN);
         assert!(seen.iter().all(|&i| i < CONTROL_TABLE_LEN));
     }
@@ -355,7 +397,13 @@ mod tests {
         assert_eq!(t.tempo(), 133.33);
         let p = ParamTable::new();
         let i = param_index(ChannelSlot(63), MAX_PARAMS_PER_SLOT - 1);
-        assert_eq!(i, PARAM_TABLE_LEN - 1);
+        assert_eq!(fx_param_index(TrackSlot(0), 0, 0), i + 1);
+        let last = fx_param_index(
+            TrackSlot((TRACK_SLOTS - 1) as u16),
+            MAX_INSERTS - 1,
+            FX_PARAMS_PER_INSERT - 1,
+        );
+        assert_eq!(last, PARAM_TABLE_LEN - 1);
         p.set(i, 0.25);
         assert_eq!(p.get(i), 0.25);
     }
