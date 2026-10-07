@@ -1546,6 +1546,88 @@ Tools are designed for few round trips and small payloads:
 - Suggestions arrive as previews (ghost notes, highlighted rows) the user
   accepts or rejects; nothing changes the project until accepted.
 - LibreDAW itself contains no model, no API key, and no network client.
+
+## 19. Home, onboarding, and release (Amendment 14)
+
+Owner direction: "an easy and efficient workstation that you can pick up
+instantly, with UI just as you expect from a GNOME app", shipped as a
+Flatpak with a full release.
+
+### 19.1 Home page (replaces "reopen last project" from Amendment 9)
+
+- Launching LibreDAW opens the Home page (docs/ui-design.md 3.1, the
+  start screen), never straight into a project. Opening a `.ldaw` file
+  from the file manager or the command line opens that project directly.
+- Home shows, in this order: "Unsaved Work" (recovery bundles from
+  crashes or never-saved projects, 7.6, each with Open and Discard; Discard
+  moves the bundle to the trash, it never deletes), "Start a Beat"
+  (templates: Phonk, Trap, Boom Bap, Lo-fi, House, Empty), "Recent
+  Projects" (saved projects, newest first, with search when there are
+  more than 8), and "Getting Started" (opens the guide, 19.2).
+- Closing a project returns to Home (it saves first, Amendment 9); quitting
+  from Home quits. `.view.toml` still restores the view when a project is
+  opened.
+
+### 19.2 First-time guide and tutorial
+
+- First launch shows a short welcome (an `AdwDialog` with an `AdwCarousel`
+  of 3 to 5 pages: what LibreDAW is, the three views, how to hear a beat,
+  where help is), skippable, never shown again automatically.
+- An interactive tutorial project, "Make Your First Beat": a guided
+  sequence of 6 to 10 steps shown in a small non-modal card docked at the
+  bottom of the window (not a dialog), each pointing at the real control
+  ("Click step 1 on Kick", "Press Space to play", "Open the Hat notes",
+  "Add a hi-hat roll", "Turn up the 808", "Export your beat"). Each step
+  completes when the user does the action; Back, Next, and Exit are always
+  available. Progress is remembered.
+- Revisitable: "Getting Started" on Home and in the primary menu, and
+  "Welcome Tour" in the primary menu. Help (F1) opens a local help page.
+- The guide and tutorial texts are plain words, in the docs/ui-design.md
+  label style, and translatable.
+
+### 19.3 Flatpak
+
+- App id `org.libredaw.LibreDAW` (to be confirmed by the owner; it must
+  be a domain the project controls for Flathub), GNOME runtime matching
+  libadwaita >= 1.5, Rust SDK extension, `--socket=pipewire` (fallback
+  `--socket=pulseaudio` only if needed), `--device=dri`, Wayland and X11
+  fallback (X11 is also needed for plugin windows, 9.2), real-time
+  priority through the realtime portal or rtkit over the session bus.
+- Build sources are vendored offline (`cargo vendor` into a generated
+  sources file); the generator is our own Fish or Rust tool, because the
+  usual generator is written in Python.
+- CLAP plugins: plugins are found through the Flatpak Linux audio plugin
+  extension point (`org.freedesktop.LinuxAudio.Plugins.*`, mounted under
+  `/app/extensions/Plugins`) plus `~/.clap` with a narrow filesystem
+  permission. Host-installed plugins in `/usr/lib/clap` are not visible;
+  this limit is stated in the README.
+- Sound packs (`libredaw-sounds`) are bundled as a separate CC0 module in
+  the Flatpak, installed under `/app/share/libredaw/sounds`.
+- Scripting: `deno` is not available inside the sandbox; scripting is
+  disabled in the Flatpak build with a clear message, unless a Deno
+  extension is added later.
+- Agents: `libredaw-mcp` ships inside the Flatpak and is launched by
+  clients as `flatpak run --command=libredaw-mcp org.libredaw.LibreDAW`;
+  `libredaw-mcp setup` writes that form when it runs inside the Flatpak.
+  The control socket lives in the app's runtime dir.
+- Desktop integration: `.desktop` file, AppStream metainfo with
+  screenshots and release notes, a symbolic and a full-color app icon
+  drawn for this project (GPL-3.0-or-later, listed in ASSETS.md), MIME
+  type for `.ldaw` bundles.
+
+### 19.4 Release 0.1.0
+
+- Contents: Milestones A and B plus 19.1, 19.2, and section 18 presence.
+  Milestone C items not in 19 (sound browser drag and drop polish, demo
+  projects beyond the templates) may slip to 0.2.
+- Gate: tools/ci.fish green; the validator's live and load benchmarks
+  with zero xruns; the independent UX tester replays the owner's flows
+  and the tutorial with no open blocker or major issue; the Flatpak builds
+  offline and runs on a clean GNOME installation (tested in a VM or
+  container); THIRD_PARTY.md and ASSETS.md complete.
+- Published: a signed git tag `v0.1.0`, a GitHub release with the
+  `.flatpak` bundle and release notes. Flathub submission is a separate,
+  later owner decision.
 ---
 
 ## Owner decisions (approved 2026-10-07)
@@ -1559,6 +1641,12 @@ Tools are designed for few round trips and small payloads:
 ---
 
 ## Changelog
+
+### Amendment 14 (2026-10-07, owner)
+
+Home page on launch with unsaved and saved work (replaces reopen-last from
+Amendment 9); first-time welcome and a revisitable interactive tutorial;
+Flatpak packaging; release 0.1.0 scope and gate (section 19).
 
 ### Amendment 13 (2026-10-07, owner)
 
