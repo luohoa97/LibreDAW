@@ -19,6 +19,8 @@ pub mod draw;
 pub mod engine_adapter;
 pub mod export;
 pub mod files;
+pub mod fl_browser;
+pub mod fl_library;
 pub mod help;
 pub mod inspector;
 pub mod inspector_native;

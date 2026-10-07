@@ -204,6 +204,28 @@ impl EngineLink {
         Ok(())
     }
 
+    /// Sound-browser audition (20.3): a sample in `store` plays on the
+    /// preview voice. `Err` means the command ring is full.
+    #[allow(clippy::result_large_err)]
+    pub fn audition(
+        &mut self,
+        store: Option<&engine::SampleStore>,
+        source: protocol::engine::AuditionSource,
+        key: u8,
+        vel: u8,
+        on: bool,
+    ) -> Result<(), EngineCommand> {
+        if let Some(e) = &mut self.live {
+            return e.audition(store, source, key, vel, on);
+        }
+        self.command(EngineCommand::Audition {
+            source,
+            key,
+            vel,
+            on,
+        })
+    }
+
     /// Plugin event ring. `Err` means full.
     pub fn plugin_event(&mut self, e: PluginEvent) -> Result<(), PluginEvent> {
         if let Some(l) = &mut self.live {
