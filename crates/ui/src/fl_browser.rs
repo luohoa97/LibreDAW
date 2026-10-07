@@ -478,15 +478,14 @@ impl FlSection {
             }
             let (app, e1, e2) = (self.app.clone(), e.clone(), e.clone());
             let app2 = self.app.clone();
-            rows.push(
-                row(
-                    &e.name,
-                    &format!("{} · FL Studio", fl::role_title(&e.role)),
-                    move || add_sound(&app, &e1),
-                    Some(Box::new(move || preview(&app2, &e2))),
-                )
-                .upcast(),
+            let r = row(
+                &e.name,
+                &format!("{} · FL Studio", fl::role_title(&e.role)),
+                move || add_sound(&app, &e1),
+                Some(Box::new(move || preview(&app2, &e2))),
             );
+            crate::samples_ui::make_draggable(&r, e.path.clone());
+            rows.push(r.upcast());
         }
         if total > cap {
             let more = adw::ActionRow::new();
