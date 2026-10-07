@@ -25,7 +25,7 @@ use protocol::control::{
     ProjectInfo, ReplyBody, Request, RequestBody, Setting, Settings, Theme, Transport, WavFormat,
     agent_string,
 };
-use protocol::edit::{Edit, NewInstrument};
+use protocol::edit::{Applied, Edit, NewInstrument};
 
 use crate::app::{App, UiCommand};
 use crate::engine_adapter::{self, RenderJob};
@@ -947,6 +947,27 @@ fn execute(app: &Rc<App>, ticket: Ticket, author: &Author, req: Request) -> Opti
                 None,
             ));
         }
+        // The Hum sheet answers as a job of its own (control/src/hum.rs).
+        RequestBody::JobStatus { job } if job == control::hum::JOB => match crate::hum::job() {
+            Some((state, _, _)) => ok(ReplyBody::JobStatus {
+                job,
+                state,
+                progress: 0.0,
+            }),
+            None => err(ControlError::NotFound { what: "job".into() }),
+        },
+        RequestBody::JobResult { job } if job == control::hum::JOB => match crate::hum::job() {
+            Some((JobState::Done, clips, _)) => ok(ReplyBody::Applied(Applied {
+                revision: revision(app),
+                created: clips,
+            })),
+            Some(_) => bad("the hum has not finished"),
+            None => err(ControlError::NotFound { what: "job".into() }),
+        },
+        RequestBody::JobCancel { job } if job == control::hum::JOB => {
+            crate::hum::cancel_job();
+            ok(ReplyBody::Done)
+        }
         RequestBody::JobStatus { job } => {
             let guard = app.bridge.borrow();
             let b = guard.as_ref()?;
@@ -987,6 +1008,14 @@ fn execute(app: &Rc<App>, ticket: Ticket, author: &Author, req: Request) -> Opti
             }
         }
         RequestBody::SetActivity { text, focus } => {
+            if let Some(p) = text.as_deref().and_then(control::hum::decode) {
+                // An agent asks the user to hum; only the user starts it.
+                return Some(if crate::hum::ask(app, author, p, focus) {
+                    ok(ReplyBody::Done)
+                } else {
+                    err(ControlError::Busy)
+                });
+            }
             set_activity(app, author, text.as_deref(), focus);
             ok(ReplyBody::Done)
         }

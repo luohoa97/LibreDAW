@@ -311,6 +311,7 @@ pub fn build(gapp: &adw::Application, app: Rc<App>) -> adw::ApplicationWindow {
         &transport,
     );
     install_actions(gapp, &ui, &app);
+    crate::hum::install(&app, &window);
     install_accels(gapp, &window, &ui);
     install_tick(&app);
     install_view_hooks(&ui, &app);
@@ -328,7 +329,7 @@ pub fn build(gapp: &adw::Application, app: Rc<App>) -> adw::ApplicationWindow {
                 u.inspector_split.set_show_sidebar(true);
             }
             UiCommand::AgentChanged => update_agent_ui(&u, &a2),
-            UiCommand::EditNotes => {}
+            UiCommand::EditNotes | UiCommand::Hum => {}
             UiCommand::RenameChannel(id) => u.timeline.channels.rename(id),
         });
     }
@@ -782,6 +783,8 @@ fn install_actions(gapp: &adw::Application, ui: &Rc<Ui>, app: &Rc<App>) {
     );
     let a = app.clone();
     add("go-start", Box::new(move || seek_start(&a)));
+    let a = app.clone();
+    add("hum", Box::new(move || a.command(UiCommand::Hum)));
     let a = app.clone();
     add(
         "metronome",

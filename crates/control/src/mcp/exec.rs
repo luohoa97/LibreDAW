@@ -657,8 +657,12 @@ impl Exec {
         )?;
         let deadline = Instant::now() + self.shared.job_wait;
         loop {
-            let ReplyBody::JobStatus { state, .. } =
-                self.body(RequestBody::JobStatus { job: crate::hum::JOB }, None)?
+            let ReplyBody::JobStatus { state, .. } = self.body(
+                RequestBody::JobStatus {
+                    job: crate::hum::JOB,
+                },
+                None,
+            )?
             else {
                 return Err(unexpected("the hum state"));
             };
@@ -677,11 +681,20 @@ impl Exec {
     /// `job` with the hum job id: the same answers as `hum_prepare`.
     fn hum_query(&self, cancel: bool) -> Out<ToolOutput> {
         if cancel {
-            self.body(RequestBody::JobCancel { job: crate::hum::JOB }, None)?;
+            self.body(
+                RequestBody::JobCancel {
+                    job: crate::hum::JOB,
+                },
+                None,
+            )?;
             return Ok(hum_declined());
         }
-        let ReplyBody::JobStatus { state, .. } =
-            self.body(RequestBody::JobStatus { job: crate::hum::JOB }, None)?
+        let ReplyBody::JobStatus { state, .. } = self.body(
+            RequestBody::JobStatus {
+                job: crate::hum::JOB,
+            },
+            None,
+        )?
         else {
             return Err(unexpected("the hum state"));
         };
@@ -693,37 +706,54 @@ impl Exec {
     }
 
     fn hum_done(&self) -> Out<ToolOutput> {
-        let ReplyBody::Applied(applied) =
-            self.body(RequestBody::JobResult { job: crate::hum::JOB }, None)?
+        let ReplyBody::Applied(applied) = self.body(
+            RequestBody::JobResult {
+                job: crate::hum::JOB,
+            },
+            None,
+        )?
         else {
             return Err(unexpected("the hum result"));
         };
         let (_, project) = self.project()?;
-        let clip = applied
+        let mut clips: Vec<&protocol::model::Clip> = applied
             .created
-            .last()
-            .and_then(|id| project.clips.iter().find(|c| c.id.0 == *id))
+            .iter()
+            .filter_map(|id| project.clips.iter().find(|c| c.id.0 == *id))
+            .collect();
+        clips.sort_by_key(|c| c.start);
+        let first = *clips
+            .first()
             .ok_or_else(|| ToolOutput::error("not_found", "the hum clip is gone"))?;
-        let pattern = project
-            .pattern(clip.pattern)
-            .ok_or_else(|| ToolOutput::error("not_found", "the hum content is gone"))?;
         let tpb = ticks_per_bar(project.time_sig_num);
-        let weights: Vec<(u8, f32)> = pattern.notes.iter().map(|n| (n.key, n.len as f32)).collect();
+        // A long hum is several clips side by side; notes count from the
+        // start of the first.
+        let mut all: Vec<protocol::model::Note> = Vec::new();
+        for c in &clips {
+            if let Some(p) = project.pattern(c.pattern) {
+                all.extend(p.notes.iter().map(|n| protocol::model::Note {
+                    start: n.start + (c.start - first.start),
+                    ..*n
+                }));
+            }
+        }
+        let weights: Vec<(u8, f32)> = all.iter().map(|n| (n.key, n.len as f32)).collect();
         let key = crate::hum::detect_key(&weights).map(|k| k.name());
-        let text = notes::format_notes(&pattern.notes, tpb);
+        let end = clips.iter().map(|c| c.end()).max().unwrap_or(first.end());
         Ok(ToolOutput::ok(json!({
             "state": "done",
-            "clip": clip.id.0,
-            "content": pattern.id.0,
-            "instrument": clip.instrument.0,
-            "starts_at_bar": notes::fraction(clip.start, tpb),
-            "bars": notes::fraction(clip.len, tpb),
+            "clip": first.id.0,
+            "clips": clips.iter().map(|c| c.id.0).collect::<Vec<_>>(),
+            "content": first.pattern.0,
+            "instrument": first.instrument.0,
+            "starts_at_bar": notes::fraction(first.start, tpb),
+            "bars": notes::fraction(end - first.start, tpb),
             "key": key,
             "tempo_bpm": project.tempo_bpm,
             "time_signature": format!("{}/4", project.time_sig_num),
-            "note_count": pattern.notes.len(),
-            "notes": text,
-            "note": "Notes are note:start:length in bars from the clip start. Compose around them with clips_add and notes edits.",
+            "note_count": all.len(),
+            "notes": notes::format_notes(&all, tpb),
+            "note": "Notes are note:start:length in bars from the start of the hum (starts_at_bar). Compose around them with clips_add and notes edits.",
         })))
     }
 

@@ -159,9 +159,29 @@ mod tests {
     #[test]
     fn finds_a_minor_and_c_major() {
         // A minor: A B C D E F G A, tonic and fifth held longer.
-        let a_minor: Vec<(u8, f32)> = [(57, 2.0), (59, 1.0), (60, 1.0), (62, 1.0), (64, 1.5), (65, 0.5), (67, 0.5), (57, 2.0)].into();
+        let a_minor: Vec<(u8, f32)> = [
+            (57, 2.0),
+            (59, 1.0),
+            (60, 1.0),
+            (62, 1.0),
+            (64, 1.5),
+            (65, 0.5),
+            (67, 0.5),
+            (57, 2.0),
+        ]
+        .into();
         assert_eq!(detect_key(&a_minor).unwrap().name(), "A minor");
-        let c_major: Vec<(u8, f32)> = [(60, 2.0), (62, 1.0), (64, 1.0), (65, 1.0), (67, 1.5), (69, 1.0), (71, 0.5), (60, 2.0)].into();
+        let c_major: Vec<(u8, f32)> = [
+            (60, 2.0),
+            (62, 1.0),
+            (64, 1.0),
+            (65, 1.0),
+            (67, 1.5),
+            (69, 1.0),
+            (71, 0.5),
+            (60, 2.0),
+        ]
+        .into();
         assert_eq!(detect_key(&c_major).unwrap().name(), "C major");
         assert_eq!(detect_key(&[(60, 1.0)]), None);
     }
