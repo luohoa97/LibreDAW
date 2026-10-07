@@ -19,7 +19,7 @@ use ui::session::Session;
 /// Builds the fixture cdylib if needed (a no-op when it is current), so the
 /// tests do not depend on cargo's build order. A fixture that cannot be
 /// built is a test failure, not a skip.
-fn build_fixture(exe: &std::path::Path) -> PathBuf {
+fn build_fixture(exe: &std::path::Path, target: &std::path::Path) -> PathBuf {
     let release = exe.components().any(|c| c.as_os_str() == "release");
     let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
     let mut cmd = std::process::Command::new(cargo);
@@ -29,28 +29,34 @@ fn build_fixture(exe: &std::path::Path) -> PathBuf {
         "libredaw-plugin-host",
         "--example",
         "test_plugins",
+        "--target-dir",
     ]);
+    cmd.arg(target);
     if release {
         cmd.arg("--release");
     }
     let st = cmd.status().expect("run cargo to build the fixture");
     assert!(st.success(), "building the test_plugins fixture failed");
-    let so = exe
-        .parent()
-        .and_then(|p| p.parent())
-        .expect("target dir")
+    let so = target
+        .join(if release { "release" } else { "debug" })
         .join("examples/libtest_plugins.so");
     assert!(so.exists(), "fixture missing after build: {so:?}");
     so
 }
 
+/// Builds into a private target dir (never the shared `examples/`, which
+/// other test processes copy or map) and holds a lock across the build and
+/// the install copy.
 fn load_fixture() -> Vec<PluginDesc> {
     let exe = std::env::current_exe().expect("exe path");
-    let so = build_fixture(&exe);
-    let dir =
-        PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("ui-clap-{}", std::process::id()));
-    std::fs::create_dir_all(dir.join("nested")).expect("fixture dir");
-    std::fs::copy(&so, dir.join("nested/test_plugins.clap")).expect("copy fixture");
+    let tmp = PathBuf::from(env!("CARGO_TARGET_TMPDIR"));
+    let target = tmp.join("ui-fixture-target");
+    std::fs::create_dir_all(&target).expect("fixture target dir");
+    let lock = std::fs::File::create(target.join("build.lock")).expect("lock file");
+    lock.lock().expect("lock fixture build");
+    let so = build_fixture(&exe, &target);
+    let dir = plugin_host::testing::install_fixture(&so, &tmp, "ui-clap");
+    drop(lock);
     scan_paths(std::slice::from_ref(&dir))
 }
 
