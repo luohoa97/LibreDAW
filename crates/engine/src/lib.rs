@@ -29,7 +29,7 @@ pub mod transport;
 pub mod wav;
 pub mod wavread;
 
-pub use api::{Engine, EngineConfig, EngineError, Host};
+pub use api::{CallbackProbe, Engine, EngineConfig, EngineError, Host};
 pub use compiled::{Compiled, Slots, SlotsFull, compile, compile_with};
 pub use metronome::{CallbackState, Controls, Metronome};
 pub use plugins::PluginApi;
