@@ -69,6 +69,12 @@ pub struct SynthCtl {
 }
 
 impl SynthCtl {
+    /// Adds a pitch shape's offset to both oscillators (24.2-1).
+    pub fn shift_semitones(&mut self, st: f32) {
+        self.semis1 += st;
+        self.semis2 += st;
+    }
+
     pub fn read(params: &ParamTable, slot: ChannelSlot, sr: f64) -> SynthCtl {
         let p = |q: SynthParam| params.get(param_index(slot, q.index()));
         use SynthParam::*;

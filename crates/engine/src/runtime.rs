@@ -3,8 +3,10 @@
 //! once, sized to the fixed maxima, never reallocated while the stream runs.
 //! The live callback and the offline renderer call the same `process_*`.
 
+use crate::audioclip;
 use crate::audition::{Audition, AuditionSample};
 use crate::bass808::{Bass808, BassCtl};
+use crate::chanfilter::{self, ChanFilter};
 use crate::compiled::{Compiled, InsertC, InstrumentC};
 use crate::fx::FxPools;
 use crate::loudness::{LoudnessMeter, LoudnessRing};
@@ -18,6 +20,7 @@ use crate::rt::{RtGuard, enter_rt_fp_mode, restore_fp_mode};
 use crate::sampler::{Sampler, SamplerCtl};
 use crate::samples::SampleData;
 use crate::sequencer::{BEAT_CAP, Beat, ChokeEvent, EVENT_CAP, SeqEvent, Sequencer, TraceEvent};
+use crate::shapes::{CELL, ShapeDest, value_at};
 use crate::synth::{Synth, SynthCtl};
 use protocol::consts::{
     COMMAND_RING_CAP, EVENT_RING_CAP, FX_PARAMS_PER_INSERT, MAX_BLOCK, MAX_CHANNELS, MAX_INSERTS,
@@ -386,6 +389,13 @@ pub struct Runtime {
     /// Frames left in which a previewed channel stays solo-exempt.
     preview_tail: [u32; MAX_CHANNELS],
     loudness: LoudnessMeter,
+    /// The installed state has shapes: sub-blocks stop at the `CELL` grid.
+    shape_cells: bool,
+    /// Pitch shape offsets in semitones and filter shape values (1 = open),
+    /// per channel slot, for the current sub-block.
+    pitch_off: Vec<f32>,
+    filt: Vec<f32>,
+    chan_lp: Vec<ChanFilter>,
 }
 
 impl Runtime {
@@ -437,6 +447,10 @@ impl Runtime {
             audition: Audition::new(),
             previews_allowed: true,
             preview_tail: [0; MAX_CHANNELS],
+            shape_cells: false,
+            pitch_off: vec![0.0; MAX_CHANNELS],
+            filt: vec![1.0; MAX_CHANNELS],
+            chan_lp: vec![ChanFilter::default(); MAX_CHANNELS],
         }
     }
 
@@ -587,6 +601,11 @@ impl Runtime {
     /// stream start). Returns the previous state for the caller to free.
     pub fn install(&mut self, c: Box<Compiled>) -> Option<Box<Compiled>> {
         self.apply_generations(&c);
+        self.shape_cells = !c.shapes.is_empty();
+        if !self.shape_cells {
+            self.pitch_off.fill(0.0);
+            self.filt.fill(1.0);
+        }
         self.seq.on_install(&c);
         self.compiled.replace(c)
     }
@@ -603,6 +622,7 @@ impl Runtime {
                 self.chan_key_fader[s].reset();
                 self.bass[s].reset();
                 self.samplers[s].reset();
+                self.chan_lp[s].reset();
                 self.chan_fader[s].reset();
                 self.chan_gen[s] = new.channel_gen[s];
             }
@@ -739,13 +759,15 @@ impl Runtime {
         let _rt = RtGuard::enter();
         let mut l = [0.0f32; MAX_BLOCK];
         let mut r = [0.0f32; MAX_BLOCK];
-        for chunk in data.chunks_mut(MAX_BLOCK * 2) {
-            let n = chunk.len() / 2;
+        let mut at = 0;
+        while at < data.len() / 2 {
+            let n = (data.len() / 2 - at).min(self.max_chunk());
             self.sub_block(&mut l[..n], &mut r[..n]);
-            for (i, f) in chunk.chunks_exact_mut(2).enumerate() {
+            for (i, f) in data[at * 2..(at + n) * 2].chunks_exact_mut(2).enumerate() {
                 f[0] = l[i];
                 f[1] = r[i];
             }
+            at += n;
         }
         restore_fp_mode(fp);
     }
@@ -754,10 +776,54 @@ impl Runtime {
     pub fn process_planar(&mut self, left: &mut [f32], right: &mut [f32]) {
         let fp = enter_rt_fp_mode();
         let _rt = RtGuard::enter();
-        for (l, r) in left.chunks_mut(MAX_BLOCK).zip(right.chunks_mut(MAX_BLOCK)) {
-            self.sub_block(l, r);
+        let total = left.len().min(right.len());
+        let mut at = 0;
+        while at < total {
+            let n = (total - at).min(self.max_chunk());
+            self.sub_block(&mut left[at..at + n], &mut right[at..at + n]);
+            at += n;
         }
         restore_fp_mode(fp);
+    }
+
+    /// Frames the next sub-block may have: with shapes, it ends at the next
+    /// `CELL` boundary of the absolute position, so a shape's value never
+    /// depends on how the host splits its callbacks.
+    fn max_chunk(&self) -> usize {
+        if self.shape_cells {
+            MAX_BLOCK.min((CELL - self.seq.pos % CELL) as usize)
+        } else {
+            MAX_BLOCK
+        }
+    }
+
+    /// Evaluates the shapes for the cell holding the sub-block and writes
+    /// them to their targets: the control and parameter tables for volume,
+    /// pan and effect parameters (so the UI follows), and the per-channel
+    /// pitch and filter values for the channel renders.
+    fn eval_shapes(&mut self, c: &Compiled, ctl: &ControlTable) {
+        if c.shapes.is_empty() {
+            return;
+        }
+        let tick = self.seq.tick_at(self.seq.pos - self.seq.pos % CELL);
+        self.pitch_off.fill(0.0);
+        self.filt.fill(1.0);
+        for sh in &c.shapes {
+            let v = value_at(&sh.points, tick);
+            match sh.dest {
+                ShapeDest::TrackVolume(t) => ctl.set(
+                    track_control(TrackSlot(t), MixControl::VolumeDb),
+                    v.clamp(-60.0, 6.0),
+                ),
+                ShapeDest::TrackPan(t) => ctl.set(
+                    track_control(TrackSlot(t), MixControl::Pan),
+                    v.clamp(-1.0, 1.0),
+                ),
+                ShapeDest::Pitch(s) => self.pitch_off[s as usize] = v.clamp(-24.0, 24.0),
+                ShapeDest::Filter(s) => self.filt[s as usize] = v.clamp(0.0, 1.0),
+                ShapeDest::FxParam(i) => self.shared.params.set(i, v),
+            }
+        }
     }
 
     fn sub_block(&mut self, out_l: &mut [f32], out_r: &mut [f32]) {
@@ -860,6 +926,7 @@ impl Runtime {
         }
         ev_mask |= choke_mask;
 
+        self.eval_shapes(&c, ctl);
         self.read_mixer(&c);
 
         // Buses
@@ -885,7 +952,8 @@ impl Runtime {
                     if !has_events && !self.synths[s].is_active() {
                         continue;
                     }
-                    let sctl = SynthCtl::read(&self.shared.params, cs, self.sample_rate);
+                    let mut sctl = SynthCtl::read(&self.shared.params, cs, self.sample_rate);
+                    sctl.shift_semitones(self.pitch_off[s]);
                     self.mono[..n].fill(0.0);
                     self.synths[s].render(
                         &sctl,
@@ -902,7 +970,8 @@ impl Runtime {
                     if !has_events && !self.bass[s].is_active() {
                         continue;
                     }
-                    let bctl = BassCtl::read(&self.shared.params, cs, self.sample_rate);
+                    let mut bctl = BassCtl::read(&self.shared.params, cs, self.sample_rate);
+                    bctl.shift_semitones(self.pitch_off[s]);
                     self.mono[..n].fill(0.0);
                     self.bass[s].render(
                         &bctl,
@@ -921,7 +990,8 @@ impl Runtime {
                     if !has_events && !self.samplers[s].is_active() {
                         continue;
                     }
-                    let sctl = SamplerCtl::read(&self.shared.params, cs, self.sample_rate);
+                    let mut sctl = SamplerCtl::read(&self.shared.params, cs, self.sample_rate);
+                    sctl.shift_semitones(self.pitch_off[s]);
                     self.chan_l[..n].fill(0.0);
                     self.chan_r[..n].fill(0.0);
                     self.samplers[s].render(
@@ -940,6 +1010,26 @@ impl Runtime {
                         self.mono[..n].copy_from_slice(&self.chan_l[..n]);
                     }
                     self.mix_channel(s, t, n, !mono_src, (vol, pan, audible), key);
+                }
+                InstrumentC::Audio { clips, mono } => {
+                    let (segs, until) = self.seq.segments();
+                    if segs.is_empty() || clips.is_empty() {
+                        continue;
+                    }
+                    if !audioclip::render(
+                        clips,
+                        segs,
+                        until,
+                        self.seq.samples_per_tick(),
+                        &mut self.chan_l[..n],
+                        &mut self.chan_r[..n],
+                    ) {
+                        continue;
+                    }
+                    if *mono {
+                        self.mono[..n].copy_from_slice(&self.chan_l[..n]);
+                    }
+                    self.mix_channel(s, t, n, !*mono, (vol, pan, audible), key);
                 }
                 InstrumentC::Clap => {
                     let ps = PluginSlot::Instrument(cs);
@@ -1128,6 +1218,19 @@ impl Runtime {
         (vol, pan, audible): (f32, f32, bool),
         key: bool,
     ) {
+        // A Filter shape: low-pass the channel before its fader.
+        if self.filt[s] < chanfilter::OPEN {
+            let lp = &mut self.chan_lp[s];
+            lp.set(self.filt[s], self.sample_rate);
+            if stereo {
+                lp.process(0, &mut self.chan_l[..n]);
+                lp.process(1, &mut self.chan_r[..n]);
+            } else {
+                lp.process(0, &mut self.mono[..n]);
+            }
+        } else {
+            self.chan_lp[s].reset();
+        }
         let f = &mut self.chan_fader[s];
         f.set(vol, pan, audible, !stereo, self.ramp);
         let (bl, br) = self.buses.lr(t, n);

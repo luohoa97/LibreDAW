@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! Slot assignment and the immutable compiled state (SPEC 4.1).
 
+use crate::audioclip::{AudioClipC, mdb_to_lin};
 use crate::fx::{ALL_KINDS, KINDS, kind_index, pool_size};
 use crate::groove::{ratchet_part, swung_start};
 use crate::sampler::SamplerC;
 use crate::samples::SampleStore;
+use crate::shapes::{ShapeC, compile_shapes};
 use protocol::beats::{BuiltinFx, BuiltinFxKind, SaturatorCurve};
 use protocol::consts::{MAX_CHANNELS, MAX_CHOKE_GROUP, MAX_INSERTS, MAX_SENDS, TRACK_SLOTS};
 use protocol::engine::{ChannelSlot, SlotGen, TrackSlot};
@@ -255,6 +257,13 @@ pub enum InstrumentC {
     Bass808 {
         mono: bool,
     },
+    /// An audio row (21.1): its clips, sorted by start. Clips whose sample
+    /// is not in the store, and muted clips, are left out.
+    Audio {
+        clips: Vec<AudioClipC>,
+        /// Every clip's sample is mono.
+        mono: bool,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -283,7 +292,7 @@ pub struct SendC {
 pub enum InsertC {
     /// A CLAP insert; the plugin sits in `PluginSlot::Insert`.
     Clap,
-    /// A built-in effect that got no pool entry: bypassed.
+    /// A built-in effect that got no pool entry, or is bypassed: skipped.
     Empty,
     Eq {
         pool: u8,
@@ -370,6 +379,8 @@ pub struct Compiled {
     pub loop_start: u32,
     pub loop_end: u32,
     pub loop_enabled: bool,
+    /// Automation curves (24.2-1), compiled to breakpoint tables.
+    pub shapes: Vec<ShapeC>,
 }
 
 impl Compiled {
@@ -418,6 +429,7 @@ pub fn compile_with(
         loop_start: 0,
         loop_end: 0,
         loop_enabled: false,
+        shapes: compile_shapes(project, slots),
     };
     for t in &project.tracks {
         if let Some(s) = slots.track_slot(t.id) {
@@ -468,9 +480,7 @@ pub fn compile_with(
                     .and_then(|h| store.and_then(|st| st.get(h))),
             }),
             Instrument::Bass808(b) => InstrumentC::Bass808 { mono: b.mono },
-            // TODO(engine teammate): audio rows play their audio clips (21.1).
-            // Until then the row is silent and unsupported.
-            Instrument::Audio => continue,
+            Instrument::Audio => compile_audio_row(project, ch.id, store),
         };
         c.channels[i] = Some(ChannelC {
             instrument,
@@ -554,6 +564,37 @@ pub fn compile_with(
     Box::new(c)
 }
 
+/// The clips of audio row `row` that can play (21.1), sorted by start.
+fn compile_audio_row(
+    project: &Project,
+    row: ChannelId,
+    store: Option<&SampleStore>,
+) -> InstrumentC {
+    let mut clips = Vec::new();
+    let mut mono = true;
+    for clip in project.clips.iter().filter(|c| c.instrument == row) {
+        let Some(a) = clip.audio else { continue };
+        if clip.muted || clip.len == 0 {
+            continue;
+        }
+        let Some(data) = store.and_then(|st| st.get(&a.sample.to_hex())) else {
+            continue;
+        };
+        mono &= data.channels <= 1;
+        clips.push(AudioClipC {
+            start: clip.start,
+            end: clip.start.saturating_add(clip.len),
+            offset: clip.offset,
+            gain: mdb_to_lin(a.gain_mdb),
+            fade_in: a.fade_in,
+            fade_out: a.fade_out,
+            data,
+        });
+    }
+    clips.sort_by_key(|c| (c.start, c.end));
+    InstrumentC::Audio { clips, mono }
+}
+
 /// Notes the song timeline may hold; a clip that would add more stops
 /// expanding (a one-tick pattern under a very long clip, for example).
 pub const MAX_SONG_NOTES: usize = 4_000_000;
@@ -567,6 +608,16 @@ fn compile_song(project: &Project, c: &Compiled) -> (PatternC, u32) {
     let mut end = 0u64;
     let mut total = 0usize;
     'clips: for clip in &project.clips {
+        if clip.audio.is_some() {
+            // An audio clip counts toward the end while its row exists.
+            let on_row = project
+                .channel(clip.instrument)
+                .is_some_and(|ch| matches!(ch.instrument, Instrument::Audio));
+            if on_row && clip.len > 0 {
+                end = end.max(clip.start as u64 + clip.len as u64);
+            }
+            continue;
+        }
         let Some(p) = c.pattern(clip.pattern) else {
             continue;
         };
@@ -628,9 +679,19 @@ fn compile_song(project: &Project, c: &Compiled) -> (PatternC, u32) {
 
 /// Compiles one insert; records the pool entry's generation in `fx_gen`.
 fn compile_insert(ins: &Insert, slots: &Slots, fx_gen: &mut [Vec<SlotGen>; KINDS]) -> InsertC {
-    let Insert::Builtin { instance, fx, .. } = ins else {
+    let Insert::Builtin {
+        instance,
+        fx,
+        bypass,
+    } = ins
+    else {
         return InsertC::Clap;
     };
+    // A bypassed effect is skipped, and its pool entry's generation stays 0
+    // so its state resets when it comes back (24.1).
+    if *bypass {
+        return InsertC::Empty;
+    }
     let kind = fx.kind();
     let Some(pool) = slots.fx_slot(kind, *instance) else {
         return InsertC::Empty;

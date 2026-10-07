@@ -53,7 +53,8 @@ pub fn render_range(
 }
 
 /// As `render_range` with an explicit callback size. The output does not
-/// depend on it (built-in DSP is per sample and control values are constant).
+/// depend on it (built-in DSP is per sample; with shapes, sub-blocks end on a
+/// fixed 64-frame grid of the absolute position).
 pub fn render_range_with_block(
     req: &RangeRequest,
     slots: &Slots,
@@ -160,14 +161,21 @@ pub struct Rendered {
 pub const SAMPLE_WAIT_SECONDS: u64 = 10;
 
 /// Sample hashes the project's sampler channels use.
-fn used_samples(p: &Project) -> BTreeSet<&str> {
-    p.channels
+fn used_samples(p: &Project) -> BTreeSet<String> {
+    let mut set: BTreeSet<String> = p
+        .channels
         .iter()
         .filter_map(|c| match &c.instrument {
-            Instrument::Sampler(s) => s.sample.as_deref(),
+            Instrument::Sampler(s) => s.sample.clone(),
             _ => None,
         })
-        .collect()
+        .collect();
+    set.extend(
+        p.clips
+            .iter()
+            .filter_map(|c| c.audio.map(|a| a.sample.to_hex())),
+    );
+    set
 }
 
 /// The store a render compiles against, plus warnings.
@@ -197,7 +205,7 @@ fn prepare_store(
     };
     let deadline = Instant::now() + Duration::from_secs(SAMPLE_WAIT_SECONDS);
     let mut ready: Vec<(&str, SampleData)> = Vec::new();
-    for &h in &used {
+    for h in used.iter().map(String::as_str) {
         loop {
             match store.state(h) {
                 Some(SampleState::Ready(d)) => {

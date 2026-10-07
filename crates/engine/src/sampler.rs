@@ -27,6 +27,11 @@ pub struct SamplerCtl {
 }
 
 impl SamplerCtl {
+    /// Adds a pitch shape's offset (24.2-1).
+    pub fn shift_semitones(&mut self, st: f32) {
+        self.semitones += st as f64;
+    }
+
     pub fn read(params: &ParamTable, slot: ChannelSlot, sr: f64) -> SamplerCtl {
         let p = |q: SamplerParam| params.get(param_index(slot, q.index()));
         use SamplerParam::*;
