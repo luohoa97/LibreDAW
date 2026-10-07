@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+[package]
+name = "libredaw-library"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+name = "library"
+
+[dependencies]
+libredaw-protocol = { path = "../protocol" }
+# SHA-256 of sample bytes, the same hash the bundle uses (SPEC 17.2 fmt-4).
+libredaw-doc = { path = "../doc" }
+serde = { version = "1", features = ["derive"] }
+toml = "1"
