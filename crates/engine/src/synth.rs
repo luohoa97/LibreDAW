@@ -265,14 +265,6 @@ impl Synth {
     }
 
     pub fn note_on(&mut self, key: u8, vel: u8, id: u32) {
-        // A retrigger releases the old voice of the same key first.
-        for v in &mut self.voices {
-            if v.active() && v.held && v.key == key {
-                v.held = false;
-                v.amp.release();
-                v.filt.release();
-            }
-        }
         let i = match self.voices.iter().position(|v| !v.active()) {
             Some(i) => i,
             None => {
@@ -297,9 +289,11 @@ impl Synth {
         self.voices[i] = v;
     }
 
-    pub fn note_off(&mut self, key: u8) {
+    /// Releases the voice started by note `id`. A voice of another note on
+    /// the same key (a preview over a sequencer note) keeps sounding.
+    pub fn note_off(&mut self, id: u32) {
         for v in &mut self.voices {
-            if v.active() && v.held && v.key == key {
+            if v.active() && v.held && v.id == id {
                 v.held = false;
                 v.amp.release();
                 v.filt.release();
@@ -329,7 +323,7 @@ impl Synth {
             if e.on {
                 self.note_on(e.key, e.vel, e.id);
             } else {
-                self.note_off(e.key);
+                self.note_off(e.id);
             }
         }
         if at < n {

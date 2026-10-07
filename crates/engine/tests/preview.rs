@@ -108,6 +108,22 @@ fn preview_mixes_with_sequencer_notes_without_cutting_them() {
 }
 
 #[test]
+fn releasing_a_preview_keeps_the_sequencer_voice_on_the_same_key() {
+    // A long sequencer note on key 64 and a preview of the same key.
+    let mut r = rig(&one_channel(vec![(1, 0, 3840, 64, 100)]), SR, true);
+    r.run(2400, 256);
+    send(&mut r, on(64));
+    r.run(1200, 256);
+    assert_eq!(r.rt.active_voices(C0), 2, "two voices on one key");
+    send(&mut r, off(64));
+    // The preview's release is 5 ms in `tone_params`; let it finish.
+    r.run(4800, 256);
+    assert_eq!(r.rt.active_voices(C0), 1, "only the preview voice ended");
+    let (after, _) = r.run(2400, 256);
+    assert!(peak(&after) > 0.05, "the sequencer note still sounds");
+}
+
+#[test]
 fn preview_auto_releases_after_the_limit_to_the_sample() {
     let mut r = rig(&one_channel(vec![]), SR, false);
     send(&mut r, on(60));
