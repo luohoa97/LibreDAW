@@ -96,7 +96,11 @@ fn identical_commits_have_the_same_id_and_unchanged_nodes_are_shared() {
     let mut s = HistoryStore::open(&t.0).unwrap();
     let a = commit(&mut s, &d, None, 1000);
     assert_eq!(commit(&mut s, &d, None, 1000), a);
-    let files = |sub: &str| fs::read_dir(t.0.join(HISTORY_DIR).join(sub)).unwrap().count();
+    let files = |sub: &str| {
+        fs::read_dir(t.0.join(HISTORY_DIR).join(sub))
+            .unwrap()
+            .count()
+    };
     let objects = files("objects");
     // 4 channels + 4 patterns + 5 tracks + root.
     assert_eq!(objects, 14);
@@ -161,13 +165,26 @@ fn damaged_or_partial_files_are_ignored() {
     let mut s = HistoryStore::open(&t.0).unwrap();
     let a = commit(&mut s, &d, None, 1);
     let b = commit(&mut s, &tempo(&d, 100.0), Some(&a), 2);
-    let path = t.0.join(HISTORY_DIR).join("commits").join(format!("{b}.toml"));
+    let path =
+        t.0.join(HISTORY_DIR)
+            .join("commits")
+            .join(format!("{b}.toml"));
     let text = fs::read_to_string(&path).unwrap();
     fs::write(&path, text.replace("100", "101").replace("edit", "edat")).unwrap();
     fs::write(t.0.join(HISTORY_DIR).join("commits").join("junk.toml"), "x").unwrap();
-    fs::write(t.0.join(HISTORY_DIR).join("commits").join(format!("{a}.toml.tmp")), "x").unwrap();
+    fs::write(
+        t.0.join(HISTORY_DIR)
+            .join("commits")
+            .join(format!("{a}.toml.tmp")),
+        "x",
+    )
+    .unwrap();
     let s = HistoryStore::open(&t.0).unwrap();
-    assert_eq!(s.commit_count(), 1, "the altered commit no longer matches its hash");
+    assert_eq!(
+        s.commit_count(),
+        1,
+        "the altered commit no longer matches its hash"
+    );
     assert!(s.commit(&a).is_some());
 }
 
@@ -298,7 +315,12 @@ fn compact_keeps_named_versions_heads_and_recent_commits() {
     let mut parent: Option<String> = None;
     let mut ids = Vec::new();
     for i in 0..6u64 {
-        let h = commit(&mut s, &tempo(&d, 100.0 + i as f64), parent.as_deref(), 1000 + i);
+        let h = commit(
+            &mut s,
+            &tempo(&d, 100.0 + i as f64),
+            parent.as_deref(),
+            1000 + i,
+        );
         parent = Some(h.clone());
         ids.push(h);
     }
@@ -328,13 +350,22 @@ fn compact_keeps_named_versions_heads_and_recent_commits() {
     let n4 = nodes.iter().find(|n| n.commit == ids[4]).unwrap();
     assert_eq!(n4.parent, None);
     assert_eq!(
-        nodes.iter().find(|n| n.commit == ids[1]).unwrap().name.as_deref(),
+        nodes
+            .iter()
+            .find(|n| n.commit == ids[1])
+            .unwrap()
+            .name
+            .as_deref(),
         Some("Keeper")
     );
     assert_consistent(&t.0);
     // Nothing named by a kept commit was deleted: an apply of every kept
     // project still works.
-    apply_batch(&Document::from_project(s.load_project(&ids[5]).unwrap().0, 100), &[]).unwrap();
+    apply_batch(
+        &Document::from_project(s.load_project(&ids[5]).unwrap().0, 100),
+        &[],
+    )
+    .unwrap();
 }
 
 #[test]

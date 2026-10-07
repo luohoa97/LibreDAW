@@ -37,9 +37,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use protocol::control::{BranchInfo, HistoryNode};
-use protocol::model::{
-    Channel, Clip, LoopRegion, Metronome, Pattern, Project, SampleRef, Track,
-};
+use protocol::model::{Channel, Clip, LoopRegion, Metronome, Pattern, Project, SampleRef, Track};
 use serde::{Deserialize, Serialize};
 
 use crate::bundle::Keep;
@@ -59,7 +57,10 @@ const CACHE_LIMIT: usize = 8192;
 
 #[derive(Debug)]
 pub enum StoreError {
-    Io { path: PathBuf, error: io::Error },
+    Io {
+        path: PathBuf,
+        error: io::Error,
+    },
     Corrupt(String),
     /// Test hook: the write stopped here, as a crash would.
     Crashed(StoreStep),
@@ -164,6 +165,7 @@ struct RootObject {
     clips: Vec<Clip>,
 }
 
+type NodeCache<T> = HashMap<usize, (Arc<T>, String)>;
 type Hook = Box<dyn FnMut(&StoreStep) -> bool + Send>;
 
 /// Summary of `compact`.
@@ -198,13 +200,18 @@ pub struct HistoryStore {
 fn read_text(path: &Path) -> Result<String, StoreError> {
     let len = fs::metadata(path).map_err(io_err(path))?.len();
     if len > MAX_FILE_BYTES {
-        return Err(StoreError::Corrupt(format!("{} is too large", path.display())));
+        return Err(StoreError::Corrupt(format!(
+            "{} is too large",
+            path.display()
+        )));
     }
     fs::read_to_string(path).map_err(io_err(path))
 }
 
 fn is_hash(s: &str) -> bool {
-    s.len() == 64 && s.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    s.len() == 64
+        && s.bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
 /// Lowercase letters, digits, and single dashes; at most 40 characters.
@@ -339,7 +346,9 @@ impl HistoryStore {
                     continue;
                 };
                 let mut lines = text.lines();
-                let (Some(commit), name) = (lines.next(), lines.next().unwrap_or(&slug).to_string()) else {
+                let (Some(commit), name) =
+                    (lines.next(), lines.next().unwrap_or(&slug).to_string())
+                else {
                     continue;
                 };
                 if s.commits.contains_key(commit) {
@@ -415,7 +424,13 @@ impl HistoryStore {
 
     // ----- writing ---------------------------------------------------------
 
-    fn put(&mut self, sub: &str, name: &str, bytes: &[u8], replace: bool) -> Result<bool, StoreError> {
+    fn put(
+        &mut self,
+        sub: &str,
+        name: &str,
+        bytes: &[u8],
+        replace: bool,
+    ) -> Result<bool, StoreError> {
         let dir = self.dir.join(sub);
         fs::create_dir_all(&dir).map_err(io_err(&dir))?;
         let fin = dir.join(name);
@@ -461,7 +476,7 @@ impl HistoryStore {
     fn write_nodes<T: Serialize>(
         &mut self,
         items: &[Arc<T>],
-        pick: fn(&mut HistoryStore) -> &mut HashMap<usize, (Arc<T>, String)>,
+        pick: fn(&mut HistoryStore) -> &mut NodeCache<T>,
     ) -> Result<Vec<String>, StoreError> {
         let mut out = Vec::with_capacity(items.len());
         for it in items {
@@ -545,7 +560,9 @@ impl HistoryStore {
     pub fn write_branch(&mut self, b: &BranchMeta) -> Result<(), StoreError> {
         for c in [&b.head, &b.base] {
             if !self.commits.contains_key(c) {
-                return Err(StoreError::Corrupt(format!("branch names unknown commit {c}")));
+                return Err(StoreError::Corrupt(format!(
+                    "branch names unknown commit {c}"
+                )));
             }
         }
         if b.id.is_empty() || b.id != slugify(&b.id) {
@@ -610,7 +627,9 @@ impl HistoryStore {
         }
         let text = read_text(&self.dir.join(OBJECTS).join(format!("{hash}.toml")))?;
         if sha256_hex(text.as_bytes()) != hash {
-            return Err(StoreError::Corrupt(format!("object {hash} does not match its name")));
+            return Err(StoreError::Corrupt(format!(
+                "object {hash} does not match its name"
+            )));
         }
         Ok(text)
     }
@@ -646,8 +665,8 @@ impl HistoryStore {
             .cloned()
             .ok_or_else(|| StoreError::Corrupt(format!("unknown commit {commit}")))?;
         let text = self.object_text(&meta.root)?;
-        let root: RootObject =
-            toml::from_str(&text).map_err(|e| StoreError::Corrupt(format!("root {}: {e}", meta.root)))?;
+        let root: RootObject = toml::from_str(&text)
+            .map_err(|e| StoreError::Corrupt(format!("root {}: {e}", meta.root)))?;
         let channels = self.read_nodes(&root.channels, |s| &mut s.r_channels)?;
         let patterns = self.read_nodes(&root.patterns, |s| &mut s.r_patterns)?;
         let tracks = self.read_nodes(&root.tracks, |s| &mut s.r_tracks)?;
@@ -736,10 +755,7 @@ impl HistoryStore {
         all.into_iter()
             .map(|(h, c)| HistoryNode {
                 commit: h.clone(),
-                parent: c
-                    .parent
-                    .clone()
-                    .filter(|p| self.commits.contains_key(p)),
+                parent: c.parent.clone().filter(|p| self.commits.contains_key(p)),
                 branch: c.branch.clone(),
                 author: c.author.clone(),
                 description: c.description.clone(),
@@ -959,4 +975,4 @@ impl Persister {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

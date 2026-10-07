@@ -868,6 +868,8 @@ name = "libredaw-doc"
 version = "0.0.0"
 dependencies = [
  "libredaw-protocol",
+ "serde",
+ "toml",
 ]
 
 [[package]]

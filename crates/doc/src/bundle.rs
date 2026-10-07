@@ -154,6 +154,37 @@ impl Keep {
             }
         });
     }
+
+    /// Adds everything `other` keeps (for example `HistoryStore::keep()`).
+    pub fn merge(&mut self, other: &Keep) {
+        self.samples.extend(other.samples.iter().cloned());
+        self.blobs.extend(other.blobs.iter().cloned());
+    }
+}
+
+/// Loads the plugin state bytes a project names but does not hold, from
+/// `<bundle>/plugin-state/`. History snapshots read from disk have none
+/// (15.11). Returns the project unchanged (same `Arc`) if nothing is
+/// missing or no file exists.
+pub fn fill_state_bytes(p: &Arc<Project>, bundle: &Path) -> Arc<Project> {
+    let mut needs = false;
+    for_each_clap(p, |r| {
+        needs |= r.state_file.is_some() && r.state_bytes.is_none()
+    });
+    if !needs {
+        return p.clone();
+    }
+    let dir = bundle.join(STATE_DIR);
+    let mut out = (**p).clone();
+    for_each_clap_mut(&mut out, |r| {
+        if r.state_bytes.is_none()
+            && let Some(n) = &r.state_file
+            && let Ok(b) = read_limited(&dir.join(n), MAX_BLOB_BYTES)
+        {
+            r.state_bytes = Some(Arc::from(b));
+        }
+    });
+    Arc::new(out)
 }
 
 fn fsync_dir(dir: &Path) -> Result<(), BundleError> {

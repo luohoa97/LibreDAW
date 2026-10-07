@@ -2,6 +2,7 @@
 //! Document logic without GTK: edits, undo history, project bundle, persistence.
 
 pub mod bundle;
+pub mod diff;
 pub mod document;
 pub mod history;
 pub mod persist;

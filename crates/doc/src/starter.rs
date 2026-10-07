@@ -153,7 +153,11 @@ mod tests {
         for c in &p.channels {
             let clips: Vec<_> = p.clips.iter().filter(|k| k.instrument == c.id).collect();
             assert_eq!(clips.len(), 4);
-            assert!(clips.iter().all(|k| k.pattern == clips[0].pattern && k.len == bar));
+            assert!(
+                clips
+                    .iter()
+                    .all(|k| k.pattern == clips[0].pattern && k.len == bar)
+            );
             let starts: Vec<u32> = clips.iter().map(|k| k.start).collect();
             assert_eq!(starts, [0, bar, 2 * bar, 3 * bar]);
         }
