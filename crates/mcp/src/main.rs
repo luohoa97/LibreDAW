@@ -20,10 +20,10 @@ fn main() {
         if line.trim().is_empty() {
             continue;
         }
-        if let Some(reply) = server.handle_line(&line) {
-            if writeln!(stdout, "{reply}").is_err() || stdout.flush().is_err() {
-                break;
-            }
+        if let Some(reply) = server.handle_line(&line)
+            && (writeln!(stdout, "{reply}").is_err() || stdout.flush().is_err())
+        {
+            break;
         }
     }
 }
