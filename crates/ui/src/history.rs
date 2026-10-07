@@ -687,6 +687,23 @@ impl Editor {
         self.queue.len() != before
     }
 
+    /// Makes `other`'s project the current state as one undo step (recovery
+    /// of autosaved work, Amendment 10). `next_id` only grows.
+    pub fn push_state(&mut self, author: Author, description: &str, other: &Document) {
+        let nd = Document {
+            project: other.project.clone(),
+            next_id: self
+                .doc
+                .next_id
+                .max(other.next_id)
+                .max(other.project.max_id().saturating_add(1)),
+            revision: self.doc.revision + 1,
+        };
+        self.hist
+            .push(nd.project.clone(), author, description.to_string());
+        self.doc = nd;
+    }
+
     /// The project an undo (or redo) would go to, without moving. Used to
     /// capture plugin state before a step that removes plugins (7.5).
     pub fn peek(&self, undo: bool, scope: &Scope) -> Option<Arc<Project>> {
