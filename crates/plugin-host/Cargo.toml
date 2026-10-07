@@ -15,8 +15,7 @@ clap-sys = "0.5"
 libloading = "0.8"
 glib = "0.22"
 x11rb = "0.13"
-
-[dev-dependencies]
+# The beginner instrument list (presets/instruments.toml).
 toml = "1"
 
 # Test fixtures: one cdylib holding several small CLAP plugins.

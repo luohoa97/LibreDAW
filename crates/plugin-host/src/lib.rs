@@ -7,6 +7,7 @@ mod gui;
 pub mod host;
 mod inst;
 pub mod rt;
+pub mod sounds;
 mod sources;
 #[doc(hidden)]
 pub mod testing;

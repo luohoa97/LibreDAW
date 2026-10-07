@@ -823,6 +823,7 @@ fn install_actions(gapp: &adw::Application, ui: &Rc<Ui>, app: &Rc<App>) {
             }
         }),
     );
+    crate::sound_picker::rescan_on_focus(window, app);
     let a = app.clone();
     let preset = gio::SimpleAction::new("add-preset", Some(glib::VariantTy::STRING));
     preset.connect_activate(move |_, v| {
@@ -837,6 +838,11 @@ fn install_actions(gapp: &adw::Application, ui: &Rc<Ui>, app: &Rc<App>) {
         Box::new(move || {
             channels::add(&a, NewChannel::Bass808);
         }),
+    );
+    let (a, w) = (app.clone(), window.clone());
+    add(
+        "add-sound",
+        Box::new(move || crate::sound_picker::show(&w, &a)),
     );
     let (a, w) = (app.clone(), window.clone());
     add(

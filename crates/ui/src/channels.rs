@@ -57,6 +57,17 @@ pub enum NewChannel {
     Preset(String),
     /// A CLAP instrument.
     Plugin { id: String, name: String },
+    /// A CLAP instrument playing a factory sound (Amendment 23). The sound is
+    /// loaded by the session, which records the plugin state in the document.
+    Sound {
+        plugin_id: String,
+        name: String,
+        preset: String,
+        /// The key a step plays.
+        note: u8,
+        /// Turns the new track down when the sound is louder than full scale.
+        gain_db: f64,
+    },
     /// The built-in 808 (15.2).
     Bass808,
     /// A sampler (15.1).
@@ -94,6 +105,20 @@ impl NewChannel {
                 },
                 60,
             ),
+            NewChannel::Sound {
+                plugin_id,
+                name,
+                preset,
+                note,
+                ..
+            } => (
+                unique_name(name, taken),
+                NewInstrument::Clap {
+                    plugin_id: plugin_id.clone(),
+                    preset: Some(preset.clone()),
+                },
+                *note,
+            ),
             NewChannel::Bass808 => (
                 unique_name("808 Bass", taken),
                 NewInstrument::Bass808 { mono: true },
@@ -110,8 +135,18 @@ impl NewChannel {
         }
     }
 
-    /// Edits that follow the channel: choke group, level, pan.
-    fn finish(&self, channel: ChannelId) -> Vec<Edit> {
+    /// Edits that follow the channel: choke group, level, pan. `own_track` is
+    /// the track made for it, if any; a shared track keeps its level.
+    fn finish(&self, channel: ChannelId, own_track: Option<TrackId>) -> Vec<Edit> {
+        if let NewChannel::Sound { gain_db, .. } = self {
+            return match own_track {
+                Some(track) if *gain_db != 0.0 => vec![Edit::SetTrackMix {
+                    track,
+                    value: MixValue::VolumeDb(*gain_db),
+                }],
+                _ => Vec::new(),
+            };
+        }
         let NewChannel::Sampler(s) = self else {
             return Vec::new();
         };
@@ -182,7 +217,7 @@ pub fn add(app: &Rc<App>, what: NewChannel) -> Option<ChannelId> {
     }]);
     let id = made.map(|a| ChannelId(a.created[0]));
     if let Some(id) = id {
-        let more = what.finish(id);
+        let more = what.finish(id, own_track.then_some(track));
         if !more.is_empty() {
             run(more);
         }
@@ -413,7 +448,7 @@ pub fn add_kit_as(
         .unwrap_or_default();
     let mut more = Vec::new();
     for (id, what) in ids.iter().zip(&whats) {
-        more.extend(what.finish(*id));
+        more.extend(what.finish(*id, None));
     }
     if !more.is_empty() {
         run(more);

@@ -43,6 +43,7 @@ pub const WIN_ACTIONS: &[&str] = &[
     "show-help-overlay",
     "add-preset",
     "add-808",
+    "add-sound",
     "add-sampler",
     "add-instrument",
 ];
@@ -72,35 +73,22 @@ pub fn main_menu() -> gio::Menu {
     menu
 }
 
-/// The "Add Channel" menu: built-in sounds grouped by role, then the 808,
-/// the sampler and a plugin.
+/// The "Add Instrument" menu: the drums, then the sounds picker (Amendment 23),
+/// the sampler and a plugin. The built-in synth and 808 are not offered; old
+/// projects that hold them still play.
 pub fn add_channel_menu() -> gio::Menu {
     let menu = gio::Menu::new();
-    let mut roles: Vec<&str> = Vec::new();
-    let all = presets::presets();
-    for p in &all {
-        if !roles.contains(&p.role) {
-            roles.push(p.role);
-        }
+    let drums = gio::Menu::new();
+    for p in presets::presets().iter().filter(|p| p.role == "Drum") {
+        let item = gio::MenuItem::new(Some(p.name), None);
+        item.set_action_and_target_value(Some("win.add-preset"), Some(&p.name.to_variant()));
+        drums.append_item(&item);
     }
-    for role in roles {
-        let section = gio::Menu::new();
-        for p in all.iter().filter(|p| p.role == role) {
-            let item = gio::MenuItem::new(Some(p.name), None);
-            item.set_action_and_target_value(Some("win.add-preset"), Some(&p.name.to_variant()));
-            section.append_item(&item);
-        }
-        let title = match role {
-            "Drum" => "Drums",
-            "Blank" => "Empty",
-            other => other,
-        };
-        menu.append_section(Some(title), &section);
-    }
-    let native = gio::Menu::new();
-    native.append(Some("_808 Bass"), Some("win.add-808"));
-    native.append(Some("_Sampler…"), Some("win.add-sampler"));
-    menu.append_section(None, &native);
+    menu.append_section(Some("Drums"), &drums);
+    let more = gio::Menu::new();
+    more.append(Some("_Sounds…"), Some("win.add-sound"));
+    more.append(Some("_Sampler…"), Some("win.add-sampler"));
+    menu.append_section(None, &more);
     let plugin = gio::Menu::new();
     plugin.append(Some("_Plugin…"), Some("win.add-instrument"));
     menu.append_section(None, &plugin);

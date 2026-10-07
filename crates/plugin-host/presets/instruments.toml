@@ -4,7 +4,8 @@
 # is a libre CLAP plugin plus a factory preset. `preset` is a path under the
 # plugin's `preset_root`, which is relative to the extension root (the parent of
 # the directory holding the .clap file). `note` is the MIDI key used to audition
-# and to test-render the entry (60 is C4, 48 is C3).
+# and to test-render the entry (60 is C4, 48 is C3). `gain_db` (optional) turns
+# the new track down for a preset that peaks above full scale.
 
 [[plugin]]
 key = "surge-xt"
@@ -62,6 +63,7 @@ name = "Classic Lead"
 plugin = "surge-xt"
 preset = "Leads/Classic Lead 1.fxp"
 note = 60
+gain_db = -3.0
 
 [[instrument]]
 role = "Lead"

@@ -78,10 +78,27 @@ pub struct Session {
     out_events: VecDeque<PluginEvent>,
     seen_overflows: u64,
     plugin_gesture: bool,
+    /// Instances whose first sound was just loaded and whose state waits for
+    /// the open gesture to end.
+    pending_capture: Vec<InstanceId>,
     gesture_just_ended: bool,
     capture_clock: CaptureClock,
     /// Messages for the user (toasts), drained with `take_messages`.
     messages: Vec<String>,
+}
+
+/// The sound each CLAP instrument in `edits` asks for, in order.
+fn wanted_presets(edits: &[Edit]) -> Vec<Option<String>> {
+    edits
+        .iter()
+        .filter_map(|e| match e {
+            Edit::AddChannel {
+                instrument: protocol::edit::NewInstrument::Clap { preset, .. },
+                ..
+            } => Some(preset.clone()),
+            _ => None,
+        })
+        .collect()
 }
 
 fn instance_ids(p: &Project) -> HashSet<InstanceId> {
@@ -117,6 +134,7 @@ impl Session {
             out_events: VecDeque::new(),
             seen_overflows: 0,
             plugin_gesture: false,
+            pending_capture: Vec::new(),
             gesture_just_ended: false,
             capture_clock: CaptureClock::standard(Instant::now()),
             messages: Vec::new(),
@@ -160,11 +178,13 @@ impl Session {
         token: u64,
     ) -> Result<Submitted, EditFailure> {
         let gone = removed_instances(&self.editor.document().project, &edits);
+        let wanted = wanted_presets(&edits);
         self.capture(&gone);
         let old = self.editor.document().project.clone();
         let r = self.editor.submit(author, description, edits, token)?;
         if matches!(r, Submitted::Applied(_)) {
             self.after_change(&old, Origin::External);
+            self.load_new_presets(&old, &wanted);
         }
         Ok(r)
     }
@@ -177,6 +197,7 @@ impl Session {
         let old = self.editor.document().project.clone();
         let r = self.editor.gesture_edit(edits)?;
         self.after_change(&old, Origin::External);
+        self.load_new_presets(&old, &wanted_presets(edits));
         Ok(r)
     }
 
@@ -187,6 +208,8 @@ impl Session {
         if !done.is_empty() {
             self.after_change(&old, Origin::External);
         }
+        let ids = std::mem::take(&mut self.pending_capture);
+        self.capture(&ids);
         done
     }
 
@@ -246,6 +269,53 @@ impl Session {
     }
 
     // ---- plugin state (7.5) ----
+
+    /// Loads the first sound of each new CLAP instrument that asked for one
+    /// (`NewInstrument::Clap::preset`), then records the plugin's state, so a
+    /// saved project holds the sound without the preset file. `wanted` has
+    /// one entry per CLAP instrument the batch adds, in order. A sound that
+    /// cannot be loaded leaves the plugin on its default sound.
+    fn load_new_presets(&mut self, old: &Project, wanted: &[Option<String>]) {
+        if wanted.iter().all(Option::is_none) {
+            return;
+        }
+        let before = instance_ids(old);
+        let new: Vec<(InstanceId, String)> = self
+            .editor
+            .document()
+            .project
+            .channels
+            .iter()
+            .filter_map(|c| match &c.instrument {
+                Instrument::Clap(r) if !before.contains(&r.instance) => {
+                    Some((r.instance, r.plugin_id.clone()))
+                }
+                _ => None,
+            })
+            .collect();
+        for ((id, plugin_id), preset) in new.into_iter().zip(wanted) {
+            let Some(preset) = preset else { continue };
+            let file = self
+                .registry
+                .find_desc(&plugin_id)
+                .and_then(|d| plugin_host::sounds::preset_file(d, preset));
+            let loaded = match (file, self.registry.instance_mut(id)) {
+                (Some(f), Some(inst)) => {
+                    let r = inst.load_preset(&f);
+                    // Echoes of the load are not user changes.
+                    let _ = crate::plugin_adapter::take_changes(inst);
+                    r.map_err(|e| e.to_string())
+                }
+                (None, _) => Err("the sound file was not found".to_string()),
+                (_, None) => Err("the instrument is not available".to_string()),
+            };
+            match loaded {
+                Ok(()) if self.editor.gesture_open() => self.pending_capture.push(id),
+                Ok(()) => self.capture(&[id]),
+                Err(e) => self.messages.push(format!("Could not load the sound: {e}")),
+            }
+        }
+    }
 
     fn capture(&mut self, ids: &[InstanceId]) {
         for &id in ids {
