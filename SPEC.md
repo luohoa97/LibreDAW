@@ -1607,6 +1607,27 @@ Tools are designed for few round trips and small payloads:
 - The project switch is recorded in the activity list. Each project
   keeps its own change tree.
 
+### 18.7 Agents hear the song (Amendment 30)
+
+Owner: "Agents should be able to scrub, and view the peaks and volume, so
+they know what part of a song to add a new instrument on top, like a beat
+drop."
+
+- **Analyze** returns, over any range, both the whole-mix numbers and:
+  - `bars`: per-bar short-term loudness, peak, band balance and the
+    tracks that are active in that bar
+  - `sections`: intro, build, drop, break and outro, found from the
+    energy curve. A drop is a bar where the loudness rises by 6 LU or
+    more over the previous 4 bars and stays up.
+- **Seek** moves the playhead, so an agent can play from a drop or
+  loop a section while it works. Seeking during playback plays on.
+- **Rendering:** the analysis renders offline, so it is not real time
+  and the user's playback is unaffected. Results are cached per
+  revision.
+- **For the agent:** the MCP `analyze` tool shows the bars as a compact
+  table, and the `sections` list names where each part starts. Tool
+  descriptions tell the agent to analyze before adding a part "on top
+  of the drop".
 ## 19. Home, onboarding, and release (Amendment 14)
 
 Owner direction: "an easy and efficient workstation that you can pick up
@@ -2316,6 +2337,13 @@ feature is an MCP tool (Amendment 19).
 ---
 
 ## Changelog
+
+### Amendment 30 (2026-10-07, owner)
+
+- Added 18.7: Analyze returns per-bar levels and detected sections
+  (drop, build, and so on), and Seek moves the playhead, so agents can
+  find where to add parts. The protocol also gains sound search fields,
+  SoundAdd and next_id.
 
 ### Amendment 29 (2026-10-07, owner)
 
