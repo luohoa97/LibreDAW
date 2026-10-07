@@ -27,6 +27,8 @@ function justification
             echo "timer, fd, and X11 event sources on the GTK main context for plugins (plugin-host; also ui through gtk4)"
         case x11rb
             echo "X11 top-level window for plugin GUIs that need a parent, SPEC 9.2 (plugin-host)"
+        case rtrb
+            echo "wait-free SPSC rings for the state, retire, command, plugin-event and event rings, SPEC 4.2 and 4.4 (engine)"
         case serde
             echo "derive (de)serialization for the project file and the control API (protocol); typed MCP tool arguments (mcp)"
         case toml
