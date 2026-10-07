@@ -4,6 +4,7 @@
 
 pub mod api;
 pub mod compiled;
+pub mod groove;
 pub mod live;
 pub mod metronome;
 pub mod mixer;

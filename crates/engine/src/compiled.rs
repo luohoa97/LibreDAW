@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! Slot assignment and the immutable compiled state (SPEC 4.1).
 
+use crate::groove::{ratchet_part, swung_start};
 use protocol::consts::{MAX_CHANNELS, MAX_CHOKE_GROUP, MAX_SENDS, TRACK_SLOTS};
 use protocol::engine::{ChannelSlot, SlotGen, TrackSlot};
 use protocol::ids::{ChannelId, PatternId, TrackId};
@@ -337,18 +338,45 @@ pub fn compile(project: &Project, slots: &Slots, sample_rate: f64) -> Box<Compil
             let Some(s) = slots.channel_slot(cn.channel) else {
                 continue;
             };
+            let root_key = project.channel(cn.channel).map_or(60, |ch| ch.root_key);
             let v = &mut notes[s.0 as usize];
             for n in &cn.notes {
                 if n.start >= len || n.key > 127 {
                     continue;
                 }
-                v.push(NoteC {
-                    start: n.start,
-                    end: n.end().min(len),
-                    id: n.id.0,
-                    key: n.key,
-                    vel: n.vel.clamp(1, 127),
-                });
+                // Swing moves step notes on odd steps (17.2).
+                let step_note = n.is_step_note(root_key, p);
+                let start = if step_note {
+                    swung_start(n.start, p.step_ticks, p.swing)
+                } else {
+                    n.start
+                };
+                let vel = n.vel.clamp(1, 127);
+                if n.repeat <= 1 {
+                    v.push(NoteC {
+                        start,
+                        end: (start + n.len).min(len),
+                        id: n.id.0,
+                        key: n.key,
+                        vel,
+                    });
+                    continue;
+                }
+                // Ratchets become ordinary notes (17.2).
+                for i in 0..n.repeat {
+                    let (off, l) = ratchet_part(n.len, n.repeat, i);
+                    let st = start + off;
+                    if st >= len {
+                        break;
+                    }
+                    v.push(NoteC {
+                        start: st,
+                        end: (st + l).min(len),
+                        id: n.id.0,
+                        key: n.key,
+                        vel,
+                    });
+                }
             }
             v.sort_by_key(|n| (n.start, n.key, n.id));
             if !v.is_empty() {
