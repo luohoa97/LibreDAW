@@ -78,6 +78,8 @@ pub enum Compose {
     InstrumentSet(compose::InstrumentSetArgs),
     FxAdd(compose::FxAddArgs),
     FxSet(compose::FxSetArgs),
+    DuckToKick(super::fxchain::DuckArgs),
+    Loudness(super::fxchain::LoudnessArgs),
     ClipsAdd(Vec<compose::ClipArg>),
     ClipsCopy(compose::ClipsCopyArgs),
     ClipsChange(compose::ClipsChangeArgs),
@@ -95,7 +97,9 @@ impl Compose {
         match self {
             Compose::InstrumentsAdd(a) => compose::instruments_add(project, ids, a),
             Compose::InstrumentSet(a) => compose::instrument_set(project, a),
-            Compose::FxAdd(a) => compose::fx_add(project, a),
+            Compose::FxAdd(a) => compose::fx_add(project, ids, a),
+            Compose::DuckToKick(a) => super::fxchain::duck_to_kick(project, ids, a),
+            Compose::Loudness(a) => super::fxchain::loudness(project, ids, a),
             Compose::FxSet(a) => compose::fx_set(project, a),
             Compose::ClipsAdd(a) => compose::clips_add(project, ids, a),
             Compose::ClipsCopy(a) => compose::clips_copy(project, a),
@@ -510,6 +514,8 @@ pub fn plan(name: &str, args: Value) -> Result<Plan, PlanError> {
         }
         "fx_add" => c(Compose::FxAdd(parse(args)?)),
         "fx_set" => c(Compose::FxSet(parse(args)?)),
+        "duck_to_kick" => c(Compose::DuckToKick(parse(args)?)),
+        "loudness" => c(Compose::Loudness(parse(args)?)),
         // Timeline
         "clips_add" => c(Compose::ClipsAdd(list(args, "clips")?)),
         "clips_copy" => c(Compose::ClipsCopy(parse(args)?)),
@@ -826,15 +832,27 @@ pub fn definitions() -> Vec<Value> {
         ),
         tool(
             "fx_add",
-            "Add an effect to a mixer track's insert chain: fx = eq, compressor, saturator, reverb, delay, limiter, or {\"plugin_id\": ...} for a CLAP effect from plugins (first load needs approval). index = position (default: the end; signal flows first to last). The new insert id is in `created`; tune it with fx_set.",
-            json!({"track": int("Mixer track id."), "fx": {"description": "\"eq\", \"compressor\", \"saturator\", \"reverb\", \"delay\", \"limiter\", or {\"plugin_id\": \"...\"}."}, "index": {"type": "integer", "minimum": 0, "maximum": 7}}),
+            "Add an effect to a mixer track's insert chain: fx = eq, compressor, saturator, reverb, delay, limiter, or {\"plugin_id\": ...} for a CLAP effect from plugins (first load needs approval). preset = a ready-made setting by name: saturator (Drive): Warm, Crunch, Phonk 808, Phonk Cowbell, Hard Clip; eq: Flat, Bass Boost, Tight Low End, Cut Mud, Bright, Phone; compressor: Gentle, Punch, Tight, Squash, Parallel; reverb: Small Room, Plate, Big Hall, Wash; delay: Slap, Eighth, Dotted Eighth, Echo, Ping Pong; limiter: Gentle, Loud, Hard. index = position (default: the end; signal flows first to last). The new insert id is in `created`; tune it with fx_set.",
+            json!({"track": int("Mixer track id."), "fx": {"description": "\"eq\", \"compressor\", \"saturator\", \"reverb\", \"delay\", \"limiter\", or {\"plugin_id\": \"...\"}."}, "preset": {"type": "string", "description": "A ready-made setting by name, for example \"Phonk 808\" on a saturator."}, "index": {"type": "integer", "minimum": 0, "maximum": 7}}),
             &["track", "fx"],
         ),
         tool(
             "fx_set",
             "Change one insert (effect) in ONE undo group: params by name (eq: low_cut_hz, low_gain_db, mid_hz, mid_gain_db, high_gain_db...; compressor: threshold_db, ratio, attack_ms, release_ms, makeup_db, mix; saturator: drive_db, tone_hz, mix, output_db; reverb: size, damping, width, predelay_ms, mix; delay: time_beats, feedback, tone_hz, mix; limiter: ceiling_db, release_ms; a bad name lists the valid ones), curve (saturator: soft, hard, fold), ping_pong (delay), sidechain (compressor key: a track id, or null), index (move it), remove: true.",
-            json!({"insert": int("Insert id."), "params": {"type": "object", "additionalProperties": {"type": "number"}}, "curve": {"type": "string", "enum": ["soft", "hard", "fold"]}, "ping_pong": {"type": "boolean"}, "sidechain": {"type": ["integer", "null"]}, "index": {"type": "integer", "minimum": 0, "maximum": 7}, "remove": {"type": "boolean"}}),
+            json!({"insert": int("Insert id."), "preset": {"type": "string", "description": "A ready-made setting by name (the same names as fx_add); params then change single values on top."}, "params": {"type": "object", "additionalProperties": {"type": "number"}}, "curve": {"type": "string", "enum": ["soft", "hard", "fold"]}, "ping_pong": {"type": "boolean"}, "sidechain": {"type": ["integer", "null"]}, "index": {"type": "integer", "minimum": 0, "maximum": 7}, "remove": {"type": "boolean"}}),
             &["insert"],
+        ),
+        tool(
+            "duck_to_kick",
+            "Make an instrument or mixer track dip every time the kick hits, so the kick cuts through (the pumping sound of phonk and trap): in ONE undo group, adds or retunes a compressor keyed by the Kick instrument (the one named Kick, else the first drum instrument; or give kick). amount 0 to 100 percent (default 100; 0 removes it). Name the instrument as row, or the mixer track as track. Calling it again changes the amount of the same effect.",
+            json!({"row": int("Instrument id to duck (its mixer track gets the effect)."), "track": int("Or the mixer track id to duck."), "amount": {"type": "number", "minimum": 0, "maximum": 100, "description": "Percent: 100 is a deep dip, 0 turns it off."}, "kick": int("Instrument id of the kick, when it is not named Kick.")}),
+            &[],
+        ),
+        tool(
+            "loudness",
+            "Set how loud the whole song is on Main Output, with one control from 0 to 10, in ONE undo group. It builds a chain of gentle compressor, soft clipper and limiter (the limiter keeps the peaks under about -0.3 dB) the first time and retunes it afterwards. Give amount (0 off, 3 Clean, 6 Punchy, 9 Hard (Phonk), 10 loudest) or preset: Clean, Punchy or Hard. Check the result with analyze: Hard should land near -7 LUFS.",
+            json!({"amount": {"type": "number", "minimum": 0, "maximum": 10}, "preset": {"type": "string", "enum": ["Clean", "Punchy", "Hard", "Hard (Phonk)"]}}),
+            &[],
         ),
         // ---- timeline
         tool(

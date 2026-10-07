@@ -904,3 +904,68 @@ fn a_garbled_sampling_answer_fails_the_suggestion() {
     });
     assert!(reason.contains("not a JSON object"), "{reason}");
 }
+
+#[test]
+fn fx_add_with_a_sound_duck_to_kick_and_loudness_through_the_tools() {
+    use protocol::ids::TrackId;
+    // The kick (1) on track 3, the hat (2) on track 4.
+    let mut daw = RefDaw::kick_and_hat();
+    daw.user_edit(vec![
+        Edit::AddTrack {
+            name: "Kick".into(),
+        },
+        Edit::AddTrack { name: "Hat".into() },
+    ]);
+    daw.user_edit(vec![
+        Edit::SetChannelTrack {
+            channel: ChannelId(1),
+            track: TrackId(7),
+        },
+        Edit::SetChannelTrack {
+            channel: ChannelId(2),
+            track: TrackId(8),
+        },
+    ]);
+    let rig = support::rig_with(daw, true, |_| {});
+    let mut c = Mcp::connect(&rig);
+    c.init();
+    // A sound by name: one undo group, the values arrive with the effect.
+    let r = c.ok(
+        "fx_add",
+        json!({"track": 8, "fx": "saturator", "preset": "phonk 808"}),
+    );
+    assert!(r["diff"].to_string().contains("Phonk 808"), "{r}");
+    let p = rig.daw.lock().unwrap().project();
+    let sat = match &p.track(TrackId(8)).unwrap().inserts[0] {
+        protocol::model::Insert::Builtin { fx, .. } => fx.clone(),
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(
+        control::fxpresets::current(&sat).map(|s| s.name),
+        Some("Phonk 808")
+    );
+    // A wrong name lists the right ones.
+    let e = c.err("fx_add", json!({"track": 8, "fx": "saturator", "preset": "x"}));
+    assert!(e.contains("Hard Clip"), "{e}");
+
+    // Duck to Kick: the hat row dips to the kick row.
+    let r = c.ok("duck_to_kick", json!({"row": 2, "amount": 100}));
+    assert!(r["diff"].to_string().contains("ducks to the kick"), "{r}");
+    let p = rig.daw.lock().unwrap().project();
+    assert_eq!(p.track(TrackId(8)).unwrap().inserts.len(), 2);
+    let again = c.ok("duck_to_kick", json!({"row": 2, "amount": 100}));
+    assert_eq!(again["diff"][0], "no change: the project already matches");
+    c.ok("duck_to_kick", json!({"row": 2, "amount": 0}));
+    let p = rig.daw.lock().unwrap().project();
+    assert_eq!(p.track(TrackId(8)).unwrap().inserts.len(), 1);
+
+    // Loudness: three effects on Main Output, then only retuned.
+    c.ok("loudness", json!({"preset": "Hard (Phonk)"}));
+    let p = rig.daw.lock().unwrap().project();
+    assert_eq!(p.track(TrackId::MASTER).unwrap().inserts.len(), 3);
+    c.ok("loudness", json!({"amount": 4}));
+    let p = rig.daw.lock().unwrap().project();
+    assert_eq!(p.track(TrackId::MASTER).unwrap().inserts.len(), 3);
+    let e = c.err("loudness", json!({"amount": 11}));
+    assert!(e.contains("0 to 10"), "{e}");
+}
