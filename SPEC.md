@@ -836,7 +836,7 @@ and C are planned after Milestone A is approved, with their own review.
 - cpal metronome, no UI, 120 BPM, 4/4.
 - Measurements reported as numbers, per backend (PipeWire native: required;
   ALSA and JACK: comparison), per buffer
-  size (64, 128, 256, 512), 10-minute runs:
+  size (64, 128, 256, 512), 120-second runs (Amendment 4):
   - xrun count (backend-reported, plus callback gaps > 1.5x period)
   - callback interval jitter: mean, p99, p99.9, max (us)
   - click onset drift against the ideal grid after 10 minutes (samples)
@@ -901,9 +901,20 @@ Milestone B starts.
 - Kits: phonk, trap, boom bap, lo-fi, house. Each is a set of samples plus
   default channel settings (a small TOML manifest per kit).
 - User libraries: the sound browser can add any local folder of WAV files
-  (for example sample packs the user has bought). Those files stay on the
-  user's machine; projects that use them copy them into the project bundle
-  (15.1) for that user's own use.
+  the user owns (bought sample packs, or the sample folders of another DAW
+  the user has installed, including installs inside a Wine prefix). The
+  browser offers to scan common install locations. LibreDAW only reads
+  these files on the user's machine; it never uploads, mirrors, or bundles
+  them in any LibreDAW repository or package. Whether a vendor's license
+  allows its samples to be used outside its own product is the user's
+  responsibility; the browser says so when adding a folder.
+- Only plain audio files (WAV) can be imported. Another DAW's built-in
+  instruments are code (plugins), not files, and their presets use
+  proprietary formats; they cannot be imported.
+- Project bundles copy used samples in (15.1). Samples from user libraries
+  are marked `local_only` in `project.toml`. "Export project for sharing"
+  leaves them out by default and lists them, so sharing a project does not
+  redistribute them by accident.
 - If no sound pack is installed, the DAW still runs: the synth and 808 are
   built in.
 
@@ -985,6 +996,13 @@ icons, names, or color scheme.
 ---
 
 ## Changelog
+
+### Amendment 4 (2026-10-07, owner)
+
+User libraries: the browser can scan local installs of other DAWs (also in
+Wine prefixes) for WAV samples the user owns. Files are only read locally,
+marked `local_only` in projects, and left out of shared project exports by
+default (15.3). Phase 1 live matrix cut to PipeWire only, 4 x 120 s (14).
 
 ### Amendment 3 (2026-10-07, owner)
 
