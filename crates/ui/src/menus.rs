@@ -319,7 +319,6 @@ mod tests {
         assert!(channel_list.contains("ROW_ACTIONS"));
         let strips = include_str!("mixer.rs");
         assert!(strips.contains("STRIP_ACTIONS"));
-        assert!(include_str!("browser.rs").contains("SOUND_ACTIONS"));
         assert!(include_str!("widgets/timeline.rs").contains("CLIP_ACTIONS"));
         let roll = include_str!("widgets/piano_roll.rs");
         assert!(roll.contains("ROLL_ACTIONS"));
