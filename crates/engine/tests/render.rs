@@ -57,6 +57,7 @@ fn request(p: protocol::model::Project) -> (RenderRequest, Slots) {
             loops: 2,
             tail_seconds: 0.5,
             sample_rate: 44100,
+            store: None,
         },
         slots,
     )
@@ -71,7 +72,9 @@ fn offline_render_is_bit_identical_for_any_callback_size() {
     let (req, slots) = request(song());
     let progress = AtomicU32::new(0);
     let cancel = AtomicBool::new(false);
-    let reference = render_with_block(&req, &slots, &[], &progress, &cancel, 512).unwrap();
+    let reference = render_with_block(&req, &slots, &[], &progress, &cancel, 512)
+        .unwrap()
+        .audio;
     // 2 loops of 3840 ticks at 133.33 BPM and 44.1 kHz, plus 0.5 s of tail
     let main = ideal_sample(2 * 3840, 44100, 13333, 100) as usize;
     assert_eq!(reference.len(), main + 22050);
@@ -89,11 +92,15 @@ fn offline_render_is_bit_identical_for_any_callback_size() {
         .fold(0.0f32, |m, v| m.max(v.abs()));
     assert!(end < 1e-3, "{end}");
     for cb in [7usize, 64, 255, 256, 257, 1000, 4096] {
-        let out = render_with_block(&req, &slots, &[], &progress, &cancel, cb).unwrap();
+        let out = render_with_block(&req, &slots, &[], &progress, &cancel, cb)
+            .unwrap()
+            .audio;
         assert!(bits(&out) == bits(&reference), "callback size {cb} differs");
     }
     // the public entry point renders the same thing
-    let out = render_offline(&req, &slots, &[], &progress, &cancel).unwrap();
+    let out = render_offline(&req, &slots, &[], &progress, &cancel)
+        .unwrap()
+        .audio;
     assert!(bits(&out) == bits(&reference));
 }
 
@@ -107,7 +114,8 @@ fn offline_render_leaves_the_metronome_out_and_validates_requests() {
         &AtomicU32::new(0),
         &AtomicBool::new(false),
     )
-    .unwrap();
+    .unwrap()
+    .audio;
     let mut quiet = song();
     quiet.metronome.enabled = false;
     let (req2, slots2) = request(quiet);
@@ -118,7 +126,8 @@ fn offline_render_leaves_the_metronome_out_and_validates_requests() {
         &AtomicU32::new(0),
         &AtomicBool::new(false),
     )
-    .unwrap();
+    .unwrap()
+    .audio;
     assert!(bits(&a) == bits(&b), "export has no click");
 
     let (mut bad, slots) = request(song());
@@ -167,7 +176,8 @@ fn offline_render_notes_land_on_the_closed_form_grid() {
         &AtomicU32::new(0),
         &AtomicBool::new(false),
     )
-    .unwrap();
+    .unwrap()
+    .audio;
     let on = ideal_sample(960, 48000, 120, 1) as usize;
     assert!(out[..on].iter().all(|f| f[0] == 0.0 && f[1] == 0.0));
     assert!(out[on + 1][0].abs() > 0.0 || out[on + 2][0].abs() > 0.0);

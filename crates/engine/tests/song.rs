@@ -282,8 +282,11 @@ fn render_song_matches_live_song_playback_and_has_the_right_length() {
         project: p.clone(),
         tail_seconds: 0.5,
         sample_rate: 48000,
+        store: None,
     };
-    let out = render_song(&req, &slots, &[], &progress, &cancel).unwrap();
+    let out = render_song(&req, &slots, &[], &progress, &cancel)
+        .unwrap()
+        .audio;
     let main = ideal_sample(SONG_LEN, SR as i128, 120, 1) as usize;
     assert_eq!(out.len(), main + 24000);
     assert_eq!(progress.load(std::sync::atomic::Ordering::Relaxed), 100);
@@ -302,7 +305,8 @@ fn render_song_matches_live_song_playback_and_has_the_right_length() {
             &SongRequest {
                 project: Arc::new(q),
                 tail_seconds: 0.0,
-                sample_rate: 48000
+                sample_rate: 48000,
+                store: None
             },
             &slots,
             &[],
