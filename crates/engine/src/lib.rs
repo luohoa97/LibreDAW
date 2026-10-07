@@ -3,6 +3,7 @@
 //! stream, offline render and WAV writer.
 
 pub mod api;
+pub mod audition;
 pub mod bass808;
 pub mod compiled;
 pub mod fx;

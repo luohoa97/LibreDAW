@@ -3,12 +3,14 @@
 //! and stop the stream, hand over compiled states, commands and plugin
 //! events, drain engine events. The disposal thread is internal.
 
+use crate::audition::AuditionSample;
 use crate::compiled::Compiled;
 use crate::live::HostKind;
 use crate::runtime::{RtEnds, Runtime, Shared, UiEnds, rings};
+use crate::samples::{SampleData, SampleStore, hash_hex};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{BufferSize, ErrorKind, HostId, SampleFormat, StreamConfig};
-use protocol::engine::PluginEvent;
+use protocol::engine::{AuditionSource, PluginEvent};
 use protocol::engine::{ControlTable, EngineCommand, EngineEvent, EngineStatus, ParamTable};
 use rtrb::Consumer;
 use rtrb::PushError;
@@ -172,6 +174,8 @@ struct UiSide {
     commands: rtrb::Producer<EngineCommand>,
     plugin_events: rtrb::Producer<PluginEvent>,
     events: Consumer<EngineEvent>,
+    audition: rtrb::Producer<AuditionSample>,
+    audition_retired: Consumer<SampleData>,
 }
 
 pub struct Engine {
@@ -342,6 +346,8 @@ impl Engine {
                 commands: ui.commands,
                 plugin_events: ui.plugin_events,
                 events: ui.events,
+                audition: ui.audition,
+                audition_retired: ui.audition_retired,
             },
             rate,
             stream: Some(stream),
@@ -382,6 +388,36 @@ impl Engine {
     /// full; retry later.
     pub fn submit(&mut self, c: Box<Compiled>) -> Result<(), Box<Compiled>> {
         self.ui.state.push(c).map_err(|PushError::Full(c)| c)
+    }
+
+    /// Starts or releases a sound-browser audition (20.3). For
+    /// `AuditionSource::Sample` the decoded sample is looked up in `store`
+    /// by hash and handed to the audio thread first; a sample that is not
+    /// ready in the store plays silence. `Err` returns the command when the
+    /// command ring is full.
+    #[allow(clippy::result_large_err)]
+    pub fn audition(
+        &mut self,
+        store: Option<&SampleStore>,
+        source: AuditionSource,
+        key: u8,
+        vel: u8,
+        on: bool,
+    ) -> Result<(), EngineCommand> {
+        while self.ui.audition_retired.pop().is_ok() {}
+        if let (AuditionSource::Sample { hash }, true, Some(store)) = (&source, on, store)
+            && let Some(data) = store.get(&hash_hex(hash))
+        {
+            // A full inbox means earlier samples are still unread; the
+            // newest wins once the audio thread catches up.
+            let _ = self.ui.audition.push(AuditionSample { hash: *hash, data });
+        }
+        self.command(EngineCommand::Audition {
+            source,
+            key,
+            vel,
+            on,
+        })
     }
 
     /// `Err` returns the command when the ring is full. The command is big
