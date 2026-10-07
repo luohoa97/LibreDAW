@@ -18,7 +18,7 @@ use crate::classify::classify;
 use crate::header::{Format, read_header};
 
 /// Bump when classification changes, so old caches are rebuilt.
-const CACHE_VERSION: u32 = 2;
+const CACHE_VERSION: u32 = 3;
 
 /// One sound found in a library. Always `local_only`: it stays where the
 /// user has it (SPEC 15.3, 17.2 license-1).
@@ -334,6 +334,14 @@ fn write_cache(path: &Path, c: &CacheFile) -> io::Result<()> {
 /// Scans `src`, using and updating the cache in `cache_dir`. Read only on
 /// the library itself.
 pub fn scan(src: &Source, cache_dir: &Path) -> io::Result<ScanResult> {
+    scan_with(src, cache_dir, true)
+}
+
+/// Like [`scan`]. With `estimate_pitch` false nothing is decoded, so the scan
+/// stays fast (headers only) and numbered multisamples are left unplaced;
+/// a later scan with `estimate_pitch` true places them (about 2 s once, then
+/// cached).
+pub fn scan_with(src: &Source, cache_dir: &Path, estimate_pitch: bool) -> io::Result<ScanResult> {
     let start = Instant::now();
     if !src.root.is_dir() {
         return Err(io::Error::new(
@@ -428,7 +436,7 @@ pub fn scan(src: &Source, cache_dir: &Path) -> io::Result<ScanResult> {
     stats.unreadable = bad.len();
     stats.removed = gone;
 
-    let pitched = crate::zones::assign_roots(&mut entries);
+    let pitched = crate::zones::assign_roots(&mut entries, estimate_pitch);
     stats.pitched = pitched;
 
     let changed = stats.parsed > 0 || pitched > 0 || old_total != entries.len() + bad.len();
@@ -554,6 +562,30 @@ mod tests {
         assert_eq!((lp.tempo_bpm, lp.key.as_deref()), (Some(120), Some("Am")));
         let info = k.to_sound_info();
         assert_eq!(info.role, "kick");
+    }
+
+    #[test]
+    fn pitch_is_optional_and_cached() {
+        let t = TempDir::new("idx6");
+        fl_like_tree(t.path());
+        let cache = t.path().join("cache");
+        let s = src(&t);
+        let jazz = |r: &ScanResult| {
+            r.index
+                .entries
+                .iter()
+                .find(|e| e.rel.ends_with("Jazz Guitar (1).wav"))
+                .unwrap()
+                .root_note
+        };
+        let fast = scan_with(&s, &cache, false).unwrap();
+        assert_eq!((fast.stats.pitched, jazz(&fast)), (0, None));
+        let full = scan_with(&s, &cache, true).unwrap();
+        assert_eq!(full.stats.parsed, 0);
+        assert_eq!((full.stats.pitched, jazz(&full)), (3, Some(57)));
+        assert!(full.stats.cache_written);
+        let warm = scan(&s, &cache).unwrap();
+        assert_eq!((warm.stats.pitched, jazz(&warm)), (0, Some(57)));
     }
 
     #[test]

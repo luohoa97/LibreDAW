@@ -13,3 +13,7 @@ Fonts and icons come from the system theme and are not bundled (SPEC 11).
 | `packaging/agents/claude-code-plugin/.claude-plugin/plugin.json` | GPL-3.0-or-later | LibreDAW (Claude Code plugin manifest) |
 | `packaging/agents/claude-code-plugin/.mcp.json` | GPL-3.0-or-later | LibreDAW (MCP server registration) |
 | `packaging/agents/claude-desktop/manifest.json` | GPL-3.0-or-later | LibreDAW (MCP bundle manifest) |
+| `crates/audiofile/tests/fixtures/sine440.flac` | CC0-1.0 | LibreDAW (0.2 s 440 Hz sine generated with ffmpeg for decoder tests) |
+| `crates/audiofile/tests/fixtures/sine440.mp3` | CC0-1.0 | LibreDAW (0.2 s 440 Hz sine generated with ffmpeg for decoder tests) |
+| `crates/audiofile/tests/fixtures/sine440.ogg` | CC0-1.0 | LibreDAW (0.2 s 440 Hz sine generated with ffmpeg for decoder tests) |
+| `crates/audiofile/tests/fixtures/sine440.wv` | CC0-1.0 | LibreDAW (0.2 s 440 Hz sine generated with ffmpeg for decoder tests) |

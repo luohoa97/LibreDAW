@@ -58,6 +58,8 @@ impl PartialEq for SampleData {
 pub enum SampleError {
     Io(std::io::Error),
     Wav(WavError),
+    /// A compressed format (Vorbis, FLAC, WavPack, MP3 ...) failed to decode.
+    Audio(audiofile::Error),
     TooLarge,
     OverBudget,
 }
@@ -67,6 +69,7 @@ impl std::fmt::Display for SampleError {
         match self {
             SampleError::Io(e) => write!(f, "cannot read sample: {e}"),
             SampleError::Wav(e) => write!(f, "{e}"),
+            SampleError::Audio(e) => write!(f, "{e}"),
             SampleError::TooLarge => f.write_str("sample file is too large"),
             SampleError::OverBudget => f.write_str("sample memory budget is used up"),
         }
@@ -128,9 +131,32 @@ pub fn load_sample_file(path: &Path, rate: u32) -> Result<SampleData, SampleErro
 
 /// Decodes WAV bytes, resampled to `rate`.
 pub fn decode_sample(bytes: &[u8], rate: u32) -> Result<SampleData, SampleError> {
-    let d = decode_wav(bytes).map_err(SampleError::Wav)?;
+    let d = match decode_wav(bytes) {
+        Ok(d) => d,
+        // Not plain PCM WAV: FLAC, Ogg, MP3, WavPack, Vorbis-in-WAV, or WAV
+        // with more than two channels. Runs on the loader thread, like all
+        // decoding.
+        Err(WavError::NotWav | WavError::Unsupported(_)) => return decode_other(bytes, rate),
+        Err(e) => return Err(SampleError::Wav(e)),
+    };
     let data = resample(&d.data, d.channels as usize, d.rate, rate);
     Ok(SampleData::from_vec(d.channels, rate, data))
+}
+
+fn decode_other(bytes: &[u8], rate: u32) -> Result<SampleData, SampleError> {
+    let a = audiofile::decode_bytes(bytes, None).map_err(SampleError::Audio)?;
+    let ch = usize::from(a.channels.max(1));
+    let (channels, data) = if ch <= 2 {
+        (ch as u8, a.data)
+    } else {
+        // More than two channels: keep the front pair.
+        (
+            2u8,
+            a.data.chunks_exact(ch).flat_map(|f| [f[0], f[1]]).collect(),
+        )
+    };
+    let data = resample(&data, usize::from(channels), a.rate, rate);
+    Ok(SampleData::from_vec(channels, rate, data))
 }
 
 /// The store key of a raw SHA-256: 64 lowercase hex digits.
@@ -386,6 +412,47 @@ impl Drop for SampleStore {
 
 #[cfg(test)]
 mod tests {
+    // Compressed formats go through the audiofile crate (15.3); the fixtures
+    // are 0.2 s sines made for its tests.
+    #[test]
+    fn compressed_formats_load_resampled() {
+        for (name, bytes, ch) in [
+            (
+                "flac",
+                &include_bytes!("../../audiofile/tests/fixtures/sine440.flac")[..],
+                1u8,
+            ),
+            (
+                "ogg",
+                &include_bytes!("../../audiofile/tests/fixtures/sine440.ogg")[..],
+                2,
+            ),
+            (
+                "wavpack",
+                &include_bytes!("../../audiofile/tests/fixtures/sine440.wv")[..],
+                1,
+            ),
+            (
+                "mp3",
+                &include_bytes!("../../audiofile/tests/fixtures/sine440.mp3")[..],
+                1,
+            ),
+        ] {
+            let s = decode_sample(bytes, 48000).unwrap_or_else(|e| panic!("{name}: {e}"));
+            assert_eq!((s.channels, s.rate), (ch, 48000), "{name}");
+            // 0.2 s at 48 kHz.
+            assert!(
+                (9000..=11000).contains(&s.frames()),
+                "{name}: {}",
+                s.frames()
+            );
+        }
+        assert!(matches!(
+            decode_sample(b"junk junk junk junk", 48000),
+            Err(SampleError::Audio(_))
+        ));
+    }
+
     use super::*;
     use crate::testutil::tone_level;
     use std::time::{Duration, Instant};

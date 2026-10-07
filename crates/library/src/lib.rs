@@ -17,7 +17,9 @@ pub mod pitch;
 pub mod zones;
 
 pub use detect::{FlInstall, InstallSource, detect_installs, install_from_folder};
-pub use index::{LibraryIndex, ScanResult, ScanStats, SoundEntry, Source, default_cache_dir, scan};
+pub use index::{
+    LibraryIndex, ScanResult, ScanStats, SoundEntry, Source, default_cache_dir, scan, scan_with,
+};
 pub use kits::{Kit, build_kits, default_kit};
 pub use zones::{Instrument, Zone, build_instruments, unplaced_instruments};
 

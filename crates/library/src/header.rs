@@ -78,14 +78,19 @@ pub fn read_header(path: &Path) -> io::Result<AudioHeader> {
         Format::Wav | Format::WavVorbis => {
             let l = wav_layout(&mut f, len)?;
             if matches!(l.tag, 0x674E..=0x6751) {
-                let frames = match l.fact_frames {
-                    Some(n) => n,
-                    None => ogg_last_granule(&mut f, l.data_pos, l.data_len)?,
-                };
+                // The Ogg stream inside is the truth: the `fmt ` channel count and
+                // the `fact` length are often wrong in FL's files. Its last page
+                // gives the length (an upper bound: some streams end early).
+                let frames = ogg_last_granule(&mut f, l.data_pos, l.data_len)?;
+                let mut b = [0u8; 128];
+                f.seek(SeekFrom::Start(l.data_pos))?;
+                let n = f.read(&mut b)?;
+                let (channels, sample_rate) =
+                    vorbis_ident(&b[..n]).unwrap_or((l.channels, l.sample_rate));
                 return Ok(AudioHeader {
                     format: Format::WavVorbis,
-                    sample_rate: l.sample_rate,
-                    channels: l.channels,
+                    sample_rate,
+                    channels,
                     frames,
                 });
             }
@@ -113,8 +118,6 @@ pub struct WavLayout {
     pub bits: u16,
     pub data_pos: u64,
     pub data_len: u64,
-    /// Sample frames from a `fact` chunk, when there is one.
-    pub fact_frames: Option<u64>,
 }
 
 pub fn wav_layout<R: Read + Seek>(r: &mut R, len: u64) -> io::Result<WavLayout> {
@@ -124,7 +127,6 @@ pub fn wav_layout<R: Read + Seek>(r: &mut R, len: u64) -> io::Result<WavLayout> 
         return Err(bad("not a WAV file"));
     }
     let mut fmt: Option<(u16, u16, u32, u16, u16)> = None;
-    let mut fact: Option<u64> = None;
     let mut pos = 12u64;
     for _ in 0..256 {
         let mut ch = [0u8; 8];
@@ -154,13 +156,6 @@ pub fn wav_layout<R: Read + Seek>(r: &mut R, len: u64) -> io::Result<WavLayout> 
             let adv = size - n as u64 + (size & 1);
             r.seek(SeekFrom::Current(adv as i64))?;
             pos += size + (size & 1);
-        } else if &ch[0..4] == b"fact" && size >= 4 {
-            let mut b = [0u8; 4];
-            r.read_exact(&mut b)?;
-            fact = Some(u64::from(le32(&b)));
-            let adv = size - 4 + (size & 1);
-            r.seek(SeekFrom::Current(adv as i64))?;
-            pos += size + (size & 1);
         } else if &ch[0..4] == b"data" {
             let (tag, channels, sample_rate, block_align, bits) =
                 fmt.ok_or_else(|| bad("data before fmt"))?;
@@ -178,7 +173,6 @@ pub fn wav_layout<R: Read + Seek>(r: &mut R, len: u64) -> io::Result<WavLayout> 
                 bits,
                 data_pos: pos,
                 data_len,
-                fact_frames: fact,
             });
         } else {
             let adv = size + (size & 1);
@@ -216,12 +210,7 @@ fn ogg_header(f: &mut File, len: u64) -> io::Result<AudioHeader> {
     if n < 64 || &b[0..4] != b"OggS" {
         return Err(bad("not an Ogg file"));
     }
-    let p = 27 + usize::from(b[26]);
-    if p + 16 > n || &b[p..p + 7] != b"\x01vorbis" {
-        return Err(bad("not Ogg Vorbis"));
-    }
-    let channels = u16::from(b[p + 11]);
-    let sample_rate = le32(&b[p + 12..p + 16]);
+    let (channels, sample_rate) = vorbis_ident(&b[..n]).ok_or_else(|| bad("not Ogg Vorbis"))?;
     let frames = ogg_last_granule(f, 0, len)?;
     Ok(AudioHeader {
         format: Format::Ogg,
@@ -229,6 +218,19 @@ fn ogg_header(f: &mut File, len: u64) -> io::Result<AudioHeader> {
         channels,
         frames,
     })
+}
+
+/// Channels and sample rate from the Vorbis identification header in the
+/// first Ogg page of `b`.
+fn vorbis_ident(b: &[u8]) -> Option<(u16, u32)> {
+    if b.len() < 28 || &b[0..4] != b"OggS" {
+        return None;
+    }
+    let p = 27 + usize::from(b[26]);
+    if p + 16 > b.len() || &b[p..p + 7] != b"\x01vorbis" {
+        return None;
+    }
+    Some((u16::from(b[p + 11]), le32(&b[p + 12..p + 16])))
 }
 
 /// Granule position of the last Ogg page in `[start, start+len)`: the
@@ -307,13 +309,6 @@ fn wv_custom_rate(mut m: &[u8]) -> Option<u32> {
     None
 }
 
-impl Format {
-    /// Plain PCM WAV, the only form the sample loader reads today.
-    pub fn is_plain_wav(self) -> bool {
-        self == Format::Wav
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -364,17 +359,14 @@ mod tests {
     }
 
     #[test]
-    fn vorbis_in_wav_uses_fact_then_granule() {
+    fn vorbis_in_wav_length_comes_from_the_last_page_not_fact() {
         let t = TempDir::new("hdr2");
         write(t.path(), "f.wav", &vorbis_wav(Some(1234), 99));
-        write(t.path(), "g.WAV", &vorbis_wav(None, 5678));
         let f = read_header(&t.path().join("f.wav")).unwrap();
-        let g = read_header(&t.path().join("g.WAV")).unwrap();
         assert_eq!(
             (f.format, f.frames, f.sample_rate),
-            (Format::WavVorbis, 1234, 44100)
+            (Format::WavVorbis, 99, 44100)
         );
-        assert_eq!(g.frames, 5678);
     }
 
     #[test]
