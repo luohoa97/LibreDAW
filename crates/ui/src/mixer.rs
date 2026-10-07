@@ -702,13 +702,18 @@ impl Mixer {
     ) -> gtk::Widget {
         let (name, what) = menus::effect_name(kind);
         let row = gtk::Box::new(gtk::Orientation::Horizontal, 2);
-        let label = gtk::Label::new(Some(name));
-        label.set_xalign(0.0);
-        label.set_hexpand(true);
-        label.set_ellipsize(gtk::pango::EllipsizeMode::End);
-        label.set_margin_start(6);
-        label.set_tooltip_text(Some(what));
-        row.append(&label);
+        // The name opens the effect's panel: styles first, knobs behind More.
+        let open = gtk::Button::with_label(name);
+        open.add_css_class("flat");
+        open.set_hexpand(true);
+        if let Some(l) = open.child().and_then(|c| c.downcast::<gtk::Label>().ok()) {
+            l.set_ellipsize(gtk::pango::EllipsizeMode::End);
+            l.set_xalign(0.0);
+        }
+        open.set_tooltip_text(Some(&format!("{what}. Click to change how it sounds")));
+        let m = self.clone();
+        open.connect_clicked(move |b| crate::fx_panel::show(&m.app, b.upcast_ref(), track, inst));
+        row.append(&open);
         let del = gtk::Button::from_icon_name("window-close-symbolic");
         del.add_css_class("flat");
         del.add_css_class("circular");

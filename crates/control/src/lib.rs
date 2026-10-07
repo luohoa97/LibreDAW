@@ -14,6 +14,7 @@ pub mod analysis;
 mod analysis_tests;
 mod client;
 pub mod fake_ui;
+pub mod fxpresets;
 pub mod mcp;
 mod socket;
 mod state;

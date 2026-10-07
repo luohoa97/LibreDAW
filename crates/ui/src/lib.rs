@@ -21,6 +21,7 @@ pub mod export;
 pub mod files;
 pub mod fl_browser;
 pub mod fl_library;
+pub mod fx_panel;
 pub mod help;
 pub mod home;
 pub mod home_logic;
