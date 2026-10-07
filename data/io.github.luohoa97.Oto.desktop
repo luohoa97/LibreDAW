@@ -1,14 +1,14 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 [Desktop Entry]
 Type=Application
-Name=LibreDAW
+Name=Oto
 GenericName=Beat Maker
 Comment=Make beats and music
-Exec=libredaw %F
-Icon=io.github.luohoa97.LibreDAW
+Exec=oto %F
+Icon=io.github.luohoa97.Oto
 Terminal=false
 StartupNotify=true
 Categories=AudioVideo;Audio;Music;Midi;Sequencer;
 Keywords=daw;beat;drum;music;sequencer;midi;audio;producer;
-MimeType=application/x-libredaw-project;
-StartupWMClass=io.github.luohoa97.LibreDAW
+MimeType=application/x-oto-project;
+StartupWMClass=io.github.luohoa97.Oto

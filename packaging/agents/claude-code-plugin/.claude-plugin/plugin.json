@@ -1,9 +1,9 @@
 {
-  "name": "libredaw",
-  "displayName": "LibreDAW",
+  "name": "oto",
+  "displayName": "Oto",
   "version": "0.0.0",
-  "description": "Control a running LibreDAW (beats, mixer, export, loudness analysis) through its MCP server.",
-  "author": { "name": "LibreDAW contributors" },
+  "description": "Control a running Oto (beats, mixer, export, loudness analysis) through its MCP server.",
+  "author": { "name": "Oto contributors" },
   "license": "GPL-3.0-or-later",
   "keywords": ["daw", "music", "audio", "mcp"]
 }
