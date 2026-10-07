@@ -7,6 +7,8 @@ use protocol::model::{Channel, Note, Pattern};
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct StepLayout {
     pub name_w: f64,
+    /// Space before the first cell (after the name column, if any).
+    pub left_pad: f64,
     pub header_h: f64,
     pub row_h: f64,
     pub cell_w: f64,
@@ -20,6 +22,7 @@ impl Default for StepLayout {
     fn default() -> StepLayout {
         StepLayout {
             name_w: 150.0,
+            left_pad: 6.0,
             header_h: 20.0,
             row_h: 30.0,
             cell_w: 26.0,
@@ -29,6 +32,32 @@ impl Default for StepLayout {
         }
     }
 }
+
+impl StepLayout {
+    /// The layout of the grid next to a separate channel header column
+    /// (docs/ui-design.md 3.3): no name area, cells 28 x 32 (36 x 44 for
+    /// touch), 24 px ruler, rows `row_h` high.
+    pub fn cells_only(row_h: f64, touch: bool) -> StepLayout {
+        StepLayout {
+            name_w: 0.0,
+            left_pad: 4.0,
+            header_h: RULER_H,
+            row_h,
+            cell_w: if touch { 36.0 } else { 28.0 },
+            cell_gap: 2.0,
+            group_gap: 8.0,
+            group: 4,
+        }
+    }
+
+    /// Height of a cell inside a row.
+    pub fn cell_h(&self) -> f64 {
+        (self.row_h - 8.0).max(8.0)
+    }
+}
+
+/// Height of the step ruler (and of the spacer above the header column).
+pub const RULER_H: f64 = 24.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Hit {
@@ -45,7 +74,10 @@ impl StepLayout {
     /// Left edge of a step's cell.
     pub fn cell_x(&self, step: u32) -> f64 {
         let groups = (step / self.group.max(1)) as f64;
-        self.name_w + 6.0 + step as f64 * (self.cell_w + self.cell_gap) + groups * self.group_gap
+        self.name_w
+            + self.left_pad
+            + step as f64 * (self.cell_w + self.cell_gap)
+            + groups * self.group_gap
     }
 
     /// X position of a fractional step (for the playhead).
@@ -226,6 +258,24 @@ mod tests {
         let d34 = l.cell_x(4) - l.cell_x(3);
         assert_eq!(d01, l.cell_w + l.cell_gap);
         assert_eq!(d34, l.cell_w + l.cell_gap + l.group_gap);
+    }
+
+    #[test]
+    fn cells_only_layout_has_no_name_column() {
+        let l = StepLayout::cells_only(40.0, false);
+        assert_eq!(l.cell_x(0), 4.0);
+        assert_eq!(l.header_h, RULER_H);
+        assert_eq!(l.row_y(0), RULER_H);
+        // A cell fits inside its row with room for the gap.
+        assert!(l.cell_h() + 4.0 <= l.row_h);
+        assert!(matches!(
+            l.hit(l.cell_x(2) + 1.0, RULER_H + 5.0, 3, 16),
+            Hit::Cell { row: 0, step: 2 }
+        ));
+        // Touch cells are bigger.
+        assert!(StepLayout::cells_only(44.0, true).cell_w > l.cell_w);
+        // Groups of four steps are spaced apart.
+        assert!(l.cell_x(4) - l.cell_x(3) > l.cell_w + l.cell_gap);
     }
 
     #[test]

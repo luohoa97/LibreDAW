@@ -48,6 +48,7 @@ struct ViewHooks {
 }
 
 type Toaster = Rc<dyn Fn(&str)>;
+type CommandListener = Rc<dyn Fn(UiCommand)>;
 type ActionToaster = Rc<dyn Fn(&str, &str, Box<dyn Fn()>)>;
 
 pub struct App {
@@ -71,6 +72,18 @@ pub struct App {
     size: Cell<SizeClass>,
     focus: Cell<PatternFocus>,
     view_listeners: RefCell<Vec<Rc<dyn Fn()>>>,
+    command_listeners: RefCell<Vec<CommandListener>>,
+}
+
+/// Requests from one widget to the window or to another widget.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UiCommand {
+    /// Open the inspector on the Sound page.
+    ShowSound,
+    /// Open the sound browser.
+    ShowSounds,
+    /// Put the piano roll in front (narrow) or focus it (wide).
+    EditNotes,
 }
 
 impl App {
@@ -89,6 +102,7 @@ impl App {
             size: Cell::new(SizeClass::from_size(1360.0, 800.0)),
             focus: Cell::new(PatternFocus::Both),
             view_listeners: RefCell::new(Vec::new()),
+            command_listeners: RefCell::new(Vec::new()),
             dirs,
             session_id: crate::persist::session_id(
                 std::time::SystemTime::now()
@@ -190,6 +204,18 @@ impl App {
         if self.focus.replace(f) != f {
             self.notify_view();
         }
+    }
+
+    /// Asks the window to do something that is not a document edit.
+    pub fn command(&self, c: UiCommand) {
+        let ls: Vec<_> = self.command_listeners.borrow().clone();
+        for l in ls {
+            l(c);
+        }
+    }
+
+    pub fn on_command(&self, f: impl Fn(UiCommand) + 'static) {
+        self.command_listeners.borrow_mut().push(Rc::new(f));
     }
 
     /// Called when the size class or the pattern focus changes.

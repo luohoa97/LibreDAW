@@ -38,6 +38,7 @@ pub struct Transport {
     tempo_group: gtk::Box,
     settings_btn: gtk::MenuButton,
     pop: gtk::Popover,
+    seps: [gtk::Separator; 2],
     metro_shown: Cell<bool>,
     updating: Cell<bool>,
     fmt: Cell<PositionFormat>,
@@ -93,9 +94,9 @@ impl Transport {
 
         let position = gtk::Label::new(Some("001:1:1"));
         position.add_css_class("numeric");
-        position.add_css_class("title-4");
+        position.add_css_class("heading");
         position.add_css_class("ldaw-position");
-        position.set_width_chars(8);
+        position.set_width_chars(7);
         let pos_btn = gtk::Button::new();
         pos_btn.set_child(Some(&position));
         pos_btn.add_css_class("flat");
@@ -186,9 +187,11 @@ impl Transport {
         bar.append(&back);
         bar.append(&play);
         bar.append(&metro);
-        bar.append(&gtk::Separator::new(gtk::Orientation::Vertical));
+        let sep1 = gtk::Separator::new(gtk::Orientation::Vertical);
+        bar.append(&sep1);
         bar.append(&pos_btn);
-        bar.append(&gtk::Separator::new(gtk::Orientation::Vertical));
+        let sep2 = gtk::Separator::new(gtk::Orientation::Vertical);
+        bar.append(&sep2);
         bar.append(&tempo_group);
         bar.append(&tempo_btn);
         bar.append(&extras);
@@ -211,6 +214,7 @@ impl Transport {
             tempo_group,
             settings_btn,
             pop,
+            seps: [sep1, sep2],
             metro_shown: Cell::new(true),
             updating: Cell::new(false),
             fmt: Cell::new(PositionFormat::Bars),
@@ -431,6 +435,9 @@ impl Transport {
         bp.add_setter(&self.tempo_btn, "visible", Some(&true.to_value()));
         bp.add_setter(&self.metro, "visible", Some(&false.to_value()));
         bp.add_setter(&self.settings_btn, "visible", Some(&false.to_value()));
+        for s in &self.seps {
+            bp.add_setter(s, "visible", Some(&false.to_value()));
+        }
     }
 
     /// Moves the settings popover to the button that is visible.

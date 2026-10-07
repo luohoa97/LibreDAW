@@ -14,11 +14,11 @@ use gtk::gdk;
 use gtk::gio;
 use gtk::glib;
 
-use protocol::edit::{Edit, NewInstrument};
-use protocol::model::SynthParams;
+use protocol::edit::Edit;
 
-use crate::app::App;
+use crate::app::{App, UiCommand};
 use crate::bundle::{AutosaveDebounce, AutosaveWorker};
+use crate::channels::{self, NewChannel};
 use crate::dialogs::{self, PluginKind};
 use crate::files;
 use crate::help;
@@ -256,7 +256,6 @@ pub fn build(gapp: &adw::Application, app: Rc<App>) -> adw::ApplicationWindow {
         &app,
         &switcher,
         &switcher_bar,
-        &title_box,
         &narrow_title,
         &transport,
     );
@@ -265,6 +264,17 @@ pub fn build(gapp: &adw::Application, app: Rc<App>) -> adw::ApplicationWindow {
     install_tick(&app);
     install_view_hooks(&ui, &app);
     install_close(&window, &app);
+    {
+        let (u, stack) = (ui.clone(), inspector.stack.clone());
+        app.on_command(move |c| match c {
+            UiCommand::ShowSound => {
+                stack.set_visible_child_name("sound");
+                u.inspector_split.set_show_sidebar(true);
+            }
+            UiCommand::ShowSounds => u.browser_split.set_show_sidebar(true),
+            UiCommand::EditNotes => {}
+        });
+    }
 
     {
         let (u, a) = (ui.clone(), app.clone());
@@ -318,54 +328,69 @@ fn install_toggles(ui: &Rc<Ui>) {
 /// `AdwBreakpoint`s with declarative setters for everything that changes
 /// the minimum width (so the window can shrink to 360 px), and handlers that
 /// publish the size class for the rest.
+///
+/// libadwaita applies only the last matching breakpoint, so each one lists
+/// the setters of the ones before it (regular, then compact, then narrow,
+/// then landscape). Height does not change the minimum width, so the short
+/// class is not a breakpoint: `install_height_watch` follows the height.
 fn install_breakpoints(
     ui: &Rc<Ui>,
     app: &Rc<App>,
     switcher: &adw::ViewSwitcher,
     switcher_bar: &adw::ViewSwitcherBar,
-    _title_box: &gtk::Box,
     narrow_title: &adw::WindowTitle,
     transport: &Rc<Transport>,
 ) {
     use adw::{BreakpointCondition as Cond, BreakpointConditionLengthType as Len, LengthUnit};
     let max_w = |v: u32| Cond::new_length(Len::MaxWidth, v as f64, LengthUnit::Sp);
     let max_h = |v: u32| Cond::new_length(Len::MaxHeight, v as f64, LengthUnit::Px);
+    let on = true.to_value();
+    let off = false.to_value();
 
     let regular = adw::Breakpoint::new(max_w(size_class::REGULAR_MAX_SP));
-    regular.add_setter(&ui.browser_split, "collapsed", Some(&true.to_value()));
-    regular.add_setter(&ui.inspector_split, "collapsed", Some(&true.to_value()));
-
     let compact = adw::Breakpoint::new(max_w(size_class::COMPACT_MAX_SP));
-    transport.add_compact_setters(&compact);
-
     let narrow = adw::Breakpoint::new(max_w(size_class::NARROW_MAX_SP));
-    narrow.add_setter(switcher, "visible", Some(&false.to_value()));
-    narrow.add_setter(narrow_title, "visible", Some(&true.to_value()));
-    narrow.add_setter(switcher_bar, "reveal", Some(&true.to_value()));
-    narrow.add_setter(&ui.inspector_toggle, "visible", Some(&false.to_value()));
-    transport.add_narrow_setters(&narrow);
-
-    let short = adw::Breakpoint::new(max_h(size_class::SHORT_MAX_PX));
-
-    // A landscape phone keeps the switcher in the header: this one undoes
-    // the narrow switcher setters when it also applies.
     let landscape = adw::Breakpoint::new(Cond::new_and(
         max_w(size_class::NARROW_MAX_SP),
         max_h(size_class::LANDSCAPE_MAX_PX),
     ));
-    landscape.add_setter(switcher, "visible", Some(&true.to_value()));
-    landscape.add_setter(narrow_title, "visible", Some(&false.to_value()));
-    landscape.add_setter(switcher_bar, "reveal", Some(&false.to_value()));
+    for bp in [&regular, &compact, &narrow, &landscape] {
+        bp.add_setter(&ui.browser_split, "collapsed", Some(&on));
+        bp.add_setter(&ui.inspector_split, "collapsed", Some(&on));
+    }
+    for bp in [&compact, &narrow, &landscape] {
+        transport.add_compact_setters(bp);
+    }
+    for bp in [&narrow, &landscape] {
+        transport.add_narrow_setters(bp);
+        bp.add_setter(&ui.inspector_toggle, "visible", Some(&off));
+    }
+    narrow.add_setter(switcher, "visible", Some(&off));
+    narrow.add_setter(narrow_title, "visible", Some(&on));
+    narrow.add_setter(switcher_bar, "reveal", Some(&on));
+    // A landscape phone keeps the switcher in the header: it has the
+    // narrow setters except for the three above.
+    landscape.add_setter(switcher, "visible", Some(&on));
+    landscape.add_setter(narrow_title, "visible", Some(&off));
+    landscape.add_setter(switcher_bar, "reveal", Some(&off));
 
-    let flags = Rc::new(Cell::new([false; 5]));
-    let publish = {
-        let (flags, app, ui) = (flags.clone(), app.clone(), ui.clone());
-        move || {
+    // [regular, compact, narrow, landscape]
+    let flags = Rc::new(Cell::new([false; 4]));
+    let short = Rc::new(Cell::new(false));
+    let publish: Rc<dyn Fn()> = {
+        let (flags, short, app, ui) = (flags.clone(), short.clone(), app.clone(), ui.clone());
+        Rc::new(move || {
             let f = flags.get();
-            if std::env::var_os("LIBREDAW_DEBUG").is_some() {
-                eprintln!("libredaw: breakpoints {f:?} width {}", ui.window.width());
+            let c = SizeClass::from_flags(
+                f[0] || f[1] || f[2] || f[3],
+                f[1] || f[2] || f[3],
+                f[2] || f[3],
+                short.get(),
+            )
+            .with_landscape(f[3]);
+            if crate::perf::enabled() {
+                eprintln!("libredaw: size class {c:?}");
             }
-            let c = SizeClass::from_flags(f[0], f[1], f[2], f[3]).with_landscape(f[4]);
             app.set_size_class(c);
             if c.touch() {
                 ui.window.add_css_class("touch");
@@ -373,27 +398,42 @@ fn install_breakpoints(
                 ui.window.remove_css_class("touch");
             }
             ui.transport.apply_size(c);
-        }
+        })
     };
-    for (i, bp) in [&regular, &compact, &narrow, &short, &landscape]
+    for (i, bp) in [&regular, &compact, &narrow, &landscape]
         .into_iter()
         .enumerate()
     {
-        let (fl, publish2) = (flags.clone(), publish.clone());
+        let (fl, p) = (flags.clone(), publish.clone());
         bp.connect_apply(move |_| {
             let mut f = fl.get();
             f[i] = true;
             fl.set(f);
-            publish2();
+            p();
         });
-        let (fl, publish2) = (flags.clone(), publish.clone());
+        let (fl, p) = (flags.clone(), publish.clone());
         bp.connect_unapply(move |_| {
             let mut f = fl.get();
             f[i] = false;
             fl.set(f);
-            publish2();
+            p();
         });
         ui.window.add_breakpoint(bp.clone());
+    }
+
+    // The short class follows the window height.
+    {
+        let (w, short, p) = (ui.window.clone(), short, publish.clone());
+        ui.window.add_tick_callback(move |_, _| {
+            let h = w.height();
+            if h > 0 {
+                let s = h <= size_class::SHORT_MAX_PX as i32;
+                if short.replace(s) != s {
+                    p();
+                }
+            }
+            glib::ControlFlow::Continue
+        });
     }
     publish();
 }
@@ -540,63 +580,32 @@ fn install_actions(gapp: &adw::Application, ui: &Rc<Ui>, app: &Rc<App>) {
     );
 
     // Channels and plugins.
-    let (a, w) = (app.clone(), window.clone());
+    let u = ui.clone();
     add(
         "rename",
-        Box::new(move || {
-            let Some(c) = a.current_channel() else { return };
-            let cur = a
-                .session
-                .borrow()
-                .document()
-                .project
-                .channel(c)
-                .map(|x| x.name.clone())
-                .unwrap_or_default();
-            let a2 = a.clone();
-            dialogs::ask_name(&w, "Rename Channel", &cur, move |n| {
-                a2.edit(vec![Edit::RenameChannel {
-                    channel: c,
-                    name: n,
-                }]);
-            });
-        }),
+        Box::new(move || u.pattern.channels.rename_selected()),
     );
     let a = app.clone();
-    add(
-        "add-synth",
-        Box::new(move || {
-            let n = a.session.borrow().document().project.channels.len() + 1;
-            let track = a.ui.borrow().track;
-            if let Some(r) = a.edit(vec![Edit::AddChannel {
-                name: format!("Synth {n}"),
-                instrument: NewInstrument::Synth {
-                    params: SynthParams::default(),
-                },
-                root_key: 60,
-                track,
-            }]) {
-                a.select_channel(protocol::ids::ChannelId(r.created[0]));
-            }
-        }),
-    );
+    let preset = gio::SimpleAction::new("add-preset", Some(glib::VariantTy::STRING));
+    preset.connect_activate(move |_, v| {
+        if let Some(name) = v.and_then(|v| v.get::<String>()) {
+            channels::add(&a, NewChannel::Preset(name));
+        }
+    });
+    window.add_action(&preset);
     let (a, w) = (app.clone(), window.clone());
     add(
         "add-instrument",
         Box::new(move || {
             let a2 = a.clone();
             dialogs::choose_plugin(&w, &a, PluginKind::Instrument, "Add Instrument", move |d| {
-                let track = a2.ui.borrow().track;
-                if let Some(r) = a2.edit(vec![Edit::AddChannel {
-                    name: d.name.clone(),
-                    instrument: NewInstrument::Clap {
-                        plugin_id: d.id.clone(),
+                channels::add(
+                    &a2,
+                    NewChannel::Plugin {
+                        id: d.id.clone(),
+                        name: d.name.clone(),
                     },
-                    root_key: 60,
-                    track,
-                }]) {
-                    a2.select_channel(protocol::ids::ChannelId(r.created[0]));
-                }
+                );
             });
         }),
     );
@@ -606,19 +615,16 @@ fn install_actions(gapp: &adw::Application, ui: &Rc<Ui>, app: &Rc<App>) {
         Box::new(move || {
             let a2 = a.clone();
             dialogs::choose_plugin(&w, &a, PluginKind::Any, "Add Plugin", move |d| {
-                let track = a2.ui.borrow().track;
                 if d.instrument {
-                    if let Some(r) = a2.edit(vec![Edit::AddChannel {
-                        name: d.name.clone(),
-                        instrument: NewInstrument::Clap {
-                            plugin_id: d.id.clone(),
+                    channels::add(
+                        &a2,
+                        NewChannel::Plugin {
+                            id: d.id.clone(),
+                            name: d.name.clone(),
                         },
-                        root_key: 60,
-                        track,
-                    }]) {
-                        a2.select_channel(protocol::ids::ChannelId(r.created[0]));
-                    }
+                    );
                 } else {
+                    let track = a2.ui.borrow().track;
                     let n = a2
                         .session
                         .borrow()

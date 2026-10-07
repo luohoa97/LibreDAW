@@ -203,6 +203,44 @@ pub fn install() -> gtk::Widget {
     out
 }
 
+/// Redraws `w` when the style switches between light, dark, and high
+/// contrast. Custom widgets call this once when they are created. The
+/// redraw runs a moment after the notification, when libadwaita has
+/// swapped its stylesheet.
+pub fn watch(w: &impl IsA<gtk::Widget>) {
+    let weak = w.upcast_ref::<gtk::Widget>().downgrade();
+    let sm = adw::StyleManager::default();
+    for prop in ["dark", "high-contrast"] {
+        let weak_for_handler = weak.clone();
+        let weak2_src = weak.clone();
+        let id = sm.connect_notify_local(Some(prop), move |_, _| {
+            let weak = weak_for_handler.clone();
+            for ms in [0u64, 120] {
+                let weak = weak.clone();
+                gtk::glib::timeout_add_local_once(
+                    std::time::Duration::from_millis(ms),
+                    move || {
+                        invalidate();
+                        if let Some(w) = weak.upgrade() {
+                            w.queue_draw();
+                        }
+                    },
+                );
+            }
+        });
+        // Disconnect with the widget so the handler does not pile up.
+        let weak2 = weak2_src.clone();
+        let cell = std::cell::RefCell::new(Some(id));
+        if let Some(w) = weak2.upgrade() {
+            w.connect_destroy(move |_| {
+                if let Some(id) = cell.borrow_mut().take() {
+                    adw::StyleManager::default().disconnect(id);
+                }
+            });
+        }
+    }
+}
+
 /// The current colors.
 pub fn colors() -> Colors {
     let gen_now = generation();

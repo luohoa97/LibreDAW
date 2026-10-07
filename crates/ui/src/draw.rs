@@ -165,6 +165,46 @@ pub fn text(
     layout.pixel_size()
 }
 
+/// Draws an already shaped layout with its top-left corner at `(x, y)`.
+pub fn layout_at(
+    s: &gtk::Snapshot,
+    layout: &pango::Layout,
+    color: &gdk::RGBA,
+    x: f64,
+    y: f64,
+) -> (i32, i32) {
+    s.save();
+    s.translate(&graphene::Point::new(x as f32, y as f32));
+    s.append_layout(layout, color);
+    s.restore();
+    layout.pixel_size()
+}
+
+/// Draws a shaped layout vertically centered in a clipped box.
+#[allow(clippy::too_many_arguments)]
+pub fn layout_in(
+    s: &gtk::Snapshot,
+    layout: &pango::Layout,
+    color: &gdk::RGBA,
+    x: f64,
+    y: f64,
+    bw: f64,
+    bh: f64,
+) {
+    let (_, th) = layout.pixel_size();
+    s.push_clip(&rect(x, y, bw, bh));
+    layout_at(s, layout, color, x, y + (bh - th as f64) / 2.0);
+    s.pop();
+}
+
+/// A 1 px outline inside the rectangle (`t` px thick), as four fills.
+pub fn outline(s: &gtk::Snapshot, color: &gdk::RGBA, x: f64, y: f64, w: f64, h: f64, t: f64) {
+    fill(s, color, x, y, w, t);
+    fill(s, color, x, y + h - t, w, t);
+    fill(s, color, x, y + t, t, h - 2.0 * t);
+    fill(s, color, x + w - t, y + t, t, h - 2.0 * t);
+}
+
 /// Draws `text` clipped to a box (for labels inside notes and rows).
 #[allow(clippy::too_many_arguments)]
 pub fn text_in(
