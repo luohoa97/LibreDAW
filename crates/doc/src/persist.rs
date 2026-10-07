@@ -27,8 +27,19 @@ pub struct Dirs {
 }
 
 impl Dirs {
+    /// `~/Music/Oto`. A folder left by the app's former name, `LibreDAW`,
+    /// is renamed to `Oto` if `Oto` does not exist yet. If the rename fails
+    /// the old folder keeps being used, so no project is ever out of reach.
     pub fn projects(&self) -> PathBuf {
-        self.music.join("LibreDAW")
+        let new = self.music.join("Oto");
+        let old = self.music.join("LibreDAW");
+        if !new.exists() && old.is_dir() {
+            if fs::rename(&old, &new).is_ok() {
+                return new;
+            }
+            return old;
+        }
+        new
     }
 
     pub fn recovery_root(&self) -> PathBuf {
@@ -51,12 +62,12 @@ impl Dirs {
         self.config.join("libredaw").join("settings.toml")
     }
 
-    /// First free `Untitled <n>.ldaw` in the projects folder.
+    /// First free `Untitled <n>.oto` in the projects folder.
     pub fn next_untitled(&self) -> PathBuf {
         let root = self.projects();
         let mut n = 1;
         loop {
-            let p = root.join(format!("Untitled {n}.ldaw"));
+            let p = root.join(format!("Untitled {n}.oto"));
             if !p.exists() {
                 return p;
             }
@@ -66,7 +77,7 @@ impl Dirs {
 
     /// A recovery bundle path for a session id.
     pub fn recovery_bundle(&self, id: &str) -> PathBuf {
-        self.recovery_root().join(format!("{id}.ldaw"))
+        self.recovery_root().join(format!("{id}.oto"))
     }
 }
 
@@ -139,7 +150,7 @@ pub fn key_values(text: &str) -> Vec<(&str, &str)> {
 
 impl LastSession {
     pub fn emit(&self) -> String {
-        let mut o = String::from("# LibreDAW: what to reopen at the next launch.\n");
+        let mut o = String::from("# Oto: what to reopen at the next launch.\n");
         if let Some(p) = &self.path {
             o.push_str(&format!("path = {}\n", quote(&p.to_string_lossy())));
         }
@@ -181,7 +192,7 @@ impl LastSession {
 // ---------------------------------------------------------------------------
 // .view.toml: how the window looked (not part of the project format).
 
-const PAGES: [&str; 3] = ["pattern", "song", "mixer"];
+const PAGES: [&str; 2] = ["timeline", "mixer"];
 const FOCUSES: [&str; 3] = ["both", "steps", "notes"];
 
 #[derive(Clone, Debug, PartialEq)]
@@ -194,9 +205,10 @@ pub struct ViewState {
     pub scroll_x: f64,
     pub scroll_y: f64,
     pub snap: u32,
-    /// Page shown: "pattern", "song", or "mixer".
+    /// Page shown: "timeline" or "mixer". Files from before the timeline
+    /// model say "pattern" or "song"; those read as "timeline".
     pub page: String,
-    /// "both", "steps", or "notes": what the Pattern page shows.
+    /// "both", "steps", or "notes": what the clip editor under the timeline shows.
     pub focus: String,
     pub sounds_open: bool,
     pub inspector_open: bool,
@@ -215,7 +227,7 @@ impl Default for ViewState {
             scroll_x: 0.0,
             scroll_y: 0.0,
             snap: 0,
-            page: "pattern".into(),
+            page: "timeline".into(),
             focus: "both".into(),
             sounds_open: false,
             inspector_open: false,
@@ -264,11 +276,11 @@ impl ViewState {
                 "scroll_x" => v.scroll_x = f(val).unwrap_or(v.scroll_x),
                 "scroll_y" => v.scroll_y = f(val).unwrap_or(v.scroll_y),
                 "snap" => v.snap = val.parse().unwrap_or(v.snap),
-                "page" => {
-                    if let Some(p) = unquote(val).filter(|p| PAGES.contains(&p.as_str())) {
-                        v.page = p;
-                    }
-                }
+                "page" => match unquote(val).as_deref() {
+                    Some(p) if PAGES.contains(&p) => v.page = p.to_string(),
+                    Some("pattern" | "song") => v.page = "timeline".into(),
+                    _ => {}
+                },
                 "focus" => {
                     if let Some(p) = unquote(val).filter(|p| FOCUSES.contains(&p.as_str())) {
                         v.focus = p;
@@ -341,7 +353,7 @@ pub fn find_recovery_bundles(dirs: &Dirs) -> Vec<(PathBuf, SystemTime)> {
             rd.filter_map(|e| {
                 let p = e.ok()?.path();
                 let m = fs::metadata(p.join(PROJECT_FILE)).ok()?.modified().ok()?;
-                (p.extension().is_some_and(|x| x == "ldaw")).then_some((p, m))
+                (p.extension().is_some_and(|x| x == "oto" || x == "ldaw")).then_some((p, m))
             })
             .collect()
         })
@@ -355,11 +367,6 @@ pub fn remove_recovery(dirs: &Dirs, id: &str) {
     let _ = fs::remove_dir_all(dirs.recovery_bundle(id));
 }
 
-/// Text for the toast after recovery.
-pub fn recovered_message(time_text: &str) -> String {
-    format!("Recovered unsaved work from {time_text}. Undo to go back to the last save.")
-}
-
 /// Does the bundle directory look like a project (has `project.toml`)?
 pub fn is_bundle(p: &Path) -> bool {
     p.join(PROJECT_FILE).is_file()
@@ -370,5 +377,7 @@ pub fn has_autosave(p: &Path) -> bool {
     p.join(AUTOSAVE_DIR).join(PROJECT_FILE).is_file()
 }
 
+#[cfg(test)]
+mod oto_tests;
 #[cfg(test)]
 mod tests;
