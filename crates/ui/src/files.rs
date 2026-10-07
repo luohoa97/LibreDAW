@@ -298,7 +298,7 @@ pub fn fresh_project(a: &Rc<App>) {
         ui.channel_cleared = false;
     }
     // A starter beat: one pattern and four channels, ready to play.
-    crate::channels::add_starter_beat(a);
+    crate::channels::start_new_project_beat(a);
     a.session.borrow_mut().editor.mark_saved();
     a.show_project();
     a.notify();

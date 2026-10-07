@@ -194,7 +194,6 @@ pub fn build(
             }
         }
     };
-    kit_entries(Source::Pack, &mut out);
     surge_entries(installed, &mut out);
     if let Some(l) = fl_loaded {
         for k in &l.kits {
