@@ -189,6 +189,8 @@ pub struct Engine {
     stream: Option<cpal::Stream>,
     disposal: Option<Disposal>,
     flags: Arc<Flags>,
+    /// The microphone stream and its worker; `Some` only while recording.
+    capture: Option<(cpal::Stream, crate::capture::Capture)>,
     /// Keeps the portal helper thread alive for the life of the stream.
     _promoter: Option<Arc<crate::portal_rt::Promoter>>,
 }
@@ -369,8 +371,67 @@ impl Engine {
             stream: Some(stream),
             disposal: Some(disposal),
             flags,
+            capture: None,
             _promoter: promoter,
         })
+    }
+
+    /// Opens the default input device and starts recording (SPEC 21.2).
+    /// Call only from a user's click or key press: GNOME shows its
+    /// microphone indicator while this runs. Does nothing if already on.
+    pub fn start_capture(&mut self) -> Result<(), EngineError> {
+        if self.capture.is_some() {
+            return Ok(());
+        }
+        let host = cpal::default_host();
+        let device = host
+            .default_input_device()
+            .ok_or_else(|| EngineError::Device("no microphone found".into()))?;
+        let default = device
+            .default_input_config()
+            .map_err(|e| EngineError::Device(format!("microphone: no default config: {e}")))?;
+        let rate = default.sample_rate();
+        let channels = default.channels();
+        let config = StreamConfig {
+            channels,
+            sample_rate: rate,
+            buffer_size: BufferSize::Default,
+        };
+        let (cap, mut feeder) = crate::capture::Capture::new(rate, channels);
+        let stream = device
+            .build_input_stream::<f32, _, _>(
+                config,
+                move |data, _info| feeder.feed(data),
+                |_e| {},
+                None,
+            )
+            .map_err(|e| EngineError::Device(format!("microphone ({device}): {e}")))?;
+        stream
+            .play()
+            .map_err(|e| EngineError::Device(format!("microphone: play failed: {e}")))?;
+        self.capture = Some((stream, cap));
+        Ok(())
+    }
+
+    pub fn is_capturing(&self) -> bool {
+        self.capture.is_some()
+    }
+
+    /// Peak of the latest input block, for the live level meter.
+    pub fn capture_level(&self) -> f32 {
+        self.capture.as_ref().map_or(0.0, |(_, c)| c.level())
+    }
+
+    /// Closes the microphone and returns what was recorded (empty if capture
+    /// was not on). The recording is only in memory.
+    pub fn stop_capture(&mut self) -> crate::capture::Captured {
+        match self.capture.take() {
+            Some((stream, cap)) => {
+                drop(stream);
+                cap.finish()
+            }
+            None => crate::capture::Captured::default(),
+        }
     }
 
     /// SPEC 4.7 step 1: stops the stream and waits for it to be dropped.

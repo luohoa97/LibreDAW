@@ -5,6 +5,7 @@
 pub mod api;
 pub mod audition;
 pub mod bass808;
+pub mod capture;
 pub mod compiled;
 pub mod fx;
 pub mod groove;
@@ -32,6 +33,7 @@ pub mod wav;
 pub mod wavread;
 
 pub use api::{CallbackProbe, Engine, EngineConfig, EngineError, Host};
+pub use capture::{Capture, Captured, Feeder};
 pub use compiled::{Compiled, Slots, SlotsFull, compile, compile_with};
 pub use metronome::{CallbackState, Controls, Metronome};
 pub use plugins::PluginApi;
