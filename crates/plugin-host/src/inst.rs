@@ -147,7 +147,7 @@ pub(crate) struct Flags {
 #[derive(Default)]
 pub(crate) struct Sources {
     pub timers: Vec<(u32, glib::Source)>,
-    pub fds: Vec<(i32, glib::Source)>,
+    pub fds: Vec<(i32, Vec<glib::Source>)>,
     pub next_timer: u32,
 }
 
@@ -156,8 +156,8 @@ impl Sources {
         for (_, s) in self.timers.drain(..) {
             s.destroy();
         }
-        for (_, s) in self.fds.drain(..) {
-            s.destroy();
+        for (_, ss) in self.fds.drain(..) {
+            ss.iter().for_each(glib::Source::destroy);
         }
     }
 }
@@ -585,6 +585,7 @@ unsafe extern "C" fn timer_register(h: *const clap_host, period: u32, out_id: *m
         let id = src.next_timer;
         let ptr = i as *const Inner as usize;
         let s = sources::timer_source(period, move || {
+            let _cwd = CwdGuard::new();
             // SAFETY: all sources are destroyed before the Inner is freed.
             let i = &*(ptr as *const Inner);
             let e = i.exts.get();
@@ -626,35 +627,50 @@ fn to_cond(flags: u32) -> u32 {
     }
     c
 }
-fn make_fd_source(i: &Inner, fd: i32, flags: u32) -> glib::Source {
+/// How often a plugin that asked for write-readiness is told it may write.
+/// A socket is writable nearly all the time, so a level-triggered write
+/// watch would run at the default priority on every main loop iteration and
+/// starve GTK's redraw sources (JUCE plugins register READ|WRITE for their X
+/// connection and never drop WRITE).
+const FD_WRITE_TICK_MS: u32 = 20;
+
+fn dispatch_fd(ptr: usize, fd: i32, f: u32) {
+    let _cwd = CwdGuard::new();
+    // SAFETY: all sources are destroyed before the Inner is freed.
+    unsafe {
+        let i = &*(ptr as *const Inner);
+        let e = i.exts.get();
+        if !e.fd.is_null()
+            && let Some(cb) = (*e.fd).on_fd
+        {
+            cb(i.plugin(), fd, f);
+        }
+    }
+}
+fn make_fd_source(i: &Inner, fd: i32, flags: u32) -> Vec<glib::Source> {
     let ptr = i as *const Inner as usize;
-    sources::fd_source(
+    let mut v = vec![sources::fd_source(
         fd,
-        to_cond(flags),
+        to_cond(flags) & !sources::COND_OUT,
         Box::new(move |fd, cond| {
             let mut f = 0;
             if cond & sources::COND_IN != 0 {
                 f |= CLAP_POSIX_FD_READ;
             }
-            if cond & sources::COND_OUT != 0 {
-                f |= CLAP_POSIX_FD_WRITE;
-            }
             if cond & (sources::COND_ERR | sources::COND_HUP) != 0 {
                 f |= CLAP_POSIX_FD_ERROR;
             }
-            // SAFETY: all sources are destroyed before the Inner is freed.
-            unsafe {
-                let i = &*(ptr as *const Inner);
-                let e = i.exts.get();
-                if !e.fd.is_null()
-                    && let Some(cb) = (*e.fd).on_fd
-                {
-                    cb(i.plugin(), fd, f);
-                }
-            }
+            dispatch_fd(ptr, fd, f);
         }),
-    )
+    )];
+    if flags & CLAP_POSIX_FD_WRITE != 0 {
+        v.push(sources::timer_source(FD_WRITE_TICK_MS, move || {
+            dispatch_fd(ptr, fd, CLAP_POSIX_FD_WRITE)
+        }));
+    }
+    v
 }
+
 unsafe extern "C" fn fd_register(h: *const clap_host, fd: i32, flags: u32) -> bool {
     if !IS_MAIN.with(Cell::get) {
         return false;
@@ -676,7 +692,7 @@ unsafe extern "C" fn fd_modify(h: *const clap_host, fd: i32, flags: u32) -> bool
     let Some(p) = src.fds.iter().position(|(f, _)| *f == fd) else {
         return false;
     };
-    src.fds.remove(p).1.destroy();
+    src.fds.remove(p).1.iter().for_each(glib::Source::destroy);
     let s = make_fd_source(i, fd, flags);
     src.fds.push((fd, s));
     true
@@ -686,7 +702,7 @@ unsafe extern "C" fn fd_unregister(h: *const clap_host, fd: i32) -> bool {
     let mut src = unsafe { inner(h) }.sources.borrow_mut();
     match src.fds.iter().position(|(f, _)| *f == fd) {
         Some(p) => {
-            src.fds.remove(p).1.destroy();
+            src.fds.remove(p).1.iter().for_each(glib::Source::destroy);
             true
         }
         None => false,
@@ -762,6 +778,27 @@ unsafe extern "C" fn host_get_extension(_h: *const clap_host, id: *const c_char)
     ext!(CLAP_EXT_PRESET_LOAD, HOST_PRESET_LOAD);
     ext!(CLAP_EXT_PRESET_LOAD_COMPAT, HOST_PRESET_LOAD);
     std::ptr::null()
+}
+
+/// Restores the process cwd on drop. Some plugins (Dexed, via JUCE) `chdir`
+/// into their data directory; the host is a GUI process that must keep its
+/// own cwd, so every call into plugin code that may do this is wrapped.
+pub(crate) struct CwdGuard(Option<std::path::PathBuf>);
+
+impl CwdGuard {
+    pub fn new() -> CwdGuard {
+        CwdGuard(std::env::current_dir().ok())
+    }
+}
+
+impl Drop for CwdGuard {
+    fn drop(&mut self) {
+        if let Some(p) = &self.0
+            && std::env::current_dir().ok().as_ref() != Some(p)
+        {
+            let _ = std::env::set_current_dir(p);
+        }
+    }
 }
 
 #[cfg(test)]

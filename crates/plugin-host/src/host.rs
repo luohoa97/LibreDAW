@@ -450,6 +450,7 @@ impl Instance {
     /// Load the library, create and init the plugin, validate its ports.
     /// Must be called on the GTK main thread.
     pub fn create(desc: &PluginDesc) -> Result<Instance, HostError> {
+        let _cwd = inst::CwdGuard::new();
         inst::mark_main_thread();
         let lib = load_lib(&desc.path)?;
         let f = factory(&lib)?;
@@ -536,6 +537,7 @@ impl Instance {
     }
 
     pub fn activate(&mut self, sample_rate: f64, max_frames: u32) -> Result<(), HostError> {
+        let _cwd = inst::CwdGuard::new();
         if self.activated {
             return Ok(());
         }
@@ -824,11 +826,19 @@ impl Instance {
     }
 
     pub fn show_gui(&mut self, title: &str) -> Result<(), HostError> {
+        let _cwd = inst::CwdGuard::new();
         gui::show(&self.inner, title)
     }
 
     pub fn hide_gui(&mut self) {
+        let _cwd = inst::CwdGuard::new();
         gui::close(&self.inner);
+    }
+
+    /// Timer and fd sources the plugin currently has registered.
+    pub fn source_counts(&self) -> (usize, usize) {
+        let s = self.inner.sources.borrow();
+        (s.timers.len(), s.fds.len())
     }
 
     pub fn gui_open(&self) -> bool {
@@ -838,6 +848,7 @@ impl Instance {
     /// Call from the 10 ms GLib source (SPEC 4.4, 9.1): acts on the flags
     /// that host callbacks set from any thread.
     pub fn poll_main_thread(&mut self) {
+        let _cwd = inst::CwdGuard::new();
         let i = &*self.inner;
         i.log
             .drain(|sev, msg| eprintln!("[plugin {} log {sev}] {msg}", i.name));
