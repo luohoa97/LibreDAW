@@ -22,7 +22,9 @@ use crate::app::{App, UiCommand};
 use crate::channels;
 
 /// Actions of a channel row (`row.*`), registered for each row.
-pub const ROW_ACTIONS: &[&str] = &["sound", "rename", "remove", "choke", "drive", "duck"];
+pub const ROW_ACTIONS: &[&str] = &[
+    "sound", "rename", "remove", "choke", "drive", "duck", "shape",
+];
 
 /// Duck to Kick in the instrument menu: label and amount in percent.
 pub const DUCK_CHOICES: &[(&str, i32)] =
@@ -32,7 +34,19 @@ pub const ROLL_ACTIONS: &[&str] = &["delete", "duplicate"];
 /// Actions of a mixer track (`strip.*`).
 pub const STRIP_ACTIONS: &[&str] = &["rename", "reset", "remove"];
 /// Actions of a clip on the timeline (`clip.*`).
-pub const CLIP_ACTIONS: &[&str] = &["edit", "duplicate", "unique", "split", "mute", "delete"];
+pub const CLIP_ACTIONS: &[&str] = &[
+    "edit",
+    "duplicate",
+    "unique",
+    "split",
+    "mute",
+    "make-pattern",
+    "delete",
+];
+/// Actions of a pattern block in the Patterns lane (`pattern.*`).
+pub const PATTERN_ACTIONS: &[&str] = &["duplicate", "rename", "place", "delete"];
+/// Actions of a shape lane and its points (`shape.*`).
+pub const SHAPE_ACTIONS: &[&str] = &["preset", "curve", "remove", "remove-point"];
 /// Actions of a built-in sound in the sound browser (`sound.*`).
 pub const SOUND_ACTIONS: &[&str] = &["add", "replace"];
 /// Window actions (`win.*`) that menus name.
@@ -79,6 +93,17 @@ pub fn main_menu() -> gio::Menu {
 /// The menu of a channel row. It is the only menu a channel has: the
 /// pointer, a long press, the Menu key and Shift+F10 all open it.
 pub fn channel_menu() -> gio::Menu {
+    let basics: Vec<String> = ["Volume", "Left/Right", "Pitch", "Filter"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+    channel_menu_with(&basics, basics.len())
+}
+
+/// The channel menu with its Add Shape choices: `choices` are the names in
+/// the order of `shape_logic::choices`, the first `basic` of them the plain
+/// ones and the rest settings of the row's effects.
+pub fn channel_menu_with(choices: &[String], basic: usize) -> gio::Menu {
     let menu = gio::Menu::new();
     let first = gio::Menu::new();
     first.append(Some("Edit _Sound"), Some("row.sound"));
@@ -116,6 +141,27 @@ pub fn channel_menu() -> gio::Menu {
     effects.append_submenu(Some("_Drive"), &drive);
     effects.append_submenu(Some("Duck to _Kick"), &duck);
     menu.append_section(None, &effects);
+    // Shapes sit behind More (SPEC 20.6): a line that changes a setting
+    // over time, drawn in a lane under the row.
+    let shapes = gio::Menu::new();
+    let effect_settings = gio::Menu::new();
+    for (i, name) in choices.iter().enumerate() {
+        let item = gio::MenuItem::new(Some(name), None);
+        item.set_action_and_target_value(Some("row.shape"), Some(&(i as i32).to_variant()));
+        if i < basic {
+            shapes.append_item(&item);
+        } else {
+            effect_settings.append_item(&item);
+        }
+    }
+    if choices.len() > basic {
+        shapes.append_submenu(Some("Effect _Setting"), &effect_settings);
+    }
+    let add_shape = gio::Menu::new();
+    add_shape.append_submenu(Some("Add _Shape"), &shapes);
+    let more = gio::Menu::new();
+    more.append_submenu(Some("_More"), &add_shape);
+    menu.append_section(None, &more);
     let second = gio::Menu::new();
     second.append(Some("_Rename"), Some("row.rename"));
     second.append(Some("Remove _Instrument"), Some("row.remove"));
@@ -144,9 +190,62 @@ pub fn clip_menu() -> gio::Menu {
     second.append(Some("_Split at Playhead"), Some("clip.split"));
     second.append(Some("_Mute"), Some("clip.mute"));
     menu.append_section(None, &second);
+    let pattern = gio::Menu::new();
+    pattern.append(Some("Make _Pattern"), Some("clip.make-pattern"));
+    menu.append_section(None, &pattern);
     let third = gio::Menu::new();
     third.append(Some("De_lete"), Some("clip.delete"));
     menu.append_section(None, &third);
+    menu
+}
+
+/// The menu of a pattern block in the Patterns lane.
+pub fn pattern_menu() -> gio::Menu {
+    let menu = gio::Menu::new();
+    let first = gio::Menu::new();
+    first.append(
+        Some("_Copy That Changes Together"),
+        Some("pattern.duplicate"),
+    );
+    first.append(Some("Place at _Playhead"), Some("pattern.place"));
+    first.append(Some("_Rename"), Some("pattern.rename"));
+    menu.append_section(None, &first);
+    let second = gio::Menu::new();
+    second.append(Some("De_lete"), Some("pattern.delete"));
+    menu.append_section(None, &second);
+    menu
+}
+
+/// The menu of a shape lane: ready-made shapes over the selected range or
+/// the loop, and removing the lane.
+pub fn shape_lane_menu() -> gio::Menu {
+    let menu = gio::Menu::new();
+    let presets = gio::Menu::new();
+    for (i, (name, _)) in crate::shape_logic::PRESETS.iter().enumerate() {
+        let item = gio::MenuItem::new(Some(name), None);
+        item.set_action_and_target_value(Some("shape.preset"), Some(&(i as i32).to_variant()));
+        presets.append_item(&item);
+    }
+    menu.append_section(Some("Ready-made Shapes"), &presets);
+    let last = gio::Menu::new();
+    last.append(Some("_Remove Shape"), Some("shape.remove"));
+    menu.append_section(None, &last);
+    menu
+}
+
+/// The menu of a point on a shape: how the line runs from it to the next.
+pub fn shape_point_menu() -> gio::Menu {
+    let menu = gio::Menu::new();
+    let curves = gio::Menu::new();
+    for (i, (name, _)) in crate::shape_logic::CURVES.iter().enumerate() {
+        let item = gio::MenuItem::new(Some(name), None);
+        item.set_action_and_target_value(Some("shape.curve"), Some(&(i as i32).to_variant()));
+        curves.append_item(&item);
+    }
+    menu.append_section(Some("Line to the Next Point"), &curves);
+    let last = gio::Menu::new();
+    last.append(Some("Remove _Point"), Some("shape.remove-point"));
+    menu.append_section(None, &last);
     menu
 }
 
@@ -301,6 +400,25 @@ pub fn perform_row_action(app: &Rc<App>, id: ChannelId, action: &str, target: Op
                 });
             }
         }
+        "shape" => {
+            let pick = {
+                let s = app.session.borrow();
+                let p = &s.document().project;
+                target
+                    .and_then(|i| {
+                        crate::shape_logic::choices(p, id)
+                            .into_iter()
+                            .nth(i as usize)
+                    })
+                    .map(|(_, t)| {
+                        let at = app.playhead_tick().min(u32::MAX as u64) as u32;
+                        crate::shape_logic::new_shape_edit(p, t, at)
+                    })
+            };
+            if let Some(e) = pick {
+                app.edit(vec![e]);
+            }
+        }
         _ => {}
     }
 }
@@ -335,6 +453,9 @@ mod tests {
         walk(&strip_menu(), "strip", STRIP_ACTIONS);
         walk(&sound_menu(), "sound", SOUND_ACTIONS);
         walk(&clip_menu(), "clip", CLIP_ACTIONS);
+        walk(&pattern_menu(), "pattern", PATTERN_ACTIONS);
+        walk(&shape_lane_menu(), "shape", SHAPE_ACTIONS);
+        walk(&shape_point_menu(), "shape", SHAPE_ACTIONS);
         walk(&effects_menu(), "fx", FX_ACTIONS);
         // The primary and Add Channel menus mix window and app actions.
         for menu in [main_menu()] {
@@ -364,7 +485,10 @@ mod tests {
         assert!(channel_list.contains("ROW_ACTIONS"));
         let strips = include_str!("mixer.rs");
         assert!(strips.contains("STRIP_ACTIONS"));
-        assert!(include_str!("widgets/timeline.rs").contains("CLIP_ACTIONS"));
+        let timeline = include_str!("widgets/timeline.rs");
+        for table in ["CLIP_ACTIONS", "PATTERN_ACTIONS", "SHAPE_ACTIONS"] {
+            assert!(timeline.contains(table), "{table}");
+        }
         let roll = include_str!("widgets/piano_roll.rs");
         assert!(roll.contains("ROLL_ACTIONS"));
     }
@@ -383,6 +507,8 @@ mod tests {
                 assert_eq!(count, 5, "one per drive style");
             } else if *n == "duck" {
                 assert_eq!(count, DUCK_CHOICES.len());
+            } else if *n == "shape" {
+                assert_eq!(count, 4, "Volume, Pan, Pitch and Filter");
             } else {
                 assert_eq!(count, 1, "{n}");
             }

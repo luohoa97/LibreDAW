@@ -87,6 +87,8 @@ pub struct App {
     view_listeners: RefCell<Vec<Rc<dyn Fn()>>>,
     command_listeners: RefCell<Vec<CommandListener>>,
     peaks: RefCell<[std::collections::HashMap<TrackId, [f32; 2]>; 2]>,
+    /// Waveform summaries of audio clips (SPEC 21.1).
+    pub wave_peaks: crate::audio_clips::PeakCache,
 }
 
 /// Who reads the meter peaks (each keeps its own accumulation).
@@ -134,6 +136,7 @@ impl App {
             view_listeners: RefCell::new(Vec::new()),
             command_listeners: RefCell::new(Vec::new()),
             peaks: RefCell::default(),
+            wave_peaks: Default::default(),
             dirs,
             session_id: doc::persist::session_id(
                 std::time::SystemTime::now()

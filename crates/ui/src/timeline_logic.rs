@@ -6,13 +6,21 @@
 //! widget only offers what fits).
 
 use protocol::consts::{MAX_TICK, PPQ};
-use protocol::ids::{ChannelId, ClipId};
+use protocol::ids::{ChannelId, ClipId, ShapeId};
 use protocol::model::Clip;
 
-/// Ruler height: bar numbers on top, the loop strip under them.
-pub const RULER_H: f64 = 32.0;
-/// The loop strip at the bottom of the ruler.
+/// Ruler height: bar numbers on top, the loop strip under them, and the
+/// slim Patterns lane at the bottom (SPEC 20.7).
+pub const RULER_H: f64 = 54.0;
+/// Top of the loop strip.
+pub const LOOP_Y: f64 = 22.0;
+/// The loop strip.
 pub const LOOP_H: f64 = 10.0;
+/// Top and height of the Patterns lane.
+pub const PATTERN_Y: f64 = LOOP_Y + LOOP_H;
+pub const PATTERN_H: f64 = RULER_H - PATTERN_Y;
+/// Pointer zone of a fade handle at the top corners of an audio clip.
+pub const HANDLE_R: f64 = 7.0;
 /// Row height (touch: `ROW_H_TOUCH`).
 pub const ROW_H: f64 = 48.0;
 pub const ROW_H_TOUCH: f64 = 56.0;
@@ -101,12 +109,29 @@ impl View {
     }
 }
 
+/// What a displayed row is: an instrument's row of clips, or a lane that
+/// draws one shape under its instrument (SPEC 24.2-1).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Row {
+    Instrument(ChannelId),
+    Shape(ShapeId),
+}
+
+/// The display row of `channel`.
+pub fn row_of(rows: &[Row], channel: ChannelId) -> Option<usize> {
+    rows.iter().position(|r| *r == Row::Instrument(channel))
+}
+
 /// Where on a clip the pointer is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Part {
     Body,
     Start,
     End,
+    /// The handle of an audio clip's fade in (top left).
+    FadeIn,
+    /// The handle of an audio clip's fade out (top right).
+    FadeOut,
 }
 
 /// What a point hits.
@@ -116,6 +141,14 @@ pub enum Hit {
     Ruler { tick: u32 },
     /// The loop strip under the bar numbers.
     Loop { tick: u32 },
+    /// The Patterns lane under the loop strip.
+    Pattern { tick: u32 },
+    /// A shape lane under its instrument.
+    Shape {
+        row: usize,
+        shape: ShapeId,
+        tick: u32,
+    },
     Clip {
         clip: ClipId,
         row: usize,
@@ -134,18 +167,35 @@ pub fn clip_at(clips: &[Clip], instrument: ChannelId, tick: u32) -> Option<&Clip
         .find(|c| c.instrument == instrument && c.start <= tick && tick < c.end())
 }
 
-pub fn hit(view: &View, rows: &[ChannelId], clips: &[Clip], x: f64, y: f64) -> Hit {
+/// Where the fade handle of an audio clip sits: on the top edge, `fade`
+/// ticks in from the near end.
+pub fn handle_x(view: &View, c: &Clip, fade_in: bool) -> f64 {
+    let (fi, fo) = c.audio.map_or((0, 0), |a| (a.fade_in, a.fade_out));
+    if fade_in {
+        view.tick_to_x(c.start as f64 + fi as f64) + HANDLE_R
+    } else {
+        view.tick_to_x(c.end() as f64 - fo as f64) - HANDLE_R
+    }
+}
+
+pub fn hit(view: &View, rows: &[Row], clips: &[Clip], x: f64, y: f64) -> Hit {
     let tick = view.x_to_tick(x).round().min(MAX_TICK as f64) as u32;
-    if y < RULER_H - LOOP_H {
+    if y < LOOP_Y {
         return Hit::Ruler { tick };
     }
-    if y < RULER_H {
+    if y < PATTERN_Y {
         return Hit::Loop { tick };
+    }
+    if y < RULER_H {
+        return Hit::Pattern { tick };
     }
     let Some(row) = view.row_at(y, rows.len()) else {
         return Hit::Below { tick };
     };
-    let inst = rows[row];
+    let inst = match rows[row] {
+        Row::Instrument(c) => c,
+        Row::Shape(shape) => return Hit::Shape { row, shape, tick },
+    };
     // A thin clip is all body: its ends would leave nothing to grab.
     for c in clips.iter().filter(|c| c.instrument == inst) {
         let x0 = view.tick_to_x(c.start as f64);
@@ -153,17 +203,21 @@ pub fn hit(view: &View, rows: &[ChannelId], clips: &[Clip], x: f64, y: f64) -> H
         if x < x0 || x >= x1 {
             continue;
         }
-        let edge = if x1 - x0 > 3.0 * EDGE_PX {
-            EDGE_PX
+        let wide = x1 - x0 > 3.0 * EDGE_PX;
+        let edge = if wide { EDGE_PX } else { 0.0 };
+        let top = view.row_y(row) + 3.0;
+        let part = if c.audio.is_some() && wide && y < top + 2.0 * HANDLE_R + 2.0 {
+            // The fade handles sit on the top edge and win over the ends.
+            let near = |fade_in: bool| (x - handle_x(view, c, fade_in)).abs() <= HANDLE_R;
+            if near(true) {
+                Part::FadeIn
+            } else if near(false) {
+                Part::FadeOut
+            } else {
+                edge_part(x, x0, x1, edge)
+            }
         } else {
-            0.0
-        };
-        let part = if x < x0 + edge {
-            Part::Start
-        } else if x >= x1 - edge {
-            Part::End
-        } else {
-            Part::Body
+            edge_part(x, x0, x1, edge)
         };
         return Hit::Clip {
             clip: c.id,
@@ -172,6 +226,16 @@ pub fn hit(view: &View, rows: &[ChannelId], clips: &[Clip], x: f64, y: f64) -> H
         };
     }
     Hit::Lane { row, tick }
+}
+
+fn edge_part(x: f64, x0: f64, x1: f64, edge: f64) -> Part {
+    if x < x0 + edge {
+        Part::Start
+    } else if x >= x1 - edge {
+        Part::End
+    } else {
+        Part::Body
+    }
 }
 
 pub fn snap_floor(tick: u32, unit: u32) -> u32 {
@@ -427,7 +491,7 @@ mod tests {
     #[test]
     fn hits() {
         let v = View::default();
-        let rows = [ChannelId(1), ChannelId(2)];
+        let rows = [Row::Instrument(ChannelId(1)), Row::Instrument(ChannelId(2))];
         let clips = [clip(10, 1, 0, BAR)];
         let x_mid = v.tick_to_x(BAR as f64 / 2.0);
         let y0 = v.row_y(0) + 10.0;
@@ -463,8 +527,12 @@ mod tests {
             Hit::Ruler { .. }
         ));
         assert!(matches!(
-            hit(&v, &rows, &clips, x_mid, RULER_H - 2.0),
+            hit(&v, &rows, &clips, x_mid, LOOP_Y + 3.0),
             Hit::Loop { .. }
+        ));
+        assert!(matches!(
+            hit(&v, &rows, &clips, x_mid, RULER_H - 2.0),
+            Hit::Pattern { .. }
         ));
         assert!(matches!(
             hit(&v, &rows, &clips, x_mid, v.row_y(2) + 5.0),

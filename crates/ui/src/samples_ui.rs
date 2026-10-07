@@ -51,7 +51,7 @@ impl ImportItem {
 }
 
 /// Copies or records one file. Runs on a worker thread.
-fn import_one(home: &Path, item: &ImportItem) -> Result<SampleRef, String> {
+pub(crate) fn import_one(home: &Path, item: &ImportItem) -> Result<SampleRef, String> {
     if let Some(want) = &item.expect_sha256 {
         let bytes = std::fs::read(&item.path)
             .map_err(|e| format!("Cannot read {}: {e}", item.path.display()))?;
