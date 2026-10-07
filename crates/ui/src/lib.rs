@@ -1,22 +1,36 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! GTK4 application shell, widgets, document and undo.
 
+pub mod agent_panel;
+pub mod agents_setup;
 pub mod app;
+pub mod browser;
 pub mod bundle;
 pub mod change;
+pub mod channel_list;
+pub mod channels;
 pub mod compiler;
+pub mod control_bridge;
 pub mod dialogs;
 pub mod document;
 pub mod draw;
 pub mod engine_adapter;
+pub mod export;
 pub mod files;
+pub mod help;
 pub mod history;
+pub mod inspector;
+pub mod knob_logic;
 pub mod mixer;
 pub mod palette;
+pub mod pattern_page;
+pub mod perf;
 pub mod persist;
 pub mod plugin_adapter;
+pub mod prefs;
 pub mod presets;
 pub mod registry;
+pub mod render_cache;
 pub mod roll_logic;
 pub mod run;
 pub mod session;
@@ -27,6 +41,7 @@ pub mod size_class;
 pub mod slots;
 pub mod step_logic;
 pub mod tasks;
+pub mod transport;
 pub mod transport_logic;
 pub mod view_math;
 pub mod widgets;

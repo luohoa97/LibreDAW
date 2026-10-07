@@ -25,7 +25,7 @@ fn trace(what: &str) {
 }
 
 /// Tries the audio hosts in order. Returns the link and, if none opened, why.
-fn start_audio() -> (EngineLink, Option<String>) {
+fn start_audio(settings: &crate::settings::Settings) -> (EngineLink, Option<String>) {
     let empty = Document::new();
     let mut slots = SlotAllocator::new();
     let _ = slots.sync(&empty.project);
@@ -33,8 +33,8 @@ fn start_audio() -> (EngineLink, Option<String>) {
     for host in [Host::PipeWire, Host::Alsa, Host::Jack] {
         let cfg = EngineConfig {
             host,
-            device: None,
-            buffer_frames: 0,
+            device: settings.output_device.clone(),
+            buffer_frames: settings.buffer_frames,
             sample_rate: None,
         };
         let first = engine_adapter::compile(&crate::compiler::CompileJob {
@@ -53,13 +53,22 @@ fn start_audio() -> (EngineLink, Option<String>) {
 
 pub fn run() -> glib::ExitCode {
     let gapp = adw::Application::builder().application_id(APP_ID).build();
+    gapp.add_main_option(
+        "agent-request",
+        glib::Char::from(0),
+        glib::OptionFlags::NONE,
+        glib::OptionArg::None,
+        "Ask to allow agent control at start-up",
+        None,
+    );
     gapp.connect_activate(|gapp| {
         if let Some(w) = gapp.active_window() {
             w.present();
             return;
         }
         trace("starting audio");
-        let (link, audio_err) = start_audio();
+        let settings = crate::settings::Settings::read(&crate::files::real_dirs());
+        let (link, audio_err) = start_audio(&settings);
         trace(&format!(
             "audio: {}",
             audio_err.as_deref().unwrap_or("running")
@@ -70,6 +79,14 @@ pub fn run() -> glib::ExitCode {
         let session = Session::new(Document::new(), false, link, Registry::new(catalog, rate));
         let app: Rc<App> = App::new(session);
         app.ui.borrow_mut().audio_error = audio_err.clone();
+        // The control socket for scripts and agents. Agents stay off until
+        // the user allows them (Preferences or the banner).
+        let agent_request = std::env::args().any(|a| a == "--agent-request");
+        let (bridge, bridge_err) = crate::control_bridge::start(agent_request);
+        if let Some(e) = &bridge_err {
+            trace(e);
+        }
+        *app.bridge.borrow_mut() = bridge;
         trace("building window");
         let win = window::build(gapp, app.clone());
         win.present();

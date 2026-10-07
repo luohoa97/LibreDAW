@@ -13,6 +13,7 @@ name = "ui"
 libredaw-protocol = { path = "../protocol" }
 libredaw-plugin-host = { path = "../plugin-host" }
 libredaw-engine = { path = "../engine" }
+libredaw-control = { path = "../control" }
 gtk = { package = "gtk4", version = "0.11", features = ["v4_10"] }
 adw = { package = "libadwaita", version = "0.9", features = ["v1_5"] }
 

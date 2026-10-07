@@ -23,6 +23,16 @@ use crate::persist::{self, Dirs, LastSession, ViewState};
 
 /// The user's real directories.
 pub fn real_dirs() -> Dirs {
+    // `LIBREDAW_HOME=/some/dir` keeps all state under one directory
+    // (screenshots and tests must not touch the user's files).
+    if let Some(root) = std::env::var_os("LIBREDAW_HOME") {
+        let root = PathBuf::from(root);
+        return Dirs {
+            music: root.join("music"),
+            data: root.join("data"),
+            config: root.join("config"),
+        };
+    }
     let home = glib::home_dir();
     Dirs {
         music: glib::user_special_dir(glib::UserDirectory::Music)

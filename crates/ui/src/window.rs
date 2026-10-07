@@ -1,116 +1,930 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//! The application window (SPEC 11): header bar with transport, a channel
-//! rack with step rows, the piano roll, and the mixer. The layout is our own.
+//! The application window (docs/ui-design.md 2): `AdwToolbarView` with a
+//! header bar (sounds, undo, redo, view switcher, inspector, main menu), the
+//! transport bar, and the three pages Pattern, Song, and Mixer between a
+//! sound browser on the left and an inspector on the right. Breakpoints fold
+//! the layout down to 360 px.
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use adw::prelude::*;
+use gtk::gdk;
 use gtk::gio;
 use gtk::glib;
 
-use protocol::consts::{MAX_STEPS, MAX_TEMPO_BPM, MIN_STEPS, MIN_TEMPO_BPM};
-use protocol::edit::{Edit, NewInstrument};
-use protocol::model::SynthParams;
+use protocol::edit::Edit;
 
-use crate::app::App;
+use crate::app::{App, UiCommand};
 use crate::bundle::{AutosaveDebounce, AutosaveWorker};
+use crate::channels::{self, NewChannel};
 use crate::dialogs::{self, PluginKind};
 use crate::files;
+use crate::help;
 use crate::mixer::Mixer;
+use crate::palette;
+use crate::pattern_page::{self, PatternPage};
 use crate::persist::ViewState;
-use crate::view_math::SNAPS;
-use crate::widgets::piano_roll::PianoRoll;
-use crate::widgets::step_grid::StepGrid;
+use crate::prefs;
+use crate::shortcuts::{self, SHORTCUTS};
+use crate::size_class::{self, PatternFocus, SizeClass, split_position};
+use crate::transport::Transport;
+use crate::{browser, export, inspector};
 
-/// Widgets of the header that mirror document state.
-struct Header {
-    title: adw::WindowTitle,
-    play: gtk::Button,
-    tempo: gtk::SpinButton,
-    metro: gtk::ToggleButton,
+const DEFAULT_WIDTH: i32 = 1360;
+const DEFAULT_HEIGHT: i32 = 800;
+
+/// Loads `style.css` for the whole display.
+#[allow(deprecated)]
+pub fn load_css() {
+    let Some(display) = gdk::Display::default() else {
+        return;
+    };
+    let p = gtk::CssProvider::new();
+    p.load_from_data(include_str!("../data/style.css"));
+    gtk::style_context_add_provider_for_display(
+        &display,
+        &p,
+        gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
+    );
+}
+
+/// `LIBREDAW_SIZE=360x640` sets the first window size (screenshots).
+fn size_from_env() -> (i32, i32) {
+    std::env::var("LIBREDAW_SIZE")
+        .ok()
+        .and_then(|s| {
+            let (w, h) = s.split_once('x')?;
+            Some((w.parse().ok()?, h.parse().ok()?))
+        })
+        .unwrap_or((DEFAULT_WIDTH, DEFAULT_HEIGHT))
+}
+
+/// Everything the window builds and later needs to reach.
+struct Ui {
+    window: adw::ApplicationWindow,
+    stack: adw::ViewStack,
+    browser_split: adw::OverlaySplitView,
+    inspector_split: adw::OverlaySplitView,
+    sounds_toggle: gtk::ToggleButton,
+    inspector_toggle: gtk::ToggleButton,
+    banner: adw::Banner,
+    agent_btn: gtk::Button,
     undo: gtk::Button,
     redo: gtk::Button,
-    updating: Cell<bool>,
+    narrow_title: adw::WindowTitle,
+    transport: Rc<Transport>,
+    pattern: PatternPage,
+}
+
+fn flat_toggle(icon: &str, label: &str) -> gtk::ToggleButton {
+    let b = gtk::ToggleButton::new();
+    b.set_icon_name(icon);
+    b.add_css_class("flat");
+    b.update_property(&[gtk::accessible::Property::Label(label)]);
+    b
+}
+
+fn flat_button(icon: &str, label: &str, action: &str) -> gtk::Button {
+    let b = gtk::Button::from_icon_name(icon);
+    b.add_css_class("flat");
+    b.set_action_name(Some(action));
+    b.update_property(&[gtk::accessible::Property::Label(label)]);
+    b
+}
+
+fn main_menu() -> gio::Menu {
+    let menu = gio::Menu::new();
+    let project = gio::Menu::new();
+    project.append(Some("_New Project"), Some("win.new"));
+    project.append(Some("_Open Project…"), Some("win.open"));
+    project.append(Some("_Save"), Some("win.save"));
+    project.append(Some("Save _As…"), Some("win.save-as"));
+    menu.append_section(None, &project);
+    let output = gio::Menu::new();
+    output.append(Some("_Export Audio…"), Some("win.export"));
+    menu.append_section(None, &output);
+    let plugins = gio::Menu::new();
+    plugins.append(Some("Add _Plugin…"), Some("win.add-plugin"));
+    menu.append_section(None, &plugins);
+    let end = gio::Menu::new();
+    end.append(Some("_Preferences"), Some("app.preferences"));
+    end.append(Some("_Keyboard Shortcuts"), Some("win.show-help-overlay"));
+    end.append(Some("_About LibreDAW"), Some("app.about"));
+    menu.append_section(None, &end);
+    menu
 }
 
 pub fn build(gapp: &adw::Application, app: Rc<App>) -> adw::ApplicationWindow {
+    load_css();
+    prefs::apply_color_scheme(app.settings.borrow().color_scheme);
+    let (w, h) = size_from_env();
     let window = adw::ApplicationWindow::builder()
         .application(gapp)
-        .default_width(1280)
-        .default_height(800)
+        .default_width(w)
+        .default_height(h)
+        .width_request(360)
+        .height_request(294)
         .title("LibreDAW")
         .build();
+
+    // ---- header bar ----
+    let sounds_toggle = flat_toggle("sidebar-show-symbolic", "Sounds");
+    let undo = flat_button("edit-undo-symbolic", "Undo", "win.undo");
+    let redo = flat_button("edit-redo-symbolic", "Redo", "win.redo");
+    undo.set_tooltip_text(Some(&shortcuts::tooltip("Undo", "win.undo")));
+    redo.set_tooltip_text(Some(&shortcuts::tooltip("Redo", "win.redo")));
+    let inspector_toggle = flat_toggle("sidebar-show-right-symbolic", "Inspector");
+    let menu_button = gtk::MenuButton::new();
+    menu_button.set_icon_name("open-menu-symbolic");
+    menu_button.set_menu_model(Some(&main_menu()));
+    menu_button.set_primary(true);
+    menu_button.add_css_class("flat");
+    menu_button.set_tooltip_text(Some("Main Menu"));
+    menu_button.update_property(&[gtk::accessible::Property::Label("Main menu")]);
+
+    let stack = adw::ViewStack::new();
+    let switcher = adw::ViewSwitcher::builder()
+        .policy(adw::ViewSwitcherPolicy::Wide)
+        .stack(&stack)
+        .build();
+    let narrow_title = adw::WindowTitle::new("Untitled", "");
+    narrow_title.set_visible(false);
+    let title_box = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    title_box.append(&switcher);
+    title_box.append(&narrow_title);
+
+    let header = adw::HeaderBar::new();
+    header.set_title_widget(Some(&title_box));
+    header.pack_start(&sounds_toggle);
+    header.pack_start(&undo);
+    header.pack_start(&redo);
+    let agent_btn = gtk::Button::from_icon_name("network-workgroup-symbolic");
+    agent_btn.add_css_class("flat");
+    agent_btn.set_tooltip_text(Some("An agent is connected"));
+    agent_btn.update_property(&[gtk::accessible::Property::Label("An agent is connected")]);
+    agent_btn.set_visible(false);
+    header.pack_end(&menu_button);
+    header.pack_end(&inspector_toggle);
+    header.pack_end(&agent_btn);
+
+    // ---- pages ----
+    let pattern = pattern_page::build(&window, &app);
+    let mixer = Mixer::new(app.clone());
+    let song = adw::StatusPage::new();
+    song.set_icon_name(Some("view-continuous-symbolic"));
+    song.set_title("Song Arrangement");
+    song.set_description(Some("Arranging patterns into a song is coming next."));
+    stack.add_titled_with_icon(
+        &pattern.widget,
+        Some("pattern"),
+        "Pattern",
+        "view-list-symbolic",
+    );
+    stack.add_titled_with_icon(&song, Some("song"), "Song", "view-continuous-symbolic");
+    stack.add_titled_with_icon(
+        &mixer.widget(),
+        Some("mixer"),
+        "Mixer",
+        "audio-volume-high-symbolic",
+    );
+
+    let switcher_bar = adw::ViewSwitcherBar::new();
+    switcher_bar.set_stack(Some(&stack));
+    let center = adw::ToolbarView::new();
+    center.set_content(Some(&stack));
+    center.add_bottom_bar(&switcher_bar);
+
+    // ---- side panes ----
+    let inspector = inspector::build(&app);
+    let inspector_split = adw::OverlaySplitView::builder()
+        .sidebar_position(gtk::PackType::End)
+        .min_sidebar_width(300.0)
+        .max_sidebar_width(420.0)
+        .sidebar_width_fraction(0.28)
+        .show_sidebar(false)
+        .build();
+    inspector_split.set_sidebar(Some(&inspector.widget));
+    inspector_split.set_content(Some(&center));
+    let browser_split = adw::OverlaySplitView::builder()
+        .sidebar_position(gtk::PackType::Start)
+        .min_sidebar_width(260.0)
+        .max_sidebar_width(360.0)
+        .sidebar_width_fraction(0.2)
+        .show_sidebar(false)
+        .build();
+    browser_split.set_sidebar(Some(&browser::build(&app)));
+    browser_split.set_content(Some(&inspector_split));
+
+    // ---- transport and the toolbar view ----
+    let transport = Transport::new(&app);
+    let view = adw::ToolbarView::new();
+    let banner = adw::Banner::new("");
+    banner.set_button_label(Some("Review"));
+    banner.set_revealed(false);
+    view.add_top_bar(&header);
+    view.add_top_bar(&transport.bar);
+    view.add_top_bar(&banner);
+    view.set_content(Some(&browser_split));
+
+    let overlay = gtk::Overlay::new();
+    overlay.set_child(Some(&view));
+    overlay.add_overlay(&palette::install());
     let toasts = adw::ToastOverlay::new();
+    toasts.set_child(Some(&overlay));
+    window.set_content(Some(&toasts));
     {
         let t = toasts.clone();
         app.set_toaster(move |m| {
             t.add_toast(adw::Toast::new(m));
         });
+        let t = toasts.clone();
+        app.set_action_toaster(move |m, label, cb| {
+            let toast = adw::Toast::new(m);
+            toast.set_button_label(Some(label));
+            toast.connect_button_clicked(move |_| cb());
+            t.add_toast(toast);
+        });
     }
 
-    let header = build_header(&window, &app);
-    let rack = build_rack(&window, &app);
-    let (roll, roll_widget, snap_box) = build_roll(&app);
-    let mixer = Mixer::new(app.clone());
+    let ui = Rc::new(Ui {
+        window: window.clone(),
+        stack: stack.clone(),
+        browser_split: browser_split.clone(),
+        inspector_split: inspector_split.clone(),
+        sounds_toggle: sounds_toggle.clone(),
+        inspector_toggle: inspector_toggle.clone(),
+        undo,
+        redo,
+        narrow_title: narrow_title.clone(),
+        transport: transport.clone(),
+        pattern,
+        banner: banner.clone(),
+        agent_btn: agent_btn.clone(),
+    });
 
-    // Left: rack over roll. Right: mixer.
-    let left = gtk::Paned::new(gtk::Orientation::Vertical);
-    left.set_start_child(Some(&rack));
-    left.set_end_child(Some(&roll_widget));
-    left.set_resize_start_child(false);
-    left.set_shrink_start_child(false);
-    left.set_position(250);
-    let main = gtk::Paned::new(gtk::Orientation::Horizontal);
-    main.set_start_child(Some(&left));
-    main.set_end_child(Some(&mixer.widget()));
-    main.set_resize_end_child(false);
-    main.set_shrink_end_child(false);
-    main.set_position(820);
-    toasts.set_child(Some(&main));
-
-    let view = adw::ToolbarView::new();
-    view.add_top_bar(&header.0);
-    view.set_content(Some(&toasts));
-    window.set_content(Some(&view));
-
-    install_actions(gapp, &window, &app);
+    install_toggles(&ui);
+    install_breakpoints(
+        &ui,
+        &app,
+        &switcher,
+        &switcher_bar,
+        &narrow_title,
+        &transport,
+    );
+    install_actions(gapp, &ui, &app);
+    install_accels(gapp, &window, &ui);
     install_tick(&app);
+    install_view_hooks(&ui, &app);
+    install_close(&window, &app);
+    {
+        let (u, stack, a2) = (ui.clone(), inspector.stack.clone(), app.clone());
+        app.on_command(move |c| match c {
+            UiCommand::ShowSound => {
+                stack.set_visible_child_name("sound");
+                u.inspector_split.set_show_sidebar(true);
+            }
+            UiCommand::ShowSounds => u.browser_split.set_show_sidebar(true),
+            UiCommand::ShowAgent => {
+                stack.set_visible_child_name("agent");
+                u.inspector_split.set_show_sidebar(true);
+            }
+            UiCommand::AgentChanged => update_agent_ui(&u, &a2),
+            UiCommand::EditNotes => {}
+        });
+    }
+    {
+        let (u, a) = (ui.clone(), app.clone());
+        banner.connect_button_clicked({
+            let a = a.clone();
+            move |_| a.command(UiCommand::ShowAgent)
+        });
+        agent_btn.connect_clicked({
+            let a = app.clone();
+            move |_| a.command(UiCommand::ShowAgent)
+        });
+        update_agent_ui(&u, &a);
+    }
 
     {
-        let (r, l, m) = (roll.clone(), left.clone(), main.clone());
-        let (r2, l2, m2, s2) = (roll.clone(), left.clone(), main.clone(), snap_box.clone());
-        app.set_view_hooks(
-            move || {
-                let (px_per_tick, row_h, scroll_x, scroll_y, snap) = r.view_params();
-                ViewState {
-                    px_per_tick,
-                    row_h,
-                    scroll_x,
-                    scroll_y,
-                    snap: snap as u32,
-                    split_rack: l.position(),
-                    split_mixer: m.position(),
-                    ..ViewState::default()
-                }
-            },
-            move |v| {
-                r2.set_view_params(
-                    v.px_per_tick,
-                    v.row_h,
-                    v.scroll_x,
-                    v.scroll_y,
-                    v.snap as usize,
-                );
-                s2.set_selected(r2.snap_index() as u32);
-                l2.set_position(v.split_rack.clamp(80, 2000));
-                m2.set_position(v.split_mixer.clamp(300, 4000));
-            },
-        );
+        let (u, a) = (ui.clone(), app.clone());
+        app.on_change(move || sync_header(&u, &a));
     }
-    install_close(&window, &app);
+    sync_header(&ui, &app);
+    install_debug_shot(gapp, &ui);
     window
+}
+
+/// Debug aids for screenshots without a screenshot tool:
+/// `LIBREDAW_PAGE=pattern|song|mixer` picks the page,
+/// `LIBREDAW_THEME=light|dark` the color scheme, and
+/// `LIBREDAW_SHOT=/path.png` writes the window to a PNG a moment after it
+/// is shown and quits. `LIBREDAW_SIZE=360x640` sets the size.
+fn install_debug_shot(gapp: &adw::Application, ui: &Rc<Ui>) {
+    if let Ok(p) = std::env::var("LIBREDAW_PAGE") {
+        // After the project's saved view has been restored.
+        let u = ui.clone();
+        glib::timeout_add_local_once(Duration::from_millis(900), move || go_to_page(&u, &p));
+    }
+    if let Ok(p) = std::env::var("LIBREDAW_PANES") {
+        // "sounds", "inspector", or both separated by a comma.
+        let u = ui.clone();
+        glib::timeout_add_local_once(Duration::from_millis(900), move || {
+            u.browser_split.set_show_sidebar(p.contains("sounds"));
+            u.inspector_split.set_show_sidebar(p.contains("inspector"));
+        });
+    }
+    match std::env::var("LIBREDAW_THEME").as_deref() {
+        Ok("dark") => adw::StyleManager::default().set_color_scheme(adw::ColorScheme::ForceDark),
+        Ok("light") => adw::StyleManager::default().set_color_scheme(adw::ColorScheme::ForceLight),
+        _ => {}
+    }
+    // LIBREDAW_PLAY=1 starts playback after a second (drawing numbers).
+    if std::env::var_os("LIBREDAW_PLAY").is_some() {
+        let a = ui.window.clone();
+        glib::timeout_add_local_once(Duration::from_millis(1000), move || {
+            gtk::prelude::ActionGroupExt::activate_action(&a, "play-pause", None);
+        });
+    }
+    let Ok(path) = std::env::var("LIBREDAW_SHOT") else {
+        return;
+    };
+    let delay = std::env::var("LIBREDAW_SHOT_DELAY_MS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(2500);
+    let (gapp, window) = (gapp.clone(), ui.window.clone());
+    glib::timeout_add_local_once(Duration::from_millis(delay), move || {
+        let (w, h) = (window.width(), window.height());
+        let paintable = gtk::WidgetPaintable::new(Some(&window));
+        let snap = gtk::Snapshot::new();
+        paintable.snapshot(&snap, w as f64, h as f64);
+        let saved = match (snap.to_node(), window.native().and_then(|n| n.renderer())) {
+            (Some(node), Some(r)) => {
+                let t = r.render_texture(
+                    &node,
+                    Some(&gtk::graphene::Rect::new(0.0, 0.0, w as f32, h as f32)),
+                );
+                let r = t.save_to_png(&path);
+                if let Err(e) = &r {
+                    eprintln!("libredaw: png: {e}");
+                }
+                r.is_ok()
+            }
+            (n, r) => {
+                eprintln!(
+                    "libredaw: no node {} or renderer {}",
+                    n.is_none(),
+                    r.is_none()
+                );
+                false
+            }
+        };
+        eprintln!("libredaw: screenshot {path} {w}x{h}: {saved}");
+        gapp.quit();
+    });
+}
+
+/// Binds the two pane toggles to their split views and sets tooltips.
+fn install_toggles(ui: &Rc<Ui>) {
+    for (toggle, split, name, action) in [
+        (&ui.sounds_toggle, &ui.browser_split, "Sounds", "win.sounds"),
+        (
+            &ui.inspector_toggle,
+            &ui.inspector_split,
+            "Inspector",
+            "win.inspector",
+        ),
+    ] {
+        toggle
+            .bind_property("active", split, "show-sidebar")
+            .bidirectional()
+            .sync_create()
+            .build();
+        let update = {
+            let (t, name, action) = (toggle.clone(), name, action);
+            move || {
+                let verb = if t.is_active() { "Hide" } else { "Show" };
+                t.set_tooltip_text(Some(&shortcuts::tooltip(&format!("{verb} {name}"), action)));
+            }
+        };
+        update();
+        toggle.connect_toggled(move |_| update());
+    }
+    // Overlaid panes: opening one closes the other (they would cover each
+    // other), and Escape closes the open one (libadwaita does that).
+    for (this, other) in [
+        (&ui.sounds_toggle, &ui.inspector_toggle),
+        (&ui.inspector_toggle, &ui.sounds_toggle),
+    ] {
+        let (this_c, other_c, u) = (this.clone(), other.clone(), ui.clone());
+        this.connect_toggled(move |_| {
+            if this_c.is_active() && u.browser_split.is_collapsed() {
+                other_c.set_active(false);
+            }
+        });
+    }
+}
+
+/// `AdwBreakpoint`s with declarative setters for everything that changes
+/// the minimum width (so the window can shrink to 360 px), and handlers that
+/// publish the size class for the rest.
+///
+/// libadwaita applies only the last matching breakpoint, so each one lists
+/// the setters of the ones before it (regular, then compact, then narrow,
+/// then landscape). Height does not change the minimum width, so the short
+/// class is not a breakpoint: `install_height_watch` follows the height.
+fn install_breakpoints(
+    ui: &Rc<Ui>,
+    app: &Rc<App>,
+    switcher: &adw::ViewSwitcher,
+    switcher_bar: &adw::ViewSwitcherBar,
+    narrow_title: &adw::WindowTitle,
+    transport: &Rc<Transport>,
+) {
+    use adw::{BreakpointCondition as Cond, BreakpointConditionLengthType as Len, LengthUnit};
+    let max_w = |v: u32| Cond::new_length(Len::MaxWidth, v as f64, LengthUnit::Sp);
+    let max_h = |v: u32| Cond::new_length(Len::MaxHeight, v as f64, LengthUnit::Px);
+    let on = true.to_value();
+    let off = false.to_value();
+
+    let regular = adw::Breakpoint::new(max_w(size_class::REGULAR_MAX_SP));
+    let compact = adw::Breakpoint::new(max_w(size_class::COMPACT_MAX_SP));
+    let narrow = adw::Breakpoint::new(max_w(size_class::NARROW_MAX_SP));
+    let landscape = adw::Breakpoint::new(Cond::new_and(
+        max_w(size_class::NARROW_MAX_SP),
+        max_h(size_class::LANDSCAPE_MAX_PX),
+    ));
+    for bp in [&regular, &compact, &narrow, &landscape] {
+        bp.add_setter(&ui.browser_split, "collapsed", Some(&on));
+        bp.add_setter(&ui.inspector_split, "collapsed", Some(&on));
+    }
+    for bp in [&compact, &narrow, &landscape] {
+        transport.add_compact_setters(bp);
+    }
+    for bp in [&narrow, &landscape] {
+        transport.add_narrow_setters(bp);
+        bp.add_setter(&ui.inspector_toggle, "visible", Some(&off));
+    }
+    narrow.add_setter(switcher, "visible", Some(&off));
+    narrow.add_setter(narrow_title, "visible", Some(&on));
+    narrow.add_setter(switcher_bar, "reveal", Some(&on));
+    // A landscape phone keeps the switcher in the header: it has the
+    // narrow setters except for the three above.
+    landscape.add_setter(switcher, "visible", Some(&on));
+    landscape.add_setter(narrow_title, "visible", Some(&off));
+    landscape.add_setter(switcher_bar, "reveal", Some(&off));
+
+    // [regular, compact, narrow, landscape]
+    let flags = Rc::new(Cell::new([false; 4]));
+    let short = Rc::new(Cell::new(false));
+    let publish: Rc<dyn Fn()> = {
+        let (flags, short, app, ui) = (flags.clone(), short.clone(), app.clone(), ui.clone());
+        Rc::new(move || {
+            let f = flags.get();
+            let c = SizeClass::from_flags(
+                f[0] || f[1] || f[2] || f[3],
+                f[1] || f[2] || f[3],
+                f[2] || f[3],
+                short.get(),
+            )
+            .with_landscape(f[3]);
+            if crate::perf::enabled() {
+                eprintln!("libredaw: size class {c:?}");
+            }
+            app.set_size_class(c);
+            if c.touch() {
+                ui.window.add_css_class("touch");
+            } else {
+                ui.window.remove_css_class("touch");
+            }
+            ui.transport.apply_size(c);
+        })
+    };
+    for (i, bp) in [&regular, &compact, &narrow, &landscape]
+        .into_iter()
+        .enumerate()
+    {
+        let (fl, p) = (flags.clone(), publish.clone());
+        bp.connect_apply(move |_| {
+            let mut f = fl.get();
+            f[i] = true;
+            fl.set(f);
+            p();
+        });
+        let (fl, p) = (flags.clone(), publish.clone());
+        bp.connect_unapply(move |_| {
+            let mut f = fl.get();
+            f[i] = false;
+            fl.set(f);
+            p();
+        });
+        ui.window.add_breakpoint(bp.clone());
+    }
+
+    // The short class follows the window height.
+    {
+        let (w, short, p) = (ui.window.clone(), short, publish.clone());
+        ui.window.add_tick_callback(move |_, _| {
+            let h = w.height();
+            if h > 0 {
+                let s = h <= size_class::SHORT_MAX_PX as i32;
+                if short.replace(s) != s {
+                    p();
+                }
+            }
+            glib::ControlFlow::Continue
+        });
+    }
+    publish();
+}
+
+/// The approval banner and the agent indicator follow the control state.
+fn update_agent_ui(ui: &Ui, app: &App) {
+    let state = app
+        .bridge
+        .borrow()
+        .as_ref()
+        .map(|b| b.ui.clone())
+        .unwrap_or_default();
+    match crate::agent_panel::banner_title(&state) {
+        Some(t) => {
+            ui.banner.set_title(&t);
+            ui.banner.set_revealed(true);
+        }
+        None => ui.banner.set_revealed(false),
+    }
+    ui.agent_btn
+        .set_visible(state.enabled && !state.clients.is_empty());
+}
+
+fn page_name(ui: &Ui) -> String {
+    ui.stack
+        .visible_child_name()
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| "pattern".into())
+}
+
+fn sync_header(ui: &Ui, app: &App) {
+    ui.undo.set_sensitive(app.can_undo());
+    ui.redo.set_sensitive(app.can_redo());
+    let undo_tip = if app.can_undo() {
+        "Undo"
+    } else {
+        "Nothing to Undo"
+    };
+    let redo_tip = if app.can_redo() {
+        "Redo"
+    } else {
+        "Nothing to Redo"
+    };
+    ui.undo
+        .set_tooltip_text(Some(&shortcuts::tooltip(undo_tip, "win.undo")));
+    ui.redo
+        .set_tooltip_text(Some(&shortcuts::tooltip(redo_tip, "win.redo")));
+    let name = files::display_name(&app.ui.borrow().path);
+    let dirty = app.is_dirty();
+    let shown = if dirty {
+        format!("• {name}")
+    } else {
+        name.clone()
+    };
+    ui.narrow_title.set_title(&shown);
+    ui.window.set_title(Some(&format!("{shown} - LibreDAW")));
+    let sub = match app.ui.borrow().audio_error.clone() {
+        Some(_) => "Audio is off".to_string(),
+        None => String::new(),
+    };
+    ui.narrow_title.set_subtitle(&sub);
+    ui.transport.sync();
+}
+
+fn go_to_page(ui: &Ui, page: &str) {
+    ui.stack.set_visible_child_name(page);
+}
+
+/// `win.*` and `app.*` actions.
+fn install_actions(gapp: &adw::Application, ui: &Rc<Ui>, app: &Rc<App>) {
+    let window = &ui.window;
+    let add = |name: &str, f: Box<dyn Fn()>| {
+        let a = gio::SimpleAction::new(name, None);
+        a.connect_activate(move |_, _| f());
+        window.add_action(&a);
+    };
+    let a = app.clone();
+    add("undo", Box::new(move || a.undo()));
+    let a = app.clone();
+    add("redo", Box::new(move || a.redo()));
+    let a = app.clone();
+    add("play-pause", Box::new(move || a.toggle_play()));
+    let a = app.clone();
+    add(
+        "play-from-start",
+        Box::new(move || {
+            seek_start(&a);
+            a.play();
+        }),
+    );
+    let a = app.clone();
+    add("go-start", Box::new(move || seek_start(&a)));
+    let a = app.clone();
+    add(
+        "metronome",
+        Box::new(move || {
+            let (on, gain) = {
+                let s = a.session.borrow();
+                let m = &s.document().project.metronome;
+                (m.enabled, m.gain_db)
+            };
+            a.edit(vec![Edit::SetMetronome {
+                enabled: !on,
+                gain_db: gain,
+            }]);
+        }),
+    );
+    let (a, w) = (app.clone(), window.clone());
+    add("save", Box::new(move || files::save(&w, &a)));
+    let (a, w) = (app.clone(), window.clone());
+    add("save-as", Box::new(move || files::save_as(&w, &a)));
+    let (a, w) = (app.clone(), window.clone());
+    add("open", Box::new(move || files::open(&w, &a)));
+    let a = app.clone();
+    add("new", Box::new(move || files::new_project(&a)));
+    let (a, w) = (app.clone(), window.clone());
+    add("export", Box::new(move || export::show(&w, &a)));
+    let w = window.clone();
+    add(
+        "show-help-overlay",
+        Box::new(move || help::show_shortcuts(&w)),
+    );
+    let w = window.clone();
+    add("close", Box::new(move || w.close()));
+
+    // View.
+    let u = ui.clone();
+    add(
+        "sounds",
+        Box::new(move || u.sounds_toggle.set_active(!u.sounds_toggle.is_active())),
+    );
+    let u = ui.clone();
+    add(
+        "inspector",
+        Box::new(move || {
+            if u.inspector_toggle.is_visible() {
+                u.inspector_toggle
+                    .set_active(!u.inspector_toggle.is_active());
+            }
+        }),
+    );
+    for (name, page) in [
+        ("view-pattern", "pattern"),
+        ("view-song", "song"),
+        ("view-mixer", "mixer"),
+    ] {
+        let u = ui.clone();
+        add(name, Box::new(move || go_to_page(&u, page)));
+    }
+    let u = ui.clone();
+    add("zoom-in", Box::new(move || u.pattern.roll.zoom_x(1.3)));
+    let u = ui.clone();
+    add(
+        "zoom-out",
+        Box::new(move || u.pattern.roll.zoom_x(1.0 / 1.3)),
+    );
+    let u = ui.clone();
+    add("zoom-reset", Box::new(move || u.pattern.roll.reset_zoom()));
+    let a = app.clone();
+    add(
+        "focus-pattern",
+        Box::new(move || a.set_pattern_focus(a.pattern_focus().cycle())),
+    );
+
+    // Channels and plugins.
+    let u = ui.clone();
+    add(
+        "rename",
+        Box::new(move || u.pattern.channels.rename_selected()),
+    );
+    let a = app.clone();
+    let preset = gio::SimpleAction::new("add-preset", Some(glib::VariantTy::STRING));
+    preset.connect_activate(move |_, v| {
+        if let Some(name) = v.and_then(|v| v.get::<String>()) {
+            channels::add(&a, NewChannel::Preset(name));
+        }
+    });
+    window.add_action(&preset);
+    let (a, w) = (app.clone(), window.clone());
+    add(
+        "add-instrument",
+        Box::new(move || {
+            let a2 = a.clone();
+            dialogs::choose_plugin(&w, &a, PluginKind::Instrument, "Add Instrument", move |d| {
+                channels::add(
+                    &a2,
+                    NewChannel::Plugin {
+                        id: d.id.clone(),
+                        name: d.name.clone(),
+                    },
+                );
+            });
+        }),
+    );
+    let (a, w) = (app.clone(), window.clone());
+    add(
+        "add-plugin",
+        Box::new(move || {
+            let a2 = a.clone();
+            dialogs::choose_plugin(&w, &a, PluginKind::Any, "Add Plugin", move |d| {
+                if d.instrument {
+                    channels::add(
+                        &a2,
+                        NewChannel::Plugin {
+                            id: d.id.clone(),
+                            name: d.name.clone(),
+                        },
+                    );
+                } else {
+                    let track = a2.ui.borrow().track;
+                    let n = a2
+                        .session
+                        .borrow()
+                        .document()
+                        .project
+                        .track(track)
+                        .map(|t| t.inserts.len())
+                        .unwrap_or(0);
+                    a2.edit(vec![Edit::AddInsert {
+                        track,
+                        index: n.min(255) as u8,
+                        plugin_id: d.id.clone(),
+                    }]);
+                }
+            });
+        }),
+    );
+
+    // Application-level actions.
+    let add_app = |name: &str, f: Box<dyn Fn()>| {
+        let a = gio::SimpleAction::new(name, None);
+        a.connect_activate(move |_, _| f());
+        gapp.add_action(&a);
+    };
+    let (a, w) = (app.clone(), window.clone());
+    add_app("preferences", Box::new(move || prefs::show(&w, &a)));
+    let w = window.clone();
+    add_app("about", Box::new(move || help::show_about(&w)));
+    let w = window.clone();
+    add_app("quit", Box::new(move || w.close()));
+}
+
+fn seek_start(app: &App) {
+    let _ = app
+        .session
+        .borrow_mut()
+        .link
+        .command(protocol::engine::EngineCommand::Seek { tick: 0 });
+}
+
+/// Does the focused widget use this key itself?
+fn focus_uses_space(focus: &gtk::Widget) -> bool {
+    let mut w = Some(focus.clone());
+    for _ in 0..4 {
+        let Some(x) = w else { return false };
+        if x.is::<gtk::Editable>()
+            || x.is::<gtk::Button>()
+            || x.is::<gtk::CheckButton>()
+            || x.is::<gtk::Switch>()
+            || x.is::<gtk::DropDown>()
+            || x.is::<gtk::MenuButton>()
+            || x.is::<gtk::ListBoxRow>()
+            || x.is::<gtk::ListView>()
+            || x.is::<gtk::GridView>()
+            || x.is::<gtk::ColumnView>()
+        {
+            return true;
+        }
+        w = x.parent();
+    }
+    false
+}
+
+fn focus_uses_home(focus: &gtk::Widget) -> bool {
+    let mut w = Some(focus.clone());
+    for _ in 0..4 {
+        let Some(x) = w else { return false };
+        if x.is::<gtk::Editable>()
+            || x.is::<gtk::Scale>()
+            || x.is::<gtk::ListBoxRow>()
+            || x.is::<gtk::ListView>()
+            || x.is::<crate::widgets::step_grid::StepGrid>()
+            || x.is::<crate::widgets::piano_roll::PianoRoll>()
+        {
+            return true;
+        }
+        w = x.parent();
+    }
+    false
+}
+
+/// Accelerators from the shortcut table. Space, Shift+Space, and Home go
+/// through a capture-phase controller that steps aside when the focused
+/// widget uses the key (docs/ui-design.md 5.1).
+fn install_accels(gapp: &adw::Application, window: &adw::ApplicationWindow, ui: &Rc<Ui>) {
+    let _ = ui;
+    let conditional = ["win.play-pause", "win.play-from-start", "win.go-start"];
+    for sc in SHORTCUTS {
+        if sc.action.is_empty() || conditional.contains(&sc.action) {
+            continue;
+        }
+        gapp.set_accels_for_action(sc.action, sc.accels);
+    }
+    gapp.set_accels_for_action("win.redo", &["<Control><Shift>z", "<Control>y"]);
+
+    let ctl = gtk::ShortcutController::new();
+    ctl.set_propagation_phase(gtk::PropagationPhase::Capture);
+    for action in conditional {
+        let Some(sc) = SHORTCUTS.iter().find(|s| s.action == action) else {
+            continue;
+        };
+        let is_home = action == "win.go-start";
+        let win = window.clone();
+        let name = action.to_string();
+        for accel in sc.accels {
+            let Some(trigger) = gtk::ShortcutTrigger::parse_string(accel) else {
+                continue;
+            };
+            let (win, name) = (win.clone(), name.clone());
+            let act = gtk::CallbackAction::new(move |_, _| {
+                use gtk::prelude::GtkWindowExt;
+                if let Some(f) = GtkWindowExt::focus(&win) {
+                    let uses = if is_home {
+                        focus_uses_home(&f)
+                    } else {
+                        focus_uses_space(&f)
+                    };
+                    if uses {
+                        return glib::Propagation::Proceed;
+                    }
+                }
+                let n = name.strip_prefix("win.").unwrap_or(&name);
+                gtk::prelude::ActionGroupExt::activate_action(&win, n, None);
+                glib::Propagation::Stop
+            });
+            ctl.add_shortcut(gtk::Shortcut::new(Some(trigger), Some(act)));
+        }
+    }
+    window.add_controller(ctl);
+}
+
+/// Saves and restores the window view (`.view.toml`).
+fn install_view_hooks(ui: &Rc<Ui>, app: &Rc<App>) {
+    let (u1, u2) = (ui.clone(), ui.clone());
+    let a1 = app.clone();
+    let a2 = app.clone();
+    app.set_view_hooks(
+        move || {
+            let (px_per_tick, row_h, scroll_x, scroll_y, snap) = u1.pattern.roll.view_params();
+            let total = u1.pattern.paned.height().max(1) as f64;
+            ViewState {
+                px_per_tick,
+                row_h,
+                scroll_x,
+                scroll_y,
+                snap: snap as u32,
+                page: page_name(&u1),
+                focus: a1.pattern_focus().name().to_string(),
+                sounds_open: u1.sounds_toggle.is_active(),
+                inspector_open: u1.inspector_toggle.is_active(),
+                split: (u1.pattern.paned.position() as f64 / total).clamp(0.1, 0.9),
+                ..ViewState::default()
+            }
+        },
+        move |v| {
+            u2.pattern.roll.set_view_params(
+                v.px_per_tick,
+                v.row_h,
+                v.scroll_x,
+                v.scroll_y,
+                v.snap as usize,
+            );
+            u2.pattern
+                .snap
+                .set_selected(u2.pattern.roll.snap_index() as u32);
+            go_to_page(&u2, &v.page);
+            if let Some(f) = PatternFocus::from_name(&v.focus) {
+                a2.set_pattern_focus(f);
+            }
+            u2.sounds_toggle.set_active(v.sounds_open);
+            u2.inspector_toggle.set_active(v.inspector_open);
+            let total = u2.pattern.paned.height();
+            if total > 0 {
+                u2.pattern
+                    .paned
+                    .set_position(split_position(total, v.split, 120));
+            }
+        },
+    );
 }
 
 /// Closing saves first (Amendment 9): no "save changes?" dialog. If the
@@ -121,6 +935,9 @@ fn install_close(window: &adw::ApplicationWindow, app: &Rc<App>) {
     let a = app.clone();
     window.connect_close_request(move |win| {
         if saved_ok.get() {
+            if let Some(b) = a.bridge.borrow_mut().take() {
+                b.shutdown();
+            }
             a.session.borrow_mut().link.stop();
             a.session.borrow_mut().shutdown();
             return glib::Propagation::Proceed;
@@ -157,564 +974,6 @@ fn install_close(window: &adw::ApplicationWindow, app: &Rc<App>) {
     });
 }
 
-fn icon_button(icon: &str, tip: &str, action: Option<&str>) -> gtk::Button {
-    let b = gtk::Button::from_icon_name(icon);
-    b.set_tooltip_text(Some(tip));
-    b.update_property(&[gtk::accessible::Property::Label(tip)]);
-    if let Some(a) = action {
-        b.set_action_name(Some(a));
-    }
-    b
-}
-
-fn build_header(window: &adw::ApplicationWindow, app: &Rc<App>) -> (adw::HeaderBar, Rc<Header>) {
-    let bar = adw::HeaderBar::new();
-    let title = adw::WindowTitle::new("Untitled", "LibreDAW");
-    bar.set_title_widget(Some(&title));
-
-    let open = icon_button(
-        "document-open-symbolic",
-        "Open project (Ctrl+O)",
-        Some("win.open"),
-    );
-    let save = icon_button(
-        "document-save-symbolic",
-        "Save project (Ctrl+S)",
-        Some("win.save"),
-    );
-    let undo = icon_button("edit-undo-symbolic", "Undo (Ctrl+Z)", Some("win.undo"));
-    let redo = icon_button(
-        "edit-redo-symbolic",
-        "Redo (Ctrl+Shift+Z)",
-        Some("win.redo"),
-    );
-    bar.pack_start(&open);
-    bar.pack_start(&save);
-    bar.pack_start(&undo);
-    bar.pack_start(&redo);
-
-    // Transport on the left of the title, after the file buttons.
-    let transport = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-    let play = gtk::Button::from_icon_name("media-playback-start-symbolic");
-    play.set_tooltip_text(Some("Play or pause (Ctrl+Space)"));
-    play.update_property(&[gtk::accessible::Property::Label("Play")]);
-    play.set_action_name(Some("win.play"));
-    let stop = icon_button(
-        "media-playback-stop-symbolic",
-        "Stop and rewind",
-        Some("win.stop"),
-    );
-    let tempo = gtk::SpinButton::with_range(MIN_TEMPO_BPM, MAX_TEMPO_BPM, 1.0);
-    tempo.set_digits(1);
-    tempo.set_width_chars(6);
-    tempo.set_tooltip_text(Some("Tempo in beats per minute"));
-    tempo.update_property(&[gtk::accessible::Property::Label("Tempo")]);
-    let bpm = gtk::Label::new(Some("BPM"));
-    bpm.add_css_class("dim-label");
-    let metro = gtk::ToggleButton::new();
-    metro.set_icon_name("alarm-symbolic");
-    metro.set_tooltip_text(Some("Metronome"));
-    metro.update_property(&[gtk::accessible::Property::Label("Metronome")]);
-    transport.append(&play);
-    transport.append(&stop);
-    transport.append(&tempo);
-    transport.append(&bpm);
-    transport.append(&metro);
-    bar.pack_start(&transport);
-
-    // Main menu.
-    let menu = gio::Menu::new();
-    let file = gio::Menu::new();
-    file.append(Some("New project"), Some("win.new"));
-    file.append(Some("Save as…"), Some("win.save-as"));
-    file.append(Some("Export WAV…"), Some("win.export"));
-    menu.append_section(None, &file);
-    let edit = gio::Menu::new();
-    edit.append(Some("Add plugin…"), Some("win.add-plugin"));
-    edit.append(Some("Allow agent control"), Some("win.agent"));
-    menu.append_section(None, &edit);
-    let app_menu = gio::Menu::new();
-    app_menu.append(Some("About LibreDAW"), Some("win.about"));
-    app_menu.append(Some("Quit"), Some("win.quit"));
-    menu.append_section(None, &app_menu);
-    let mb = gtk::MenuButton::new();
-    mb.set_icon_name("open-menu-symbolic");
-    mb.set_menu_model(Some(&menu));
-    mb.set_tooltip_text(Some("Main menu"));
-    bar.pack_end(&mb);
-
-    let h = Rc::new(Header {
-        title,
-        play,
-        tempo,
-        metro,
-        undo,
-        redo,
-        updating: Cell::new(false),
-    });
-
-    {
-        let (h2, a) = (h.clone(), app.clone());
-        h.tempo.connect_value_changed(move |s| {
-            if h2.updating.get() {
-                return;
-            }
-            let v = s.value();
-            let cur = a.session.borrow().document().project.tempo_bpm;
-            if (cur - v).abs() > 1e-9 {
-                a.edit(vec![Edit::SetTempo { bpm: v }]);
-            }
-        });
-        let (h2, a) = (h.clone(), app.clone());
-        h.metro.connect_toggled(move |b| {
-            if h2.updating.get() {
-                return;
-            }
-            let gain = a.session.borrow().document().project.metronome.gain_db;
-            a.edit(vec![Edit::SetMetronome {
-                enabled: b.is_active(),
-                gain_db: gain,
-            }]);
-        });
-    }
-    {
-        let (h2, a, w) = (h.clone(), app.clone(), window.clone());
-        a.on_change({
-            let a = a.clone();
-            move || sync_header(&h2, &a, &w)
-        });
-    }
-    sync_header(&h, app, window);
-    (bar, h)
-}
-
-fn sync_header(h: &Header, app: &App, window: &adw::ApplicationWindow) {
-    h.updating.set(true);
-    let (tempo, metro) = {
-        let s = app.session.borrow();
-        let p = &s.document().project;
-        (p.tempo_bpm, p.metronome.enabled)
-    };
-    if (h.tempo.value() - tempo).abs() > 1e-9 {
-        h.tempo.set_value(tempo);
-    }
-    h.metro.set_active(metro);
-    h.updating.set(false);
-    h.undo.set_sensitive(app.can_undo());
-    h.redo.set_sensitive(app.can_redo());
-    let playing = app.ui.borrow().playing;
-    h.play.set_icon_name(if playing {
-        "media-playback-pause-symbolic"
-    } else {
-        "media-playback-start-symbolic"
-    });
-    let name = files::display_name(&app.ui.borrow().path);
-    let dirty = app.is_dirty();
-    h.title
-        .set_title(&format!("{}{}", if dirty { "• " } else { "" }, name));
-    let sub = match app.ui.borrow().audio_error.clone() {
-        Some(e) => format!("LibreDAW — audio off: {e}"),
-        None => "LibreDAW".to_string(),
-    };
-    h.title.set_subtitle(&sub);
-    window.set_title(Some(&format!("{name} — LibreDAW")));
-}
-
-/// Pattern bar, step grid, and the add channel button.
-fn build_rack(window: &adw::ApplicationWindow, app: &Rc<App>) -> gtk::Widget {
-    let root = gtk::Box::new(gtk::Orientation::Vertical, 0);
-
-    // Pattern bar.
-    let bar = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-    bar.add_css_class("toolbar");
-    let plabel = gtk::Label::new(Some("Pattern"));
-    plabel.add_css_class("heading");
-    let patterns = gtk::DropDown::from_strings(&[]);
-    patterns.set_tooltip_text(Some("Pattern shown in the rack and the piano roll"));
-    let add_pattern = icon_button("list-add-symbolic", "New pattern", None);
-    let del_pattern = icon_button("user-trash-symbolic", "Remove this pattern", None);
-    let steps_label = gtk::Label::new(Some("Steps"));
-    steps_label.add_css_class("dim-label");
-    let steps = gtk::SpinButton::with_range(MIN_STEPS as f64, MAX_STEPS as f64, 1.0);
-    steps.set_tooltip_text(Some("Pattern length in steps"));
-    steps.update_property(&[gtk::accessible::Property::Label("Pattern length in steps")]);
-    let spacer = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-    spacer.set_hexpand(true);
-    let add_channel = gtk::MenuButton::new();
-    add_channel.set_child(Some(
-        &adw::ButtonContent::builder()
-            .icon_name("list-add-symbolic")
-            .label("Add channel")
-            .build(),
-    ));
-    let cm = gio::Menu::new();
-    cm.append(Some("Synth"), Some("win.add-synth"));
-    cm.append(Some("Plugin instrument…"), Some("win.add-instrument"));
-    add_channel.set_menu_model(Some(&cm));
-    let rename = icon_button(
-        "document-edit-symbolic",
-        "Rename the selected channel",
-        None,
-    );
-    bar.append(&plabel);
-    bar.append(&patterns);
-    bar.append(&add_pattern);
-    bar.append(&del_pattern);
-    bar.append(&steps_label);
-    bar.append(&steps);
-    bar.append(&spacer);
-    bar.append(&rename);
-    bar.append(&add_channel);
-    root.append(&bar);
-    root.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
-
-    let grid = StepGrid::new(app.clone());
-    let sw = gtk::ScrolledWindow::builder()
-        .child(&grid)
-        .vexpand(true)
-        .hscrollbar_policy(gtk::PolicyType::Automatic)
-        .build();
-    root.append(&sw);
-
-    let updating = Rc::new(Cell::new(false));
-    let ids: Rc<RefCell<Vec<protocol::ids::PatternId>>> = Rc::new(RefCell::new(Vec::new()));
-
-    {
-        let a = app.clone();
-        add_pattern.connect_clicked(move |_| {
-            let n = a.session.borrow().document().project.patterns.len() + 1;
-            if let Some(r) = a.edit(vec![Edit::AddPattern {
-                name: format!("Pattern {n}"),
-                length_steps: 16,
-            }]) {
-                a.select_pattern(protocol::ids::PatternId(r.created[0]));
-            }
-        });
-        let a = app.clone();
-        del_pattern.connect_clicked(move |_| {
-            if let Some(p) = a.current_pattern() {
-                a.edit(vec![Edit::RemovePattern { pattern: p }]);
-            }
-        });
-        let (a, ids2, up) = (app.clone(), ids.clone(), updating.clone());
-        patterns.connect_selected_notify(move |d| {
-            if up.get() {
-                return;
-            }
-            if let Some(id) = ids2.borrow().get(d.selected() as usize).copied() {
-                a.select_pattern(id);
-            }
-        });
-        let (a, up) = (app.clone(), updating.clone());
-        steps.connect_value_changed(move |s| {
-            if up.get() {
-                return;
-            }
-            if let Some(p) = a.current_pattern() {
-                let v = s.value() as u8;
-                let cur = a
-                    .session
-                    .borrow()
-                    .document()
-                    .project
-                    .pattern(p)
-                    .map(|x| x.length_steps);
-                if cur != Some(v) {
-                    a.edit(vec![Edit::SetPatternLength {
-                        pattern: p,
-                        length_steps: v,
-                    }]);
-                }
-            }
-        });
-        let (a, w) = (app.clone(), window.clone());
-        rename.connect_clicked(move |_| {
-            let Some(c) = a.current_channel() else { return };
-            let cur = a
-                .session
-                .borrow()
-                .document()
-                .project
-                .channel(c)
-                .map(|x| x.name.clone())
-                .unwrap_or_default();
-            let a2 = a.clone();
-            dialogs::ask_name(&w, "Rename channel", &cur, move |n| {
-                a2.edit(vec![Edit::RenameChannel {
-                    channel: c,
-                    name: n,
-                }]);
-            });
-        });
-    }
-
-    let sync = {
-        let (a, ids, up, patterns, steps) = (
-            app.clone(),
-            ids.clone(),
-            updating.clone(),
-            patterns.clone(),
-            steps.clone(),
-        );
-        move || {
-            up.set(true);
-            let (names, new_ids, sel_len) = {
-                let s = a.session.borrow();
-                let p = &s.document().project;
-                let names: Vec<String> = p.patterns.iter().map(|x| x.name.clone()).collect();
-                let new_ids: Vec<_> = p.patterns.iter().map(|x| x.id).collect();
-                let len = a
-                    .current_pattern()
-                    .and_then(|id| p.pattern(id))
-                    .map(|x| x.length_steps as f64);
-                (names, new_ids, len)
-            };
-            let cur_names: Vec<String> = patterns
-                .model()
-                .and_then(|m| m.downcast::<gtk::StringList>().ok())
-                .map(|l| {
-                    (0..l.n_items())
-                        .filter_map(|i| l.string(i).map(|s| s.to_string()))
-                        .collect()
-                })
-                .unwrap_or_default();
-            if cur_names != names {
-                let refs: Vec<&str> = names.iter().map(String::as_str).collect();
-                patterns.set_model(Some(&gtk::StringList::new(&refs)));
-            }
-            *ids.borrow_mut() = new_ids.clone();
-            if let Some(i) = a
-                .current_pattern()
-                .and_then(|id| new_ids.iter().position(|x| *x == id))
-                && patterns.selected() as usize != i
-            {
-                patterns.set_selected(i as u32);
-            }
-            if let Some(l) = sel_len
-                && (steps.value() - l).abs() > 0.5
-            {
-                steps.set_value(l);
-            }
-            up.set(false);
-        }
-    };
-    sync();
-    app.on_change(sync);
-    root.upcast()
-}
-
-/// The piano roll with its toolbar and scrollbars.
-fn build_roll(app: &Rc<App>) -> (PianoRoll, gtk::Widget, gtk::DropDown) {
-    let root = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    let tools = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-    tools.add_css_class("toolbar");
-    let title = gtk::Label::new(Some("Piano roll"));
-    title.add_css_class("heading");
-    let chan = gtk::Label::new(None);
-    chan.add_css_class("dim-label");
-    let spacer = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-    spacer.set_hexpand(true);
-    let snap_label = gtk::Label::new(Some("Snap"));
-    snap_label.add_css_class("dim-label");
-    let labels: Vec<&str> = SNAPS.iter().map(|s| s.0).collect();
-    let snap = gtk::DropDown::from_strings(&labels);
-    snap.set_tooltip_text(Some("Grid that notes snap to"));
-    let zx_out = icon_button("zoom-out-symbolic", "Zoom out in time", None);
-    let zx_in = icon_button("zoom-in-symbolic", "Zoom in in time", None);
-    let zy_out = icon_button("go-down-symbolic", "Make rows smaller", None);
-    let zy_in = icon_button("go-up-symbolic", "Make rows taller", None);
-    let tl = gtk::Label::new(Some("Time"));
-    tl.add_css_class("dim-label");
-    let pl = gtk::Label::new(Some("Pitch"));
-    pl.add_css_class("dim-label");
-    for w in [
-        title.upcast_ref::<gtk::Widget>(),
-        chan.upcast_ref(),
-        spacer.upcast_ref(),
-        snap_label.upcast_ref(),
-        snap.upcast_ref(),
-        tl.upcast_ref(),
-        zx_out.upcast_ref(),
-        zx_in.upcast_ref(),
-        pl.upcast_ref(),
-        zy_out.upcast_ref(),
-        zy_in.upcast_ref(),
-    ] {
-        tools.append(w);
-    }
-    root.append(&tools);
-    root.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
-
-    let roll = PianoRoll::new(app.clone());
-    let grid = gtk::Grid::new();
-    let vs = gtk::Scrollbar::new(gtk::Orientation::Vertical, Some(&roll.vadj()));
-    let hs = gtk::Scrollbar::new(gtk::Orientation::Horizontal, Some(&roll.hadj()));
-    grid.attach(&roll, 0, 0, 1, 1);
-    grid.attach(&vs, 1, 0, 1, 1);
-    grid.attach(&hs, 0, 1, 1, 1);
-    grid.set_vexpand(true);
-    root.append(&grid);
-
-    {
-        let r = roll.clone();
-        snap.connect_selected_notify(move |d| r.set_snap_index(d.selected() as usize));
-        let r = roll.clone();
-        zx_in.connect_clicked(move |_| r.zoom_x(1.3));
-        let r = roll.clone();
-        zx_out.connect_clicked(move |_| r.zoom_x(1.0 / 1.3));
-        let r = roll.clone();
-        zy_in.connect_clicked(move |_| r.zoom_y(1.2));
-        let r = roll.clone();
-        zy_out.connect_clicked(move |_| r.zoom_y(1.0 / 1.2));
-    }
-    let a = app.clone();
-    let sync = move || {
-        let s = a.session.borrow();
-        let p = &s.document().project;
-        let name = a
-            .current_channel()
-            .and_then(|c| p.channel(c))
-            .map(|c| c.name.clone());
-        chan.set_text(&name.map(|n| format!("— {n}")).unwrap_or_default());
-    };
-    sync();
-    app.on_change(sync);
-    (roll, root.upcast(), snap)
-}
-
-fn install_actions(gapp: &adw::Application, window: &adw::ApplicationWindow, app: &Rc<App>) {
-    let add = |name: &str, f: Box<dyn Fn()>| {
-        let a = gio::SimpleAction::new(name, None);
-        a.connect_activate(move |_, _| f());
-        window.add_action(&a);
-    };
-    {
-        let a = app.clone();
-        add("undo", Box::new(move || a.undo()));
-        let a = app.clone();
-        add("redo", Box::new(move || a.redo()));
-        let a = app.clone();
-        add("play", Box::new(move || a.toggle_play()));
-        let a = app.clone();
-        add("stop", Box::new(move || a.stop()));
-        let (a, w) = (app.clone(), window.clone());
-        add("save", Box::new(move || files::save(&w, &a)));
-        let (a, w) = (app.clone(), window.clone());
-        add("save-as", Box::new(move || files::save_as(&w, &a)));
-        let (a, w) = (app.clone(), window.clone());
-        add("open", Box::new(move || files::open(&w, &a)));
-        let (a, _w) = (app.clone(), window.clone());
-        add("new", Box::new(move || files::new_project(&a)));
-        let (a, w) = (app.clone(), window.clone());
-        add(
-            "add-synth",
-            Box::new(move || {
-                let n = a.session.borrow().document().project.channels.len() + 1;
-                let track = a.ui.borrow().track;
-                let _ = &w;
-                if let Some(r) = a.edit(vec![Edit::AddChannel {
-                    name: format!("Synth {n}"),
-                    instrument: NewInstrument::Synth {
-                        params: SynthParams::default(),
-                    },
-                    root_key: 60,
-                    track,
-                }]) {
-                    a.select_channel(protocol::ids::ChannelId(r.created[0]));
-                }
-            }),
-        );
-        let (a, w) = (app.clone(), window.clone());
-        add(
-            "add-instrument",
-            Box::new(move || {
-                let a2 = a.clone();
-                dialogs::choose_plugin(
-                    &w,
-                    &a,
-                    PluginKind::Instrument,
-                    "Add instrument",
-                    move |d| {
-                        let track = a2.ui.borrow().track;
-                        if let Some(r) = a2.edit(vec![Edit::AddChannel {
-                            name: d.name.clone(),
-                            instrument: NewInstrument::Clap {
-                                plugin_id: d.id.clone(),
-                            },
-                            root_key: 60,
-                            track,
-                        }]) {
-                            a2.select_channel(protocol::ids::ChannelId(r.created[0]));
-                        }
-                    },
-                );
-            }),
-        );
-        let (a, w) = (app.clone(), window.clone());
-        add(
-            "add-plugin",
-            Box::new(move || {
-                let a2 = a.clone();
-                let w2 = w.clone();
-                dialogs::choose_plugin(&w, &a, PluginKind::Any, "Add plugin", move |d| {
-                    let track = a2.ui.borrow().track;
-                    let _ = &w2;
-                    if d.instrument {
-                        if let Some(r) = a2.edit(vec![Edit::AddChannel {
-                            name: d.name.clone(),
-                            instrument: NewInstrument::Clap {
-                                plugin_id: d.id.clone(),
-                            },
-                            root_key: 60,
-                            track,
-                        }]) {
-                            a2.select_channel(protocol::ids::ChannelId(r.created[0]));
-                        }
-                    } else {
-                        let n = a2
-                            .session
-                            .borrow()
-                            .document()
-                            .project
-                            .track(track)
-                            .map(|t| t.inserts.len())
-                            .unwrap_or(0);
-                        a2.edit(vec![Edit::AddInsert {
-                            track,
-                            index: n.min(255) as u8,
-                            plugin_id: d.id.clone(),
-                        }]);
-                    }
-                });
-            }),
-        );
-        let w = window.clone();
-        add(
-            "about",
-            Box::new(move || {
-                let d = adw::AboutDialog::builder()
-                    .application_name("LibreDAW")
-                    .developer_name("The LibreDAW contributors")
-                    .license_type(gtk::License::Gpl30)
-                    .version(env!("CARGO_PKG_VERSION"))
-                    .comments("A free digital audio workstation for Linux.")
-                    .build();
-                d.present(Some(&w));
-            }),
-        );
-        let w = window.clone();
-        add("quit", Box::new(move || w.close()));
-    }
-    gapp.set_accels_for_action("win.undo", &["<Control>z"]);
-    gapp.set_accels_for_action("win.redo", &["<Control><Shift>z", "<Control>y"]);
-    gapp.set_accels_for_action("win.save", &["<Control>s"]);
-    gapp.set_accels_for_action("win.save-as", &["<Control><Shift>s"]);
-    gapp.set_accels_for_action("win.open", &["<Control>o"]);
-    gapp.set_accels_for_action("win.new", &["<Control>n"]);
-    gapp.set_accels_for_action("win.play", &["<Control>space"]);
-    gapp.set_accels_for_action("win.quit", &["<Control>q"]);
-}
-
 /// The 10 ms source (4.4) plus autosave (7.6, Amendment 10): 3 s after the
 /// last edit and at least every 15 s while edits continue. The autosave
 /// writes the document as it is; plugin state is captured by the session on
@@ -728,15 +987,13 @@ fn install_tick(app: &Rc<App>) {
     glib::timeout_add_local(Duration::from_millis(10), move || {
         let now = Instant::now();
         let report = a.session.borrow_mut().tick_at(now);
-        for d in report.done {
-            if let Err(e) = d.result {
-                a.toast(&e.to_string());
-            }
-        }
+        crate::control_bridge::on_done(&a, report.done);
+        crate::control_bridge::tick(&a);
         if report.changed {
             a.notify();
         }
         a.tasks.poll();
+        a.poll_peaks();
 
         // Autosave: note changes, write when due.
         let (rev, dirty) = {

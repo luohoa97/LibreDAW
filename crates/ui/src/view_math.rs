@@ -153,6 +153,29 @@ impl Viewport {
         self.clamp_scroll(len_ticks);
     }
 
+    /// Scrolls so the notes of a channel are in view: the key span
+    /// `lo..=hi` is centered (or its top key is at the top when the span is
+    /// taller than the grid), and time starts at 0 unless the first note is
+    /// further right than the grid is wide.
+    pub fn scroll_to_notes(&mut self, first_tick: u32, lo: i32, hi: i32, len_ticks: u32) {
+        let (lo, hi) = (lo.clamp(0, 127), hi.clamp(0, 127));
+        let (lo, hi) = (lo.min(hi), lo.max(hi));
+        let span_h = (hi - lo + 1) as f64 * self.row_h;
+        let top = (127 - hi) as f64 * self.row_h;
+        self.scroll_y = if span_h >= self.grid_height() {
+            top - self.row_h
+        } else {
+            top - (self.grid_height() - span_h) / 2.0
+        };
+        let x = first_tick as f64 * self.px_per_tick;
+        self.scroll_x = if x < self.grid_width() * 0.8 {
+            0.0
+        } else {
+            x - 16.0
+        };
+        self.clamp_scroll(len_ticks);
+    }
+
     /// Scrolls so `tick` is inside the grid, if it is not.
     pub fn reveal_tick(&mut self, tick: f64, len_ticks: u32) {
         let x = self.tick_to_x(tick);
@@ -368,6 +391,38 @@ mod tests {
             v.zoom_y(0.5, anchor, 3840);
         }
         assert_eq!(v.row_h, MIN_ROW_H);
+    }
+
+    #[test]
+    fn scrolling_to_notes_centers_the_key_span() {
+        let mut vp = Viewport::default();
+        // A kick around C2 (keys 36..=38) is far below the default C4 view.
+        assert!(vp.y_to_key(vp.grid_top()) > 60);
+        vp.scroll_to_notes(0, 36, 38, 3840);
+        let (lo, hi) = vp.visible_keys();
+        assert!(lo <= 36 && hi >= 38, "{lo}..{hi}");
+        // The span sits near the middle of the grid.
+        let mid_y = vp.key_to_y(37) + vp.row_h / 2.0;
+        let center = vp.grid_top() + vp.grid_height() / 2.0;
+        assert!((mid_y - center).abs() <= vp.row_h * 2.0, "{mid_y} {center}");
+        assert_eq!(vp.scroll_x, 0.0);
+    }
+
+    #[test]
+    fn a_span_taller_than_the_grid_shows_its_top() {
+        let mut vp = Viewport::default();
+        vp.scroll_to_notes(0, 0, 127, 3840);
+        let (_, hi) = vp.visible_keys();
+        assert_eq!(hi, 127);
+    }
+
+    #[test]
+    fn late_first_notes_scroll_sideways() {
+        let mut vp = Viewport::default();
+        vp.scroll_to_notes(20_000, 60, 60, 40_000);
+        assert!(vp.scroll_x > 0.0);
+        let x = vp.tick_to_x(20_000.0);
+        assert!(x >= vp.key_w && x < vp.width, "{x}");
     }
 
     #[test]

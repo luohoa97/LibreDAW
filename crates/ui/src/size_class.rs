@@ -79,6 +79,32 @@ impl PatternFocus {
 }
 
 impl SizeClass {
+    /// From which breakpoints are applied (the window reports these).
+    pub fn from_flags(regular: bool, compact: bool, narrow: bool, short: bool) -> SizeClass {
+        let width = if narrow {
+            Width::Narrow
+        } else if compact {
+            Width::Compact
+        } else if regular {
+            Width::Regular
+        } else {
+            Width::Wide
+        };
+        SizeClass {
+            width,
+            short,
+            // The landscape breakpoint is narrow and short at 500 px; the
+            // window passes `short` for the 760 px one, so landscape is
+            // derived by the caller through `with_landscape`.
+            landscape: false,
+        }
+    }
+
+    pub fn with_landscape(mut self, landscape: bool) -> SizeClass {
+        self.landscape = landscape && self.width == Width::Narrow;
+        self
+    }
+
     pub fn from_size(width_sp: f64, height_px: f64) -> SizeClass {
         let w = width_sp;
         let width = if w <= NARROW_MAX_SP as f64 {
@@ -200,6 +226,26 @@ mod tests {
         assert!(!c(1920.0, 1080.0).short);
         assert!(c(1280.0, 720.0).short);
         assert!(c(1280.0, 760.0).short);
+    }
+
+    #[test]
+    fn flags_agree_with_sizes() {
+        for (w, h) in [
+            (1920.0, 1080.0),
+            (1280.0, 720.0),
+            (800.0, 600.0),
+            (360.0, 640.0),
+        ] {
+            let c = SizeClass::from_size(w, h);
+            let f = SizeClass::from_flags(
+                w <= REGULAR_MAX_SP as f64,
+                w <= COMPACT_MAX_SP as f64,
+                w <= NARROW_MAX_SP as f64,
+                h <= SHORT_MAX_PX as f64,
+            )
+            .with_landscape(c.landscape);
+            assert_eq!(f, c, "{w}x{h}");
+        }
     }
 
     #[test]

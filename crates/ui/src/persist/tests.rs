@@ -105,12 +105,23 @@ fn view_state_round_trips_and_tolerates_junk() {
         scroll_x: 120.0,
         scroll_y: 640.0,
         snap: 3,
-        split_rack: 300,
-        split_mixer: 900,
+        page: "mixer".into(),
+        focus: "notes".into(),
+        sounds_open: true,
+        inspector_open: true,
+        split: 0.6,
     };
     assert_eq!(ViewState::parse(&v.emit()), v);
-    let junk = ViewState::parse("px_per_tick = NaN\nrow_h = abc\nsnap = -1\nwhat = 2\n=\n");
-    assert_eq!(junk, ViewState::default());
+    let junk = ViewState::parse(
+        "px_per_tick = NaN\nrow_h = abc\nsnap = -1\nwhat = 2\n=\npage = \"nowhere\"\nfocus = 3\nsplit = 7\n",
+    );
+    assert_eq!(junk.page, "pattern");
+    assert_eq!(junk.focus, "both");
+    assert_eq!(junk.split, 0.9);
+    assert_eq!(
+        ViewState::parse("px_per_tick = NaN\nrow_h = abc\nsnap = -1\nwhat = 2\n=\n"),
+        ViewState::default()
+    );
 }
 
 #[test]

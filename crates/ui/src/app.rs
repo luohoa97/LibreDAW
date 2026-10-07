@@ -22,6 +22,7 @@ use crate::history::{Applied, Author, HistoryError, Scope, Submitted};
 use crate::persist::ViewState;
 use crate::session::Session;
 use crate::settings::Settings;
+use crate::size_class::{PatternFocus, SizeClass};
 
 /// What the user picked. Not part of the document and not undoable (6).
 pub struct UiState {
@@ -47,6 +48,8 @@ struct ViewHooks {
 }
 
 type Toaster = Rc<dyn Fn(&str)>;
+type CommandListener = Rc<dyn Fn(UiCommand)>;
+type ActionToaster = Rc<dyn Fn(&str, &str, Box<dyn Fn()>)>;
 
 pub struct App {
     pub session: RefCell<Session>,
@@ -60,9 +63,42 @@ pub struct App {
     view_hooks: RefCell<Option<ViewHooks>>,
     listeners: RefCell<Vec<Rc<dyn Fn()>>>,
     toaster: RefCell<Option<Toaster>>,
+    action_toaster: RefCell<Option<ActionToaster>>,
     notifying: Cell<bool>,
     pub settings: RefCell<Settings>,
+    /// The control socket, when it started.
+    pub bridge: RefCell<Option<crate::control_bridge::Bridge>>,
     preview_timer: RefCell<Option<gtk::glib::SourceId>>,
+    rest_timer: RefCell<Option<gtk::glib::SourceId>>,
+    /// Window size class and what the Pattern page shows (what the user
+    /// chose; `effective_focus` applies the size class).
+    size: Cell<SizeClass>,
+    focus: Cell<PatternFocus>,
+    view_listeners: RefCell<Vec<Rc<dyn Fn()>>>,
+    command_listeners: RefCell<Vec<CommandListener>>,
+    peaks: RefCell<[std::collections::HashMap<TrackId, [f32; 2]>; 2]>,
+}
+
+/// Who reads the meter peaks (each keeps its own accumulation).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MeterUser {
+    Mixer = 0,
+    Transport = 1,
+}
+
+/// Requests from one widget to the window or to another widget.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UiCommand {
+    /// Open the inspector on the Sound page.
+    ShowSound,
+    /// Open the sound browser.
+    ShowSounds,
+    /// Put the piano roll in front (narrow) or focus it (wide).
+    EditNotes,
+    /// Open the inspector on the Agent page.
+    ShowAgent,
+    /// The agent state changed (banner, indicator, Agent page).
+    AgentChanged,
 }
 
 impl App {
@@ -77,7 +113,14 @@ impl App {
             session: RefCell::new(session),
             tasks: crate::tasks::Tasks::new(),
             settings: RefCell::new(settings),
+            bridge: RefCell::new(None),
             preview_timer: RefCell::new(None),
+            rest_timer: RefCell::new(None),
+            size: Cell::new(SizeClass::from_size(1360.0, 800.0)),
+            focus: Cell::new(PatternFocus::Both),
+            view_listeners: RefCell::new(Vec::new()),
+            command_listeners: RefCell::new(Vec::new()),
+            peaks: RefCell::default(),
             dirs,
             session_id: crate::persist::session_id(
                 std::time::SystemTime::now()
@@ -100,6 +143,7 @@ impl App {
             }),
             listeners: RefCell::new(Vec::new()),
             toaster: RefCell::new(None),
+            action_toaster: RefCell::new(None),
             notifying: Cell::new(false),
         });
         app.fix_selection();
@@ -152,12 +196,77 @@ impl App {
         }
     }
 
+    // ---- window size and pattern focus (not document state) ----
+
+    pub fn size_class(&self) -> SizeClass {
+        self.size.get()
+    }
+
+    pub fn set_size_class(&self, c: SizeClass) {
+        if self.size.replace(c) != c {
+            self.notify_view();
+        }
+    }
+
+    /// What the user chose for the Pattern page.
+    pub fn pattern_focus(&self) -> PatternFocus {
+        self.focus.get()
+    }
+
+    /// What the Pattern page shows now (size class applied).
+    pub fn effective_focus(&self) -> PatternFocus {
+        self.size.get().effective_focus(self.focus.get())
+    }
+
+    pub fn set_pattern_focus(&self, f: PatternFocus) {
+        if self.focus.replace(f) != f {
+            self.notify_view();
+        }
+    }
+
+    /// Asks the window to do something that is not a document edit.
+    pub fn command(&self, c: UiCommand) {
+        let ls: Vec<_> = self.command_listeners.borrow().clone();
+        for l in ls {
+            l(c);
+        }
+    }
+
+    pub fn on_command(&self, f: impl Fn(UiCommand) + 'static) {
+        self.command_listeners.borrow_mut().push(Rc::new(f));
+    }
+
+    /// Called when the size class or the pattern focus changes.
+    pub fn on_view_change(&self, f: impl Fn() + 'static) {
+        self.view_listeners.borrow_mut().push(Rc::new(f));
+    }
+
+    fn notify_view(&self) {
+        let ls: Vec<_> = self.view_listeners.borrow().clone();
+        for l in ls {
+            l();
+        }
+    }
+
     pub fn on_change(&self, f: impl Fn() + 'static) {
         self.listeners.borrow_mut().push(Rc::new(f));
     }
 
     pub fn set_toaster(&self, f: impl Fn(&str) + 'static) {
         *self.toaster.borrow_mut() = Some(Rc::new(f));
+    }
+
+    pub fn set_action_toaster(&self, f: impl Fn(&str, &str, Box<dyn Fn()>) + 'static) {
+        *self.action_toaster.borrow_mut() = Some(Rc::new(f));
+    }
+
+    /// A toast with one button ("Undo", "Show in Files").
+    pub fn toast_action(&self, msg: &str, label: &str, on_click: impl Fn() + 'static) {
+        let t = self.action_toaster.borrow().clone();
+        match t {
+            Some(t) => t(msg, label, Box::new(on_click)),
+            None => eprintln!("libredaw: {msg}"),
+        }
     }
 
     pub fn toast(&self, msg: &str) {
@@ -281,6 +390,30 @@ impl App {
         }
     }
 
+    /// Edits from a control that has no clear end (a fader, a knob turned
+    /// with the wheel or keys): one undo gesture that closes when the
+    /// control has been still for half a second.
+    pub fn edit_resting(self: &Rc<App>, description: &str, edits: Vec<Edit>) {
+        if !self.session.borrow().editor.gesture_open() {
+            self.gesture_begin(description);
+        }
+        self.gesture_edit(edits);
+        if let Some(id) = self.rest_timer.borrow_mut().take() {
+            id.remove();
+        }
+        let me = Rc::downgrade(self);
+        let id =
+            gtk::glib::timeout_add_local_once(std::time::Duration::from_millis(500), move || {
+                if let Some(a) = me.upgrade() {
+                    a.rest_timer.borrow_mut().take();
+                    if a.session.borrow().editor.gesture_open() {
+                        a.gesture_end();
+                    }
+                }
+            });
+        *self.rest_timer.borrow_mut() = Some(id);
+    }
+
     pub fn gesture_end(&self) {
         let done = self.session.borrow_mut().end_gesture();
         for d in done {
@@ -332,6 +465,40 @@ impl App {
                 .link
                 .command(EngineCommand::SetPlayingPattern { pattern: p });
         }
+    }
+
+    // ---- level meters ----
+
+    /// Reads the engine's peak atomics (each read resets them) and adds the
+    /// values to what each meter user has not taken yet. Call from the
+    /// 10 ms tick.
+    pub fn poll_peaks(&self) {
+        let s = self.session.borrow();
+        let status = s.link.status.clone();
+        let mut acc = self.peaks.borrow_mut();
+        for t in &s.document().project.tracks {
+            let Some((slot, _)) = s.slots.track_slot(t.id) else {
+                continue;
+            };
+            let mut v = [0.0f32; 2];
+            for (ch, p) in v.iter_mut().enumerate() {
+                let bits = status.track_peaks[slot.0 as usize * 2 + ch].swap(0, Ordering::Relaxed);
+                *p = f32::from_bits(bits);
+            }
+            for user in acc.iter_mut() {
+                let e = user.entry(t.id).or_insert([0.0; 2]);
+                e[0] = e[0].max(v[0]);
+                e[1] = e[1].max(v[1]);
+            }
+        }
+    }
+
+    /// Linear peaks (left, right) of a track since this user last asked.
+    pub fn take_peaks(&self, track: TrackId, user: MeterUser) -> [f32; 2] {
+        let mut acc = self.peaks.borrow_mut();
+        acc[user as usize]
+            .insert(track, [0.0; 2])
+            .unwrap_or([0.0; 2])
     }
 
     // ---- note preview (owner request, SPEC 17.2 audition) ----
