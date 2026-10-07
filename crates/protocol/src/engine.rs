@@ -248,7 +248,22 @@ pub enum EngineCommand {
     DetachPlugin {
         slot: PluginSlot,
     },
+    /// Audition: play `key` on a channel's instrument now, whether or not
+    /// the transport runs, through the channel's mixer path (owner request;
+    /// the full preview slot of 17.2 comes in Milestone B). `on: false`
+    /// releases it. Preview notes use their own note ids and never touch
+    /// the document. The engine releases a preview note by itself after
+    /// `PREVIEW_MAX_SECONDS` if no `on: false` arrives.
+    Preview {
+        channel: ChannelSlot,
+        key: u8,
+        vel: u8,
+        on: bool,
+    },
 }
+
+/// Longest a preview note sounds without a release (seconds).
+pub const PREVIEW_MAX_SECONDS: f64 = 4.0;
 
 /// Host-to-plugin events, through the plugin event ring (4.3, 9.1).
 #[derive(Clone, Copy, Debug, PartialEq)]
