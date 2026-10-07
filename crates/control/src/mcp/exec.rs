@@ -189,6 +189,9 @@ impl Exec {
             } => return self.send(body, base_revision, refresh),
             Plan::Compose(c) => self.compose(&c),
             Plan::Summary => self.summary(),
+            Plan::PatternList => self
+                .project()
+                .map(|(_, p)| ToolOutput::ok(super::v4::pattern_list(&p))),
             Plan::Inspect(a) => self.inspect(&a),
             Plan::ContentGet(t) => self.content_get(&t),
             Plan::Transport => self.transport(),

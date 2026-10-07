@@ -1106,3 +1106,124 @@ fn fx_add_with_a_sound_duck_to_kick_and_loudness_through_the_tools() {
     let e = c.err("loudness", json!({"amount": 11}));
     assert!(e.contains("0 to 10"), "{e}");
 }
+
+#[test]
+fn audio_clips_patterns_shapes_and_effect_switch_through_the_tools() {
+    use protocol::ids::TrackId;
+    use protocol::model::{Instrument, SampleRef, ShapeTarget};
+    let hash = "ab".repeat(32);
+    let mut daw = RefDaw::kick_and_hat();
+    daw.user_edit(vec![Edit::AddSample {
+        sample: SampleRef {
+            hash: hash.clone(),
+            orig_name: "Final Countdown.wav".into(),
+            size: 10,
+            local_only: false,
+        },
+    }]);
+    let rig = support::rig_with(daw, true, |_| {});
+    let mut c = Mcp::connect(&rig);
+    c.init();
+
+    // A dropped file: a new audio row named after it, one full-length clip.
+    let r = c.ok(
+        "audio_clip_add",
+        json!({"sample": hash, "start": 1, "seconds": 4}),
+    );
+    let p = rig.daw.lock().unwrap().project();
+    let row = p
+        .channels
+        .iter()
+        .find(|ch| matches!(ch.instrument, Instrument::Audio))
+        .expect("an audio row");
+    assert_eq!(row.name, "Final Countdown");
+    let clip = p.clips.iter().find(|x| x.audio.is_some()).unwrap();
+    assert_eq!((clip.start, clip.len, clip.offset), (3840, 7680, 0));
+    assert_eq!(r["instrument"], json!(row.id.0));
+    // One undo step takes the row, its track and the clip away.
+    c.ok("undo", json!({}));
+    let p = rig.daw.lock().unwrap().project();
+    assert!(p.clips.iter().all(|x| x.audio.is_none()));
+    assert_eq!(p.channels.len(), 2);
+    c.ok("redo", json!({}));
+
+    // Trim, gain and fades.
+    let id = rig
+        .daw
+        .lock()
+        .unwrap()
+        .project()
+        .clips
+        .iter()
+        .find(|x| x.audio.is_some())
+        .unwrap()
+        .id;
+    c.ok(
+        "audio_clip_set",
+        json!({"clip": id.0, "trim_end": 1, "gain_db": -3, "fade_in": "1/4"}),
+    );
+    let p = rig.daw.lock().unwrap().project();
+    let a = p.clips.iter().find(|x| x.id == id).unwrap();
+    assert_eq!(a.len, 3840);
+    let src = a.audio.unwrap();
+    assert_eq!((src.gain_mdb, src.fade_in), (-3000, 960));
+
+    // A pattern from the kick and hat clips, placed again at bar 4.
+    let r = c.ok("pattern_make", json!({"clips": [4, 6], "name": "Beat"}));
+    let g = r["pattern"].as_u64().unwrap();
+    let p = rig.daw.lock().unwrap().project();
+    assert_eq!(p.groups.len(), 1);
+    assert!(p.clips.iter().filter(|x| x.group.is_some()).count() == 2);
+    let r = c.ok("pattern_place", json!({"pattern": g, "start": 4}));
+    assert_eq!(r["clips"].as_array().unwrap().len(), 2, "{r}");
+    let p = rig.daw.lock().unwrap().project();
+    assert_eq!(p.clips.iter().filter(|x| x.group.is_some()).count(), 4);
+    let list = c.ok("pattern_list", json!({}));
+    assert_eq!(list["patterns"][0]["name"], "Beat");
+    assert_eq!(list["patterns"][0]["placed"].as_array().unwrap().len(), 2);
+    let e = c.err("pattern_place", json!({"pattern": 9999, "start": 0}));
+    assert!(e.contains("does not exist"), "{e}");
+
+    let t = text_of(&c.tool("project_summary", json!({})));
+    assert!(
+        t.contains("Patterns") && t.contains("audio abababab"),
+        "{t}"
+    );
+
+    // A shape from a preset, then replaced, then removed.
+    let r = c.ok(
+        "shape_add",
+        json!({"target": {"kind": "volume", "track": 0}, "preset": "pump", "start": 0, "end": 1}),
+    );
+    let s = r["shape"].as_u64().unwrap();
+    let p = rig.daw.lock().unwrap().project();
+    assert_eq!(p.shapes.len(), 1);
+    assert_eq!(
+        p.shapes[0].target,
+        ShapeTarget::Volume { track: TrackId(0) }
+    );
+    assert!(p.shapes[0].points.len() >= 4);
+    let e = c.err(
+        "shape_add",
+        json!({"target": {"kind": "volume", "track": 0}, "preset": "zap", "start": 0, "end": 1}),
+    );
+    assert!(e.contains("fade_in"), "{e}");
+    c.ok(
+        "shape_set",
+        json!({"shape": s, "points": [{"at": 0, "value": -20}, {"at": 1, "value": 0, "curve": "linear"}]}),
+    );
+    assert_eq!(rig.daw.lock().unwrap().project().shapes[0].points.len(), 2);
+    c.ok("shape_remove", json!({"shapes": [s]}));
+    assert!(rig.daw.lock().unwrap().project().shapes.is_empty());
+
+    // The On switch of an effect.
+    c.ok("fx_add", json!({"track": 0, "fx": "eq"}));
+    let p = rig.daw.lock().unwrap().project();
+    let ins = p.track(TrackId(0)).unwrap().inserts[0].instance();
+    c.ok("fx_bypass", json!({"insert": ins.0, "bypass": true}));
+    let p = rig.daw.lock().unwrap().project();
+    assert!(matches!(
+        p.track(TrackId(0)).unwrap().inserts[0],
+        protocol::model::Insert::Builtin { bypass: true, .. }
+    ));
+}
