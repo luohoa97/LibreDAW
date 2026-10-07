@@ -323,7 +323,7 @@ impl StepGrid {
             gdk::Key::Down => (1, 0),
             gdk::Key::Home => (0, -(steps as i32)),
             gdk::Key::End => (0, steps as i32),
-            gdk::Key::space | gdk::Key::Return | gdk::Key::KP_Enter => {
+            gdk::Key::Return | gdk::Key::KP_Enter => {
                 let (row, step) = logic::move_cursor(cur, 0, 0, rows, steps);
                 if self.is_read_only(row) {
                     self.app()

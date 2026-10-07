@@ -25,7 +25,7 @@ fn trace(what: &str) {
 }
 
 /// Tries the audio hosts in order. Returns the link and, if none opened, why.
-fn start_audio() -> (EngineLink, Option<String>) {
+fn start_audio(settings: &crate::settings::Settings) -> (EngineLink, Option<String>) {
     let empty = Document::new();
     let mut slots = SlotAllocator::new();
     let _ = slots.sync(&empty.project);
@@ -33,8 +33,8 @@ fn start_audio() -> (EngineLink, Option<String>) {
     for host in [Host::PipeWire, Host::Alsa, Host::Jack] {
         let cfg = EngineConfig {
             host,
-            device: None,
-            buffer_frames: 0,
+            device: settings.output_device.clone(),
+            buffer_frames: settings.buffer_frames,
             sample_rate: None,
         };
         let first = engine_adapter::compile(&crate::compiler::CompileJob {
@@ -59,7 +59,8 @@ pub fn run() -> glib::ExitCode {
             return;
         }
         trace("starting audio");
-        let (link, audio_err) = start_audio();
+        let settings = crate::settings::Settings::read(&crate::files::real_dirs());
+        let (link, audio_err) = start_audio(&settings);
         trace(&format!(
             "audio: {}",
             audio_err.as_deref().unwrap_or("running")

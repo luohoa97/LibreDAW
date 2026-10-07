@@ -2,6 +2,7 @@
 //! GTK4 application shell, widgets, document and undo.
 
 pub mod app;
+pub mod browser;
 pub mod bundle;
 pub mod change;
 pub mod compiler;
@@ -9,12 +10,17 @@ pub mod dialogs;
 pub mod document;
 pub mod draw;
 pub mod engine_adapter;
+pub mod export;
 pub mod files;
+pub mod help;
 pub mod history;
+pub mod inspector;
 pub mod mixer;
 pub mod palette;
+pub mod pattern_page;
 pub mod persist;
 pub mod plugin_adapter;
+pub mod prefs;
 pub mod presets;
 pub mod registry;
 pub mod roll_logic;
@@ -27,6 +33,7 @@ pub mod size_class;
 pub mod slots;
 pub mod step_logic;
 pub mod tasks;
+pub mod transport;
 pub mod transport_logic;
 pub mod view_math;
 pub mod widgets;

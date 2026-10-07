@@ -22,6 +22,7 @@ use crate::history::{Applied, Author, HistoryError, Scope, Submitted};
 use crate::persist::ViewState;
 use crate::session::Session;
 use crate::settings::Settings;
+use crate::size_class::{PatternFocus, SizeClass};
 
 /// What the user picked. Not part of the document and not undoable (6).
 pub struct UiState {
@@ -47,6 +48,7 @@ struct ViewHooks {
 }
 
 type Toaster = Rc<dyn Fn(&str)>;
+type ActionToaster = Rc<dyn Fn(&str, &str, Box<dyn Fn()>)>;
 
 pub struct App {
     pub session: RefCell<Session>,
@@ -60,9 +62,15 @@ pub struct App {
     view_hooks: RefCell<Option<ViewHooks>>,
     listeners: RefCell<Vec<Rc<dyn Fn()>>>,
     toaster: RefCell<Option<Toaster>>,
+    action_toaster: RefCell<Option<ActionToaster>>,
     notifying: Cell<bool>,
     pub settings: RefCell<Settings>,
     preview_timer: RefCell<Option<gtk::glib::SourceId>>,
+    /// Window size class and what the Pattern page shows (what the user
+    /// chose; `effective_focus` applies the size class).
+    size: Cell<SizeClass>,
+    focus: Cell<PatternFocus>,
+    view_listeners: RefCell<Vec<Rc<dyn Fn()>>>,
 }
 
 impl App {
@@ -78,6 +86,9 @@ impl App {
             tasks: crate::tasks::Tasks::new(),
             settings: RefCell::new(settings),
             preview_timer: RefCell::new(None),
+            size: Cell::new(SizeClass::from_size(1360.0, 800.0)),
+            focus: Cell::new(PatternFocus::Both),
+            view_listeners: RefCell::new(Vec::new()),
             dirs,
             session_id: crate::persist::session_id(
                 std::time::SystemTime::now()
@@ -100,6 +111,7 @@ impl App {
             }),
             listeners: RefCell::new(Vec::new()),
             toaster: RefCell::new(None),
+            action_toaster: RefCell::new(None),
             notifying: Cell::new(false),
         });
         app.fix_selection();
@@ -152,12 +164,65 @@ impl App {
         }
     }
 
+    // ---- window size and pattern focus (not document state) ----
+
+    pub fn size_class(&self) -> SizeClass {
+        self.size.get()
+    }
+
+    pub fn set_size_class(&self, c: SizeClass) {
+        if self.size.replace(c) != c {
+            self.notify_view();
+        }
+    }
+
+    /// What the user chose for the Pattern page.
+    pub fn pattern_focus(&self) -> PatternFocus {
+        self.focus.get()
+    }
+
+    /// What the Pattern page shows now (size class applied).
+    pub fn effective_focus(&self) -> PatternFocus {
+        self.size.get().effective_focus(self.focus.get())
+    }
+
+    pub fn set_pattern_focus(&self, f: PatternFocus) {
+        if self.focus.replace(f) != f {
+            self.notify_view();
+        }
+    }
+
+    /// Called when the size class or the pattern focus changes.
+    pub fn on_view_change(&self, f: impl Fn() + 'static) {
+        self.view_listeners.borrow_mut().push(Rc::new(f));
+    }
+
+    fn notify_view(&self) {
+        let ls: Vec<_> = self.view_listeners.borrow().clone();
+        for l in ls {
+            l();
+        }
+    }
+
     pub fn on_change(&self, f: impl Fn() + 'static) {
         self.listeners.borrow_mut().push(Rc::new(f));
     }
 
     pub fn set_toaster(&self, f: impl Fn(&str) + 'static) {
         *self.toaster.borrow_mut() = Some(Rc::new(f));
+    }
+
+    pub fn set_action_toaster(&self, f: impl Fn(&str, &str, Box<dyn Fn()>) + 'static) {
+        *self.action_toaster.borrow_mut() = Some(Rc::new(f));
+    }
+
+    /// A toast with one button ("Undo", "Show in Files").
+    pub fn toast_action(&self, msg: &str, label: &str, on_click: impl Fn() + 'static) {
+        let t = self.action_toaster.borrow().clone();
+        match t {
+            Some(t) => t(msg, label, Box::new(on_click)),
+            None => eprintln!("libredaw: {msg}"),
+        }
     }
 
     pub fn toast(&self, msg: &str) {

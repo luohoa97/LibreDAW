@@ -317,6 +317,19 @@ impl PianoRoll {
         self.queue_draw();
     }
 
+    /// Back to the default zoom on both axes.
+    pub fn reset_zoom(&self) {
+        let d = Viewport::default();
+        let len = self.view().map(|v| v.len_ticks).unwrap_or(0);
+        let mut vp = self.imp().vp.get();
+        vp.px_per_tick = d.px_per_tick;
+        vp.row_h = d.row_h;
+        vp.clamp_scroll(len);
+        self.imp().vp.set(vp);
+        self.sync_adjustments();
+        self.queue_draw();
+    }
+
     pub fn zoom_y(&self, factor: f64) {
         let len = self.view().map(|v| v.len_ticks).unwrap_or(0);
         let mut vp = self.imp().vp.get();
@@ -746,7 +759,7 @@ impl PianoRoll {
             return true;
         }
         match key {
-            gdk::Key::space => {
+            gdk::Key::Return | gdk::Key::KP_Enter => {
                 let (t, k) = imp.cursor.get();
                 match note_at_cursor(&v.notes, t, k) {
                     Some(id) => {
