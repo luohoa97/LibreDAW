@@ -1156,6 +1156,26 @@ in the project, content-addressed like git:
 - No merge between branches (merging music edits is not well defined) and
   no remote sync.
 
+
+### 15.12 Branches and versions (Amendment 17)
+
+The change tree (15.11) can split into named branches. Agents and users
+use the same tree; MCP exposes it (`HistoryTree`, `HistoryDiff`,
+`VersionSave`, `VersionRestore`, `BranchCreate`, `BranchSwitch`,
+`BranchList`, `BranchRename`, `BranchArchive`, and a `libredaw://history`
+resource with subscriptions).
+
+- "Make 3 versions of this song": the agent creates three branches from
+  the current commit ("Version A: darker", "Version B: faster", ...),
+  edits each, and the DAW shows them as cards in a **Versions** panel:
+  name, author, short description of what changed, and a **Listen**
+  button.
+- Compare: while playing, switching cards swaps the project state at the
+  next bar, keeping the playhead, so versions can be A/B compared by ear.
+- **Use This Version** makes that branch current; the others stay in the
+  tree (archived, never deleted) and can be brought back.
+- No merging between branches (15.11): picking a version is the decision.
+- Undo, the History page, and agent author scoping (17.1) work per branch.
 ## 16. Agent control (LibreDAW MCP)
 
 (Amended by 17.1: trust model, settings, concurrency, jobs, startup. Where
@@ -1468,7 +1488,9 @@ Status: approved scope, not yet adversarially reviewed.
 - While an agent session is active (connected and has sent a request in
   the last 5 s, or holds an open activity, 18.2), the main window shows an
   orange glow along its inner edges: an inset shadow in the libadwaita
-  warning color (`@warning_color`), 3 px, softly pulsing at 1 Hz. With
+  warning color (`@warning_color`), drawn like the browser agent glow in
+  Claude for Chrome: a soft inward gradient about 12 to 16 px deep along
+  all four window edges, gently pulsing (about 1.5 s per cycle). With
   "reduce animation" (GNOME setting) the glow is static. The glow never
   carries meaning alone (HIG): the header bar also shows an agent pill
   (agent name, current activity text, a Stop button), and the screen
@@ -1732,6 +1754,13 @@ mixer; none adds a parallel concept.
 ---
 
 ## Changelog
+
+### Amendment 17 (2026-10-07, owner)
+
+The change tree splits into named branches; agents can make several
+versions (branches) of a song, shown as cards with Listen, A/B switching
+at the next bar, and Use This Version (15.12). MCP has full access to the
+tree. The agent glow matches the Claude for Chrome style (18.1).
 
 ### Amendment 16 (2026-10-07, owner)
 
