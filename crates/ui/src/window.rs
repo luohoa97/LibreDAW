@@ -292,6 +292,7 @@ pub fn build(gapp: &adw::Application, app: Rc<App>) -> adw::ApplicationWindow {
             }
             UiCommand::AgentChanged => update_agent_ui(&u, &a2),
             UiCommand::EditNotes => {}
+            UiCommand::RenameChannel(id) => u.pattern.channels.rename(id),
         });
     }
     {

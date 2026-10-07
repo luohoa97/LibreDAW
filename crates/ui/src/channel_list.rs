@@ -126,6 +126,13 @@ impl ChannelList {
             .set_width_request(self.app.size_class().step_name_col() as i32);
     }
 
+    /// Starts renaming a channel in place (the "Rename" menu item).
+    pub fn rename(&self, id: ChannelId) {
+        if let Some((_, l)) = self.labels.borrow().iter().find(|(c, _)| *c == id) {
+            l.start_editing();
+        }
+    }
+
     /// Starts renaming the selected channel.
     pub fn rename_selected(&self) {
         let Some(id) = self.app.current_channel() else {
