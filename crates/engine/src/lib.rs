@@ -10,6 +10,7 @@ pub mod fx;
 pub mod groove;
 pub mod live;
 pub mod loadproject;
+pub mod loudness;
 pub mod metronome;
 pub mod mixer;
 pub mod plugins;

@@ -318,3 +318,26 @@ fn loud_beat_with_names() -> Project {
     // Kick on track 1, the 808 on track 2, which `ducked` targets.
     loud_beat()
 }
+
+#[test]
+fn the_live_loudness_reading_agrees_with_the_offline_analysis() {
+    let p = with_loudness(
+        &loud_beat(),
+        LoudnessArgs {
+            amount: None,
+            preset: Some("hard".into()),
+        },
+    );
+    let mut r = rig(&p, SR, true);
+    let (l, rr) = r.run(48000 * 10, 256);
+    let live = r
+        .shared
+        .loudness
+        .lufs()
+        .expect("a reading after 10 s of play");
+    let frames: Vec<[f32; 2]> = l.iter().zip(&rr).map(|(a, b)| [*a, *b]).collect();
+    // The ring holds the last 10 s, which is all of it.
+    let offline = control::analysis::integrated_loudness(&frames, 48000);
+    eprintln!("live {live:.2} LUFS, offline {offline:.2} LUFS");
+    assert!((live - offline).abs() < 0.3, "{live} vs {offline}");
+}

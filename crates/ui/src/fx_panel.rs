@@ -259,6 +259,217 @@ pub fn run(
     }
 }
 
+/// As `run`, but a burst of calls (a slider drag) is one undo step.
+pub fn run_resting(
+    app: &Rc<App>,
+    description: &str,
+    build: impl FnOnce(&protocol::model::Project, &mut IdGen) -> BuildResult,
+) {
+    let built = {
+        let s = app.session.borrow();
+        let d = s.document();
+        build(&d.project, &mut IdGen::new(&d.project, Some(d.next_id)))
+    };
+    match built {
+        Ok(b) if b.edits.is_empty() => {}
+        Ok(b) => app.edit_resting(description, b.edits),
+        Err(m) => app.toast(&m),
+    }
+}
+
+/// "Duck to Kick" on a mixer track: a switch and an amount. `None` when
+/// the track is Main Output or there is no Kick row to duck to.
+pub fn duck_row(
+    app: &Rc<App>,
+    project: &protocol::model::Project,
+    track: TrackId,
+) -> Option<gtk::Widget> {
+    use control::mcp::fxchain::{self, DuckArgs};
+    if track == TrackId::MASTER || fxchain::find_kick(project, track).is_none() {
+        return None;
+    }
+    let state = project
+        .track(track)
+        .and_then(|t| fxchain::duck_state(project, t));
+    let col = gtk::Box::new(gtk::Orientation::Vertical, 2);
+    let head = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    let cap = gtk::Label::new(Some("Duck to Kick"));
+    cap.add_css_class("caption-heading");
+    cap.set_xalign(0.0);
+    cap.set_hexpand(true);
+    head.append(&cap);
+    let on = gtk::Switch::new();
+    on.set_valign(gtk::Align::Center);
+    on.set_tooltip_text(Some(
+        "Makes this sound dip every time the kick hits, so the kick cuts through",
+    ));
+    on.update_property(&[gtk::accessible::Property::Label("Duck to Kick")]);
+    head.append(&on);
+    col.append(&head);
+    let amount = gtk::Scale::with_range(gtk::Orientation::Horizontal, 0.0, 100.0, 5.0);
+    amount.set_draw_value(false);
+    amount.set_tooltip_text(Some("How far this sound dips when the kick hits"));
+    amount.update_property(&[gtk::accessible::Property::Label("Duck amount")]);
+    col.append(&amount);
+
+    let updating = Rc::new(Cell::new(true));
+    on.set_active(state.is_some());
+    amount.set_value(state.map_or(100.0, |(_, a)| (a * 100.0).round()));
+    amount.set_sensitive(state.is_some());
+    updating.set(false);
+
+    let args = move |pct: f64| DuckArgs {
+        row: None,
+        track: Some(track),
+        amount: Some(pct),
+        kick: None,
+    };
+    {
+        let (a, u, amount) = (app.clone(), updating.clone(), amount.clone());
+        on.connect_active_notify(move |s| {
+            if u.get() {
+                return;
+            }
+            let pct = if s.is_active() { amount.value() } else { 0.0 };
+            amount.set_sensitive(s.is_active());
+            run(&a, |p, ids| fxchain::duck_to_kick(p, ids, &args(pct)));
+        });
+    }
+    {
+        let (a, u, on) = (app.clone(), updating, on);
+        amount.connect_value_changed(move |s| {
+            if u.get() || !on.is_active() {
+                return;
+            }
+            let pct = s.value();
+            run_resting(&a, "Duck to Kick", |p, ids| {
+                fxchain::duck_to_kick(p, ids, &args(pct))
+            });
+        });
+    }
+    Some(col.upcast())
+}
+
+/// The Loudness control for Main Output: a 0 to 10 amount, the three
+/// sounds, and a reading of the last 10 s. `hold(true)` is called while the
+/// slider is pressed so the strip is not rebuilt under the pointer, and
+/// `hold(false)` when it is let go. Returns the card and its reading.
+pub fn loudness_card(
+    app: &Rc<App>,
+    project: &protocol::model::Project,
+    hold: impl Fn(bool) + 'static,
+) -> (gtk::Widget, gtk::Label) {
+    use control::mcp::fxchain::{self, LOUDNESS_PRESETS, LoudnessArgs};
+    let state = project
+        .track(TrackId::MASTER)
+        .and_then(|t| fxchain::loudness_state(t));
+    let col = gtk::Box::new(gtk::Orientation::Vertical, 4);
+    let cap = gtk::Label::new(Some("Loudness"));
+    cap.add_css_class("caption-heading");
+    cap.set_xalign(0.0);
+    col.append(&cap);
+
+    let mut names = vec!["Custom", "Clean", "Punchy", "Hard (Phonk)"];
+    if state.is_none() {
+        names[0] = "Off";
+    }
+    let pick = gtk::DropDown::from_strings(&names);
+    pick.set_tooltip_text(Some("Pick how loud the whole song is"));
+    pick.update_property(&[gtk::accessible::Property::Label("Loudness style")]);
+    col.append(&pick);
+    let amount = gtk::Scale::with_range(gtk::Orientation::Horizontal, 0.0, 10.0, 0.5);
+    amount.set_draw_value(true);
+    amount.set_value_pos(gtk::PositionType::Right);
+    amount.set_digits(1);
+    amount.set_tooltip_text(Some(
+        "Louder and denser from 0 to 10. A limiter keeps the sound from going over the top",
+    ));
+    amount.update_property(&[gtk::accessible::Property::Label("Loudness")]);
+    col.append(&amount);
+    let reading = gtk::Label::new(Some("No reading yet"));
+    reading.add_css_class("caption");
+    reading.add_css_class("dim-label");
+    reading.set_xalign(0.0);
+    reading.set_tooltip_text(Some("How loud the last 10 seconds were, in LUFS"));
+    col.append(&reading);
+
+    let updating = Rc::new(Cell::new(true));
+    amount.set_value(state.unwrap_or(0.0));
+    let at = |v: f64| {
+        LOUDNESS_PRESETS
+            .iter()
+            .position(|(_, p)| (p - v).abs() < 0.25)
+            .map_or(0, |i| i as u32 + 1)
+    };
+    pick.set_selected(state.map_or(0, at));
+    updating.set(false);
+
+    let press = gtk::GestureClick::new();
+    press.set_propagation_phase(gtk::PropagationPhase::Capture);
+    let hold = Rc::new(hold);
+    {
+        let h = hold.clone();
+        press.connect_pressed(move |_, _, _, _| h(true));
+        let h = hold;
+        press.connect_released(move |_, _, _, _| h(false));
+    }
+    amount.add_controller(press);
+    {
+        let (a, u, pick) = (app.clone(), updating.clone(), pick.clone());
+        amount.connect_value_changed(move |s| {
+            if u.get() {
+                return;
+            }
+            let v = s.value();
+            u.set(true);
+            pick.set_selected(at(v));
+            u.set(false);
+            run_resting(&a, "Loudness", |p, ids| {
+                fxchain::loudness(
+                    p,
+                    ids,
+                    &LoudnessArgs {
+                        amount: Some(v),
+                        preset: None,
+                    },
+                )
+            });
+        });
+    }
+    {
+        let (a, u, amount) = (app.clone(), updating, amount);
+        pick.connect_selected_notify(move |d| {
+            let i = d.selected() as usize;
+            if u.get() || i == 0 {
+                return;
+            }
+            let (name, v) = LOUDNESS_PRESETS[i - 1];
+            u.set(true);
+            amount.set_value(v);
+            u.set(false);
+            run(&a, |p, ids| {
+                fxchain::loudness(
+                    p,
+                    ids,
+                    &LoudnessArgs {
+                        amount: None,
+                        preset: Some(name.into()),
+                    },
+                )
+            });
+        });
+    }
+    (col.upcast(), reading)
+}
+
+/// The reading's text for `lufs`.
+pub fn lufs_text(lufs: Option<f64>) -> String {
+    match lufs {
+        Some(l) => format!("{l:.1} LUFS"),
+        None => "No reading yet".into(),
+    }
+}
+
 /// Opens the panel of an effect from `anchor`.
 pub fn show(app: &Rc<App>, anchor: &gtk::Widget, track: TrackId, inst: InstanceId) {
     let Some(content) = build(app, track, inst) else {

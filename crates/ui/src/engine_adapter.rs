@@ -102,6 +102,8 @@ pub struct EngineLink {
     pub controls: Arc<ControlTable>,
     pub params: Arc<ParamTable>,
     pub status: Arc<EngineStatus>,
+    /// Loudness of Main Output over the last 10 s.
+    pub loudness: Arc<engine::loudness::LoudnessRing>,
     sample_rate: f64,
     live: Option<engine::Engine>,
     /// Stub only: capacity of the rings; `None` means unlimited. Tests set it
@@ -125,6 +127,7 @@ impl EngineLink {
             controls: Arc::new(ControlTable::new()),
             params: Arc::new(ParamTable::new()),
             status: Arc::new(EngineStatus::new()),
+            loudness: Arc::new(engine::loudness::LoudnessRing::new()),
             sample_rate,
             live: None,
             ring_capacity: None,
@@ -142,6 +145,7 @@ impl EngineLink {
             controls: e.controls.clone(),
             params: e.params.clone(),
             status: e.status.clone(),
+            loudness: e.loudness.clone(),
             sample_rate: e.sample_rate(),
             live: Some(e),
             ring_capacity: None,

@@ -7,6 +7,7 @@ use crate::audition::{Audition, AuditionSample};
 use crate::bass808::{Bass808, BassCtl};
 use crate::compiled::{Compiled, InsertC, InstrumentC};
 use crate::fx::FxPools;
+use crate::loudness::{LoudnessMeter, LoudnessRing};
 use crate::metronome::Click;
 use crate::mixer::{Fader, MuteSolo, SMOOTH_SECONDS, Smoother, db_to_lin, resolve_solo};
 use crate::plugins::{
@@ -46,6 +47,8 @@ pub struct Shared {
     pub controls: Arc<ControlTable>,
     pub params: Arc<ParamTable>,
     pub status: Arc<EngineStatus>,
+    /// Loudness of Main Output over the last 10 s (24.2-4).
+    pub loudness: Arc<LoudnessRing>,
 }
 
 impl Shared {
@@ -54,6 +57,7 @@ impl Shared {
             controls: Arc::new(ControlTable::new()),
             params: Arc::new(ParamTable::new()),
             status: Arc::new(EngineStatus::new()),
+            loudness: Arc::new(LoudnessRing::new()),
         }
     }
 }
@@ -381,13 +385,16 @@ pub struct Runtime {
     previews_allowed: bool,
     /// Frames left in which a previewed channel stays solo-exempt.
     preview_tail: [u32; MAX_CHANNELS],
+    loudness: LoudnessMeter,
 }
 
 impl Runtime {
     /// Allocates everything. Call off the audio thread.
     pub fn new(sample_rate: f64, shared: Shared, ends: RtEnds) -> Runtime {
         let bpm = shared.controls.tempo().clamp(MIN_TEMPO_BPM, MAX_TEMPO_BPM);
+        let loudness = LoudnessMeter::new(sample_rate, shared.loudness.clone());
         Runtime {
+            loudness,
             sample_rate,
             ramp: (sample_rate * SMOOTH_SECONDS).round().max(1.0) as u32,
             seq: Sequencer::new(sample_rate, bpm),
@@ -1094,6 +1101,9 @@ impl Runtime {
         let (ml, mr) = self.buses.lr(0, n);
         out_l.copy_from_slice(ml);
         out_r.copy_from_slice(mr);
+        if self.seq.playing {
+            self.loudness.process(out_l, out_r);
+        }
 
         for t in &mut self.preview_tail {
             *t = t.saturating_sub(n as u32);
