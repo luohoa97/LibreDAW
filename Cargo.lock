@@ -465,6 +465,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "libredaw-mcp"
+version = "0.0.0"
+dependencies = [
+ "libredaw-protocol",
+]
+
+[[package]]
 name = "libredaw-plugin-host"
 version = "0.0.0"
 
