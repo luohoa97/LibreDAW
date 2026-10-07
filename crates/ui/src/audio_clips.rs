@@ -632,7 +632,8 @@ mod tests {
         a.session
             .borrow_mut()
             .set_sample_home(Some(dir.join("bundle")));
-        let got: Rc<RefCell<Option<Vec<Result<Probed, String>>>>> = Rc::default();
+        type Got = Rc<RefCell<Option<Vec<Result<Probed, String>>>>>;
+        let got: Got = Rc::default();
         let g = got.clone();
         import_and_probe(
             &a,
