@@ -273,7 +273,10 @@ fn project_file_has_no_blob_bytes_and_is_text() {
     let (d, a, _) = doc_with_plugins(3, 4, 7);
     save(&t.bundle(), &d).unwrap();
     let text = fs::read_to_string(t.bundle().join(PROJECT_FILE)).unwrap();
-    assert!(text.starts_with("format_version = 1\n"));
+    assert!(text.starts_with(&format!(
+        "format_version = {}\n",
+        protocol::consts::FORMAT_VERSION
+    )));
     assert!(text.contains(&format!("{}-3.bin", a.0)));
 }
 
@@ -396,9 +399,17 @@ fn random_documents_survive_save_and_load() {
         let t = TempDir::new();
         save(&t.bundle(), &d).unwrap();
         let l = load(&t.bundle()).unwrap();
-        assert_eq!(*l.doc.project, *d.project, "seed {seed}");
+        // A ref with a state file name but no bytes (an edit recorded the
+        // name only) is saved without the name, as `save` documents.
+        let mut expect = (*d.project).clone();
+        for_each_clap_mut(&mut expect, |r| {
+            if r.state_bytes.is_none() {
+                r.state_file = None;
+            }
+        });
+        assert_eq!(*l.doc.project, expect, "seed {seed}");
         assert!(l.doc.next_id >= d.next_id.min(l.doc.project.max_id() + 1));
-        assert_eq!(blob_files(&t.bundle()), referenced(&d));
+        assert_eq!(blob_files(&t.bundle()), referenced(&l.doc));
         // Edit after reopen: ids stay unique (17.1 property).
         let mut seen: HashSet<u32> = HashSet::new();
         let floor = l.doc.next_id;

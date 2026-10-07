@@ -30,18 +30,18 @@ impl Rng {
     }
 }
 
-fn ok(doc: &Document, e: Edit) -> (Document, Vec<u32>) {
+pub(crate) fn ok(doc: &Document, e: Edit) -> (Document, Vec<u32>) {
     apply(doc, &e).unwrap_or_else(|err| panic!("edit failed: {err}: {e:?}"))
 }
 
-fn synth() -> NewInstrument {
+pub(crate) fn synth() -> NewInstrument {
     NewInstrument::Synth {
         params: SynthParams::default(),
     }
 }
 
 /// A document with one pattern (16 steps) and one synth channel on master.
-fn base() -> (Document, ChannelId, PatternId) {
+pub(crate) fn base() -> (Document, ChannelId, PatternId) {
     let d = Document::new();
     let (d, c) = ok(
         &d,
@@ -967,6 +967,8 @@ fn note_limits_checked_before_cloning() {
             len: 1,
             key: (i % 128) as u8,
             vel: 100,
+            off: 0,
+            repeat: 1,
         })
         .collect();
     notes.sort_by_key(|n| (n.start, n.key, n.id));
@@ -1053,7 +1055,7 @@ fn tracks_inserts_and_routing() {
         .unwrap()
         .inserts
         .iter()
-        .map(|Insert::Clap(r)| r.instance)
+        .map(|i| i.instance())
         .collect();
     assert_eq!(order, vec![i2, i1]);
     assert!(add(&d, 3, "x.y").is_err());
@@ -1296,7 +1298,8 @@ fn ids_of(d: &Document) -> Ids {
         }
     }
     for t in &d.project.tracks {
-        for Insert::Clap(r) in &t.inserts {
+        for ins in &t.inserts {
+            let Insert::Clap(r) = ins else { continue };
             inst.push(r.instance);
         }
     }
@@ -1369,7 +1372,7 @@ pub(crate) fn random_edit(r: &mut Rng, d: &Document) -> Edit {
             String::new()
         }
     };
-    match r.below(34) {
+    match r.below(52) {
         0 => Edit::SetTempo {
             bpm: 20.0 + r.below(300) as f64 + if r.chance(5) { float(r) } else { 0.0 },
         },
@@ -1533,6 +1536,7 @@ pub(crate) fn random_edit(r: &mut Rng, d: &Document) -> Edit {
             track: tr_id(r),
             value: MixValue::VolumeDb(gain(r)),
         },
+        34..=51 => super::beats_tests::random_edit_b(r, d),
         _ => match r.below(5) {
             0 => Edit::AddInsert {
                 track: tr_id(r),
@@ -1544,7 +1548,7 @@ pub(crate) fn random_edit(r: &mut Rng, d: &Document) -> Edit {
                 let inst = d
                     .project
                     .track(t)
-                    .and_then(|tt| tt.inserts.first().map(|Insert::Clap(c)| c.instance))
+                    .and_then(|tt| tt.inserts.first().map(|i| i.instance()))
                     .unwrap_or(InstanceId(1));
                 Edit::RemoveInsert {
                     track: t,

@@ -20,10 +20,20 @@
 //!   notes. The read-only rule of 5.2 is a display rule for the step grid.
 //! - `SetStepTicks` rewrites step notes, and removes other notes that
 //!   would start at or after the new pattern end (like shortening).
+//!
+//! Milestone B (SPEC 15, 17.2):
+//! - A step note may carry a pitch offset `off` and a ratchet `repeat`.
+//!   Toggling a step off removes step notes at that step whatever their
+//!   `off`. `SetRootKey` rewrites `key = new_root + off` and fails if that
+//!   leaves 0 to 127. Moving or resizing a note clears its `off`.
+//! - `RemovePattern` removes the pattern's clips. `RemoveTrack` removes the
+//!   sends to it and clears sidechains that read from it.
+//! - The Milestone B edits are in `document/beats.rs`.
 
 use std::collections::HashSet;
 use std::sync::Arc;
 
+use protocol::beats::{Bass808, Sampler, SamplerParams};
 use protocol::consts::*;
 use protocol::edit::{Edit, EditError, MixValue, NewInstrument, NewNote, set_mix};
 use protocol::ids::{ChannelId, FIRST_ID, InstanceId, NoteId, PatternId, TrackId};
@@ -32,6 +42,8 @@ use protocol::model::{
     Wave,
 };
 use protocol::validate::{ValidationError, check_synth, sort_canonical, validate};
+
+mod beats;
 
 /// Velocity of a step turned on without an explicit velocity.
 pub const DEFAULT_STEP_VEL: u8 = 100;
@@ -267,15 +279,16 @@ fn clap_mut(p: &mut Project, inst: InstanceId) -> Option<&mut ClapRef> {
     {
         return Some(r);
     }
-    for ti in 0..p.tracks.len() {
-        if let Some(ii) = p.tracks[ti]
-            .inserts
+    let at = p.tracks.iter().enumerate().find_map(|(ti, t)| {
+        t.inserts
             .iter()
-            .position(|Insert::Clap(r)| r.instance == inst)
-        {
-            let Insert::Clap(r) = &mut Arc::make_mut(&mut p.tracks[ti]).inserts[ii];
-            return Some(r);
-        }
+            .position(|i| matches!(i, Insert::Clap(r) if r.instance == inst))
+            .map(|ii| (ti, ii))
+    });
+    if let Some((ti, ii)) = at
+        && let Insert::Clap(r) = &mut Arc::make_mut(&mut p.tracks[ti]).inserts[ii]
+    {
+        return Some(r);
     }
     None
 }
@@ -384,13 +397,27 @@ fn apply_one(w: &mut Work, e: &Edit) -> Result<(), EditError> {
                 return Err(too_many("channels", MAX_CHANNELS));
             }
             track_idx(&w.p, *track)?;
-            if let NewInstrument::Synth { params } = instrument {
-                check_synth(params)?;
+            match instrument {
+                NewInstrument::Synth { params } => check_synth(params)?,
+                NewInstrument::Sampler {
+                    sample: Some(h), ..
+                } => beats::require_sample(&w.p, h)?,
+                _ => {}
             }
             let id = ChannelId(w.alloc()?);
             let instrument = match instrument {
                 NewInstrument::Synth { params } => Instrument::Synth(*params),
                 NewInstrument::Clap { plugin_id } => Instrument::Clap(new_clap(w, plugin_id)?),
+                NewInstrument::Sampler { sample, mode } => Instrument::Sampler(Sampler {
+                    sample: sample.clone(),
+                    mode: *mode,
+                    reverse: false,
+                    params: SamplerParams::default(),
+                }),
+                NewInstrument::Bass808 { mono } => Instrument::Bass808(Bass808 {
+                    mono: *mono,
+                    ..Bass808::default()
+                }),
             };
             w.p.channels.push(Arc::new(Channel {
                 id,
@@ -399,6 +426,7 @@ fn apply_one(w: &mut Work, e: &Edit) -> Result<(), EditError> {
                 track: *track,
                 mix: Default::default(),
                 instrument,
+                choke_group: 0,
             }));
         }
         Edit::RemoveChannel { channel } => {
@@ -471,6 +499,11 @@ fn apply_one(w: &mut Work, e: &Edit) -> Result<(), EditError> {
         Edit::RemovePattern { pattern } => {
             let i = pattern_idx(&w.p, *pattern)?;
             w.p.patterns.remove(i);
+            for pt in &mut w.p.playlist {
+                if pt.clips.iter().any(|c| c.pattern == *pattern) {
+                    Arc::make_mut(pt).clips.retain(|c| c.pattern != *pattern);
+                }
+            }
         }
         Edit::RenamePattern { pattern, name } => {
             let i = pattern_idx(&w.p, *pattern)?;
@@ -524,6 +557,8 @@ fn apply_one(w: &mut Work, e: &Edit) -> Result<(), EditError> {
                     len: n.len,
                     key: n.key,
                     vel: n.vel,
+                    off: 0,
+                    repeat: 1,
                 });
             }
             insert_notes(Arc::make_mut(&mut w.p.patterns[pi]), *channel, made);
@@ -574,6 +609,10 @@ fn apply_one(w: &mut Work, e: &Edit) -> Result<(), EditError> {
                 for n in cn.notes.iter_mut().filter(|n| want.contains(&n.id)) {
                     n.start = (n.start as i64 + *dt) as u32;
                     n.key = (n.key as i64 + *dkey as i64) as u8;
+                    if *dt != 0 || *dkey != 0 {
+                        // A moved step note becomes a piano-roll note (17.2).
+                        n.off = 0;
+                    }
                 }
                 cn.notes.sort_by_key(|n| (n.start, n.key, n.id));
             }
@@ -596,6 +635,9 @@ fn apply_one(w: &mut Work, e: &Edit) -> Result<(), EditError> {
                     if n.start as i64 + l > MAX_TICK as i64 {
                         return Err(out_of_range("note.end", (n.start as i64 + l) as f64));
                     }
+                    if l % n.repeat as i64 != 0 {
+                        return Err(bad("note length must stay divisible by its repeat"));
+                    }
                 }
             }
             if want.is_empty() {
@@ -605,6 +647,9 @@ fn apply_one(w: &mut Work, e: &Edit) -> Result<(), EditError> {
             for cn in &mut pat.notes {
                 for n in cn.notes.iter_mut().filter(|n| want.contains(&n.id)) {
                     n.len = (n.len as i64 + *dlen) as u32;
+                    if *dlen != 0 {
+                        n.off = 0;
+                    }
                 }
             }
         }
@@ -638,6 +683,7 @@ fn apply_one(w: &mut Work, e: &Edit) -> Result<(), EditError> {
                 name: name.clone(),
                 mix: Default::default(),
                 inserts: Vec::new(),
+                sends: Vec::new(),
             }));
         }
         Edit::RemoveTrack { track } => {
@@ -651,6 +697,7 @@ fn apply_one(w: &mut Work, e: &Edit) -> Result<(), EditError> {
                     Arc::make_mut(c).track = TrackId::MASTER;
                 }
             }
+            beats::forget_track(&mut w.p, *track);
         }
         Edit::RenameTrack { track, name } => {
             let i = track_idx(&w.p, *track)?;
@@ -684,7 +731,7 @@ fn apply_one(w: &mut Work, e: &Edit) -> Result<(), EditError> {
             let ii = w.p.tracks[ti]
                 .inserts
                 .iter()
-                .position(|Insert::Clap(r)| r.instance == *instance)
+                .position(|i| i.instance() == *instance)
                 .ok_or_else(|| not_found("insert", instance.0))?;
             Arc::make_mut(&mut w.p.tracks[ti]).inserts.remove(ii);
         }
@@ -722,6 +769,34 @@ fn apply_one(w: &mut Work, e: &Edit) -> Result<(), EditError> {
                 r.state_bytes = None;
             }
         }
+
+        // Milestone B (15, 17.2)
+        Edit::SetStepLanes { .. }
+        | Edit::SetNoteRepeat { .. }
+        | Edit::SetSwing { .. }
+        | Edit::SetChokeGroup { .. }
+        | Edit::AddSample { .. }
+        | Edit::RemoveSample { .. }
+        | Edit::SetSamplerSample { .. }
+        | Edit::SetSamplerMode { .. }
+        | Edit::SetSamplerParam { .. }
+        | Edit::SetBass808Mono { .. }
+        | Edit::SetBass808Param { .. }
+        | Edit::AddBuiltinInsert { .. }
+        | Edit::SetFxParam { .. }
+        | Edit::SetSaturatorCurve { .. }
+        | Edit::SetDelayPingPong { .. }
+        | Edit::SetSidechain { .. }
+        | Edit::MoveInsert { .. }
+        | Edit::SetSend { .. }
+        | Edit::RemoveSend { .. }
+        | Edit::AddPlaylistTrack { .. }
+        | Edit::RemovePlaylistTrack { .. }
+        | Edit::RenamePlaylistTrack { .. }
+        | Edit::AddClip { .. }
+        | Edit::RemoveClips { .. }
+        | Edit::MoveClips { .. }
+        | Edit::ResizeClips { .. } => beats::apply(w, e)?,
     }
     Ok(())
 }
@@ -771,7 +846,9 @@ fn set_step(
     if let Some(v) = vel {
         check_vel(v)?;
     }
-    let at = |n: &&Note| n.start == start && n.key == root;
+    // Off removes notes at the step whose key is `root + off`, whatever
+    // their `off` (17.2); on keeps an existing step note, with any `off`.
+    let at = |n: &&Note| n.start == start && n.key as i16 == root as i16 + n.off as i16;
     if on {
         let exists = w.p.patterns[pi]
             .notes_of(channel)
@@ -782,7 +859,7 @@ fn set_step(
                 let pat = Arc::make_mut(&mut w.p.patterns[pi]);
                 for cn in pat.notes.iter_mut().filter(|c| c.channel == channel) {
                     for n in cn.notes.iter_mut() {
-                        if n.start == start && n.key == root && n.len == len {
+                        if at(&&*n) && n.len == len {
                             n.vel = v;
                         }
                     }
@@ -797,12 +874,15 @@ fn set_step(
             len,
             key: root,
             vel: vel.unwrap_or(DEFAULT_STEP_VEL),
+            off: 0,
+            repeat: 1,
         };
         insert_notes(Arc::make_mut(&mut w.p.patterns[pi]), channel, vec![note]);
     } else if w.p.patterns[pi].notes_of(channel).iter().any(|n| at(&n)) {
         let pat = Arc::make_mut(&mut w.p.patterns[pi]);
         for cn in pat.notes.iter_mut().filter(|c| c.channel == channel) {
-            cn.notes.retain(|n| !(n.start == start && n.key == root));
+            cn.notes
+                .retain(|n| !(n.start == start && n.key as i16 == root as i16 + n.off as i16));
         }
         prune_empty(pat);
     }
@@ -818,6 +898,18 @@ fn set_root_key(w: &mut Work, channel: ChannelId, key: u8) -> Result<(), EditErr
     if old == key {
         return Ok(());
     }
+    // Check first so a failure changes nothing: every step note keeps
+    // `key = new_root + off` inside 0 to 127.
+    for pat in &w.p.patterns {
+        for n in pat.notes_of(channel) {
+            if n.is_step_note(old, pat) {
+                let k = key as i16 + n.off as i16;
+                if !(0..=127).contains(&k) {
+                    return Err(out_of_range("note.key", k as f64));
+                }
+            }
+        }
+    }
     for pat in &mut w.p.patterns {
         let has_step = pat
             .notes_of(channel)
@@ -832,10 +924,10 @@ fn set_root_key(w: &mut Work, channel: ChannelId, key: u8) -> Result<(), EditErr
             for n in cn.notes.iter_mut() {
                 if n.start % snapshot.0 == 0
                     && n.len == snapshot.0
-                    && n.key == old
+                    && n.key as i16 == old as i16 + n.off as i16
                     && n.start < snapshot.1
                 {
-                    n.key = key;
+                    n.key = (key as i16 + n.off as i16) as u8;
                 }
             }
             cn.notes.sort_by_key(|n| (n.start, n.key, n.id));
@@ -860,8 +952,10 @@ fn set_step_ticks(w: &mut Work, pattern: PatternId, new: u32) -> Result<(), Edit
     for cn in &mut pat.notes {
         let root = roots.iter().find(|r| r.0 == cn.channel).map(|r| r.1);
         for n in &mut cn.notes {
-            let is_step =
-                Some(n.key) == root && n.start % old == 0 && n.len == old && n.start < old_len;
+            let is_step = root.is_some_and(|r| n.key as i16 == r as i16 + n.off as i16)
+                && n.start % old == 0
+                && n.len == old
+                && n.start < old_len;
             if is_step {
                 n.start = n.start / old * new;
                 n.len = new;
@@ -878,5 +972,7 @@ fn set_step_ticks(w: &mut Work, pattern: PatternId, new: u32) -> Result<(), Edit
     Ok(())
 }
 
+#[cfg(test)]
+mod beats_tests;
 #[cfg(test)]
 pub(crate) mod tests;

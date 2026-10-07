@@ -296,7 +296,8 @@ impl History {
             for t in &e.project.tracks {
                 if others.insert(Arc::as_ptr(t) as *const u8) {
                     total += std::mem::size_of::<protocol::model::Track>() + t.name.len();
-                    for Insert::Clap(r) in &t.inserts {
+                    for ins in &t.inserts {
+                        let Insert::Clap(r) = ins else { continue };
                         total += r.params.len() * 16;
                         blob(r, &mut total);
                     }

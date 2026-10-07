@@ -142,7 +142,8 @@ fn for_each_clap_mut(p: &mut Project, mut f: impl FnMut(&mut protocol::model::Cl
     }
     for t in &mut p.tracks {
         if !t.inserts.is_empty() {
-            for Insert::Clap(r) in &mut Arc::make_mut(t).inserts {
+            for ins in &mut Arc::make_mut(t).inserts {
+                let Insert::Clap(r) = ins else { continue };
                 f(r);
             }
         }
@@ -156,7 +157,8 @@ fn for_each_clap(p: &Project, mut f: impl FnMut(&protocol::model::ClapRef)) {
         }
     }
     for t in &p.tracks {
-        for Insert::Clap(r) in &t.inserts {
+        for ins in &t.inserts {
+            let Insert::Clap(r) = ins else { continue };
             f(r);
         }
     }
