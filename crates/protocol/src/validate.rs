@@ -600,13 +600,13 @@ fn check_groups_and_shapes(
     // Every grouped clip names a known group. Instances may differ in
     // their members once a clip of one is edited on its own.
     for c in &p.clips {
-        if let Some(g) = &c.group {
-            if p.groups.binary_search_by_key(&g.group, |x| x.id).is_err() {
-                return Err(ValidationError::MissingRef {
-                    what: "group".into(),
-                    id: g.group.0,
-                });
-            }
+        if let Some(g) = &c.group
+            && p.groups.binary_search_by_key(&g.group, |x| x.id).is_err()
+        {
+            return Err(ValidationError::MissingRef {
+                what: "group".into(),
+                id: g.group.0,
+            });
         }
     }
 
