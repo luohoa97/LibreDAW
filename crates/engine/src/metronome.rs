@@ -209,6 +209,7 @@ impl Metronome {
 pub struct CallbackState {
     metronome: Metronome,
     recorder: Arc<Recorder>,
+    sched_probed: bool,
 }
 
 impl CallbackState {
@@ -216,6 +217,7 @@ impl CallbackState {
         CallbackState {
             metronome,
             recorder,
+            sched_probed: false,
         }
     }
 
@@ -227,6 +229,11 @@ impl CallbackState {
         let frames = (data.len() / self.metronome.channels()) as u32;
         self.recorder
             .push_callback(self.recorder.elapsed_ns(), stream_ns, frames);
+        if !self.sched_probed {
+            // Once, measurement only: two scheduler queries on the callback thread.
+            self.sched_probed = true;
+            self.recorder.set_sched(crate::rt::thread_sched());
+        }
         self.metronome.render(data);
         restore_fp_mode(fp);
     }

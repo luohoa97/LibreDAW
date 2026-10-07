@@ -4,7 +4,7 @@
 //! stopped.
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU8, AtomicU32, AtomicU64, AtomicUsize, Ordering::*};
+use std::sync::atomic::{AtomicI32, AtomicU8, AtomicU32, AtomicU64, AtomicUsize, Ordering::*};
 use std::time::Instant;
 
 pub struct Recorder {
@@ -18,6 +18,10 @@ pub struct Recorder {
     onset_overflow: AtomicU64,
     onset_sample: Vec<AtomicU64>,
     onset_accent: Vec<AtomicU8>,
+    sched_set: AtomicU8,
+    sched_policy: AtomicI32,
+    sched_priority: AtomicI32,
+    sched_nice: AtomicI32,
     err_len: AtomicUsize,
     err_overflow: AtomicU64,
     err_mono_ns: Vec<AtomicU64>,
@@ -51,6 +55,10 @@ impl Recorder {
             onset_overflow: AtomicU64::new(0),
             onset_sample: atomics(onsets, || AtomicU64::new(0)),
             onset_accent: atomics(onsets, || AtomicU8::new(0)),
+            sched_set: AtomicU8::new(0),
+            sched_policy: AtomicI32::new(0),
+            sched_priority: AtomicI32::new(0),
+            sched_nice: AtomicI32::new(0),
             err_len: AtomicUsize::new(0),
             err_overflow: AtomicU64::new(0),
             err_mono_ns: atomics(errors, || AtomicU64::new(0)),
@@ -100,6 +108,14 @@ impl Recorder {
         }
     }
 
+    /// Audio thread, once: scheduling of the callback thread (`rt::thread_sched`).
+    pub fn set_sched(&self, (policy, priority, nice): (i32, i32, i32)) {
+        self.sched_policy.store(policy, Relaxed);
+        self.sched_priority.store(priority, Relaxed);
+        self.sched_nice.store(nice, Relaxed);
+        self.sched_set.store(1, Release);
+    }
+
     // Readers: call after the stream has been stopped and dropped.
 
     pub fn callbacks(&self) -> Vec<CallbackRecord> {
@@ -111,6 +127,16 @@ impl Recorder {
                 frames: self.cb_frames[i].load(Relaxed),
             })
             .collect()
+    }
+
+    pub fn sched(&self) -> Option<(i32, i32, i32)> {
+        (self.sched_set.load(Acquire) == 1).then(|| {
+            (
+                self.sched_policy.load(Relaxed),
+                self.sched_priority.load(Relaxed),
+                self.sched_nice.load(Relaxed),
+            )
+        })
     }
 
     pub fn callback_overflow(&self) -> u64 {

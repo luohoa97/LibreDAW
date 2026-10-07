@@ -12,6 +12,7 @@ use std::time::Duration;
 pub enum HostKind {
     Alsa,
     Jack,
+    PipeWire,
 }
 
 #[derive(Clone, Debug)]
@@ -51,6 +52,7 @@ pub fn run(p: &LiveParams) -> Result<Report, String> {
     let (id, host_name) = match p.host {
         HostKind::Alsa => (HostId::Alsa, "ALSA"),
         HostKind::Jack => (HostId::Jack, "JACK"),
+        HostKind::PipeWire => (HostId::PipeWire, "PipeWire"),
     };
     let host = cpal::host_from_id(id).map_err(|e| format!("{host_name} host unavailable: {e}"))?;
     let device = host

@@ -151,6 +151,30 @@ pub fn restore_fp_mode(previous: FpMode) {
     }
 }
 
+/// Scheduling of the calling thread: `(policy, priority, nice)`. Policy numbers
+/// are Linux's: 0 OTHER, 1 FIFO, 2 RR, 3 BATCH, 5 IDLE, 6 DEADLINE.
+pub fn thread_sched() -> (i32, i32, i32) {
+    #[repr(C)]
+    struct SchedParam {
+        priority: i32,
+    }
+    unsafe extern "C" {
+        fn sched_getscheduler(pid: i32) -> i32;
+        fn sched_getparam(pid: i32, param: *mut SchedParam) -> i32;
+        fn getpriority(which: i32, who: u32) -> i32;
+    }
+    let mut p = SchedParam { priority: -1 };
+    // SAFETY: plain libc queries about the calling thread (pid 0 / who 0);
+    // `p` is a valid out-pointer. No allocation.
+    unsafe {
+        let policy = sched_getscheduler(0);
+        if sched_getparam(0, &mut p) != 0 {
+            p.priority = -1;
+        }
+        (policy, p.priority, getpriority(0, 0))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

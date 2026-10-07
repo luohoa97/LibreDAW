@@ -82,6 +82,8 @@ pub struct Report {
     pub clock_ppm_frames: Option<f64>,
     /// The backend's own callback timestamps per CLOCK_MONOTONIC time.
     pub clock_ppm_stream: Option<f64>,
+    /// `(policy, priority, nice)` of the callback thread, read once inside it.
+    pub sched: Option<(i32, i32, i32)>,
 }
 
 /// Nearest-rank percentile of a sorted slice, `p` in 0..=1.
@@ -204,7 +206,20 @@ pub fn analyze(info: RunInfo, rec: &Recorder) -> Report {
         drift_nonzero: diffs.iter().filter(|&&d| d != 0).count(),
         clock_ppm_frames,
         clock_ppm_stream,
+        sched: rec.sched(),
         info,
+    }
+}
+
+pub fn sched_name(policy: i32) -> &'static str {
+    match policy {
+        0 => "OTHER",
+        1 => "FIFO",
+        2 => "RR",
+        3 => "BATCH",
+        5 => "IDLE",
+        6 => "DEADLINE",
+        _ => "?",
     }
 }
 
@@ -223,7 +238,7 @@ impl Report {
              err_other={} int_mean_us={:.1} int_p99_us={:.1} int_p999_us={:.1} int_max_us={:.1} \
              jit_mean_us={:.1} jit_p99_us={:.1} jit_p999_us={:.1} jit_max_us={:.1} \
              onsets={} onsets_expected={} grid_drift_max={} grid_drift_nonzero={} \
-             clock_ppm_frames={} clock_ppm_stream={} dropped_cb={} dropped_onsets={}",
+             clock_ppm_frames={} clock_ppm_stream={} dropped_cb={} dropped_onsets={} sched={}",
             i.host.to_lowercase(),
             i.requested_buffer,
             i.reported_buffer.map_or("na".into(), |b| b.to_string()),
@@ -254,7 +269,14 @@ impl Report {
             opt(self.clock_ppm_stream),
             self.callbacks_dropped,
             self.onsets_dropped,
+            self.sched_text(),
         )
+    }
+
+    fn sched_text(&self) -> String {
+        self.sched.map_or("na".into(), |(p, prio, nice)| {
+            format!("{}/prio{}/nice{}", sched_name(p), prio, nice)
+        })
     }
 
     pub fn summary(&self) -> String {
@@ -313,6 +335,7 @@ impl Report {
             "grid drift:      max {} samples over {} onsets ({} off-grid, {} expected)",
             self.drift_max, self.onsets, self.drift_nonzero, self.onsets_expected
         ));
+        line(format!("callback thread: {}", self.sched_text()));
         line(format!(
             "clock vs CLOCK_MONOTONIC (informational): frames {} ppm, backend timestamps {} ppm",
             opt(self.clock_ppm_frames),
