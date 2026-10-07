@@ -22,7 +22,11 @@ use crate::app::{App, UiCommand};
 use crate::channels;
 
 /// Actions of a channel row (`row.*`), registered for each row.
-pub const ROW_ACTIONS: &[&str] = &["sound", "rename", "remove", "choke"];
+pub const ROW_ACTIONS: &[&str] = &["sound", "rename", "remove", "choke", "drive", "duck"];
+
+/// Duck to Kick in the instrument menu: label and amount in percent.
+pub const DUCK_CHOICES: &[(&str, i32)] =
+    &[("Off", 0), ("Light", 40), ("Medium", 70), ("Full", 100)];
 /// Actions of the note menu in the piano roll (`roll.*`).
 pub const ROLL_ACTIONS: &[&str] = &["delete", "duplicate"];
 /// Actions of a mixer track (`strip.*`).
@@ -92,6 +96,26 @@ pub fn channel_menu() -> gio::Menu {
     let grouping = gio::Menu::new();
     grouping.append_submenu(Some("C_hoke Group"), &choke);
     menu.append_section(None, &grouping);
+    // Effects in one click (SPEC 24.2): Drive and Duck to Kick.
+    let drive = gio::Menu::new();
+    for (i, s) in control::fxpresets::presets(protocol::beats::BuiltinFxKind::Saturator)
+        .iter()
+        .enumerate()
+    {
+        let item = gio::MenuItem::new(Some(s.name), None);
+        item.set_action_and_target_value(Some("row.drive"), Some(&(i as i32).to_variant()));
+        drive.append_item(&item);
+    }
+    let duck = gio::Menu::new();
+    for (label, pct) in DUCK_CHOICES {
+        let item = gio::MenuItem::new(Some(label), None);
+        item.set_action_and_target_value(Some("row.duck"), Some(&pct.to_variant()));
+        duck.append_item(&item);
+    }
+    let effects = gio::Menu::new();
+    effects.append_submenu(Some("_Drive"), &drive);
+    effects.append_submenu(Some("Duck to _Kick"), &duck);
+    menu.append_section(None, &effects);
     let second = gio::Menu::new();
     second.append(Some("_Rename"), Some("row.rename"));
     second.append(Some("Remove _Instrument"), Some("row.remove"));
@@ -256,6 +280,27 @@ pub fn perform_row_action(app: &Rc<App>, id: ChannelId, action: &str, target: Op
                 }]);
             }
         }
+        "drive" => {
+            let styles = control::fxpresets::presets(protocol::beats::BuiltinFxKind::Saturator);
+            if let Some(s) = target.and_then(|i| styles.get(i as usize)) {
+                crate::fx_panel::run(app, |p, ids| {
+                    control::mcp::fxchain::drive(p, ids, id, s.name)
+                });
+            }
+        }
+        "duck" => {
+            if let Some(pct) = target {
+                let a = control::mcp::fxchain::DuckArgs {
+                    row: Some(id),
+                    track: None,
+                    amount: Some(pct.clamp(0, 100) as f64),
+                    kick: None,
+                };
+                crate::fx_panel::run(app, |p, ids| {
+                    control::mcp::fxchain::duck_to_kick(p, ids, &a)
+                });
+            }
+        }
         _ => {}
     }
 }
@@ -335,6 +380,10 @@ mod tests {
                 .count();
             if *n == "choke" {
                 assert_eq!(count, 17, "None and 16 groups");
+            } else if *n == "drive" {
+                assert_eq!(count, 5, "one per drive style");
+            } else if *n == "duck" {
+                assert_eq!(count, DUCK_CHOICES.len());
             } else {
                 assert_eq!(count, 1, "{n}");
             }
@@ -433,5 +482,40 @@ mod tests {
         let n = seen.borrow().len();
         perform_row_action(&a, snare, "no-such-action", None);
         assert_eq!(seen.borrow().len(), n);
+    }
+
+    #[test]
+    fn drive_and_duck_put_effects_on_the_rows_track() {
+        use protocol::beats::BuiltinFx;
+        use protocol::model::Insert;
+        let a = app();
+        let kick = channels::add(&a, NewChannel::Preset("Kick".into())).unwrap();
+        let bass = channels::add(&a, NewChannel::Preset("808".into())).unwrap();
+        let track_of = |c: ChannelId| {
+            let s = a.session.borrow();
+            let p = &s.document().project;
+            p.track(p.channel(c).unwrap().track).unwrap().clone()
+        };
+        // Drive: index 2 is Phonk 808.
+        perform_row_action(&a, bass, "drive", Some(2));
+        let t = track_of(bass);
+        let fx = match &t.inserts[..] {
+            [Insert::Builtin { fx, .. }] => fx.clone(),
+            other => panic!("{other:?}"),
+        };
+        assert!(matches!(fx, BuiltinFx::Saturator { .. }));
+        assert_eq!(
+            control::fxpresets::current(&fx).map(|p| p.name),
+            Some("Phonk 808")
+        );
+        // Another style reuses the same effect.
+        perform_row_action(&a, bass, "drive", Some(0));
+        assert_eq!(track_of(bass).inserts.len(), 1);
+        // Duck to Kick: a keyed compressor appears; Off removes it.
+        perform_row_action(&a, bass, "duck", Some(100));
+        assert_eq!(track_of(bass).inserts.len(), 2);
+        perform_row_action(&a, bass, "duck", Some(0));
+        assert_eq!(track_of(bass).inserts.len(), 1);
+        let _ = kick;
     }
 }

@@ -374,13 +374,15 @@ impl ChannelList {
                     Some(gtk::glib::VariantTy::INT32),
                     &(choke as i32).to_variant(),
                 )
+            } else if matches!(*name, "drive" | "duck") {
+                gio::SimpleAction::new(name, Some(gtk::glib::VariantTy::INT32))
             } else {
                 gio::SimpleAction::new(name, None)
             };
             let (a, n) = (self.app.clone(), name.to_string());
             action.connect_activate(move |act, v| {
                 let target = v.and_then(|v| v.get::<i32>());
-                if let Some(t) = target {
+                if let (Some(t), true) = (target, n == "choke") {
                     act.set_state(&t.to_variant());
                 }
                 menus::perform_row_action(&a, id, &n, target);

@@ -1105,6 +1105,8 @@ dependencies = [
  "dbus",
  "libc",
  "libredaw-audiofile",
+ "libredaw-control",
+ "libredaw-doc",
  "libredaw-plugin-host",
  "libredaw-protocol",
  "rtrb",

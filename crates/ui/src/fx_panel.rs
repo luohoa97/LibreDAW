@@ -11,6 +11,8 @@ use std::rc::Rc;
 use adw::prelude::*;
 
 use control::fxpresets;
+use control::mcp::compose::BuildResult;
+use control::mcp::ids::IdGen;
 use protocol::beats::{
     BuiltinFx, BuiltinFxKind, CompressorParam, DelayParam, ReverbParam, SaturatorParam,
 };
@@ -233,6 +235,28 @@ pub fn build(app: &Rc<App>, track: TrackId, inst: InstanceId) -> Option<gtk::Wid
         });
     }
     Some(col.upcast())
+}
+
+/// Builds a batch from the current project with `build` and applies it as
+/// one undo step. The window and the tools build edits with the same
+/// functions (`control::mcp::fxchain`). Errors appear as a toast.
+pub fn run(
+    app: &Rc<App>,
+    build: impl FnOnce(&protocol::model::Project, &mut IdGen) -> BuildResult,
+) -> bool {
+    let built = {
+        let s = app.session.borrow();
+        let d = s.document();
+        build(&d.project, &mut IdGen::new(&d.project, Some(d.next_id)))
+    };
+    match built {
+        Ok(b) if b.edits.is_empty() => true,
+        Ok(b) => app.edit(b.edits).is_some(),
+        Err(m) => {
+            app.toast(&m);
+            false
+        }
+    }
 }
 
 /// Opens the panel of an effect from `anchor`.

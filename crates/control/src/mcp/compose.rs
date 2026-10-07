@@ -44,7 +44,7 @@ pub struct Built {
 }
 
 impl Built {
-    fn push(&mut self, label: impl Into<String>, e: Edit) {
+    pub(crate) fn push(&mut self, label: impl Into<String>, e: Edit) {
         self.labels.push(label.into());
         self.edits.push(e);
     }
