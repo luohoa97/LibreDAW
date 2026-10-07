@@ -945,7 +945,10 @@ fn fx_add_with_a_sound_duck_to_kick_and_loudness_through_the_tools() {
         Some("Phonk 808")
     );
     // A wrong name lists the right ones.
-    let e = c.err("fx_add", json!({"track": 8, "fx": "saturator", "preset": "x"}));
+    let e = c.err(
+        "fx_add",
+        json!({"track": 8, "fx": "saturator", "preset": "x"}),
+    );
     assert!(e.contains("Hard Clip"), "{e}");
 
     // Duck to Kick: the hat row dips to the kick row.
