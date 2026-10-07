@@ -1,15 +1,15 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
-# Connecting AI agents to LibreDAW
+# Connecting AI agents to Oto
 
-`libredaw-mcp` is a small program that an AI client starts. LibreDAW's
-control socket (`$XDG_RUNTIME_DIR/libredaw/control.sock`) speaks MCP itself,
-so `libredaw-mcp` only relays bytes between the client's stdin/stdout and
-that socket (and starts LibreDAW if it is not running, waiting up to 30 s).
+`oto-mcp` is a small program that an AI client starts. Oto's
+control socket (`$XDG_RUNTIME_DIR/oto/control.sock`) speaks MCP itself,
+so `oto-mcp` only relays bytes between the client's stdin/stdout and
+that socket (and starts Oto if it is not running, waiting up to 30 s).
 Any MCP client that can launch a stdio server works unchanged. There is no
 network listener and no HTTP transport. Agent control is off until you
-switch it on in LibreDAW for the session; risky actions (loading a plugin
+switch it on in Oto for the session; risky actions (loading a plugin
 for the first time, opening a project over unsaved work, and so on) wait for
-your click in the LibreDAW window. If you connect before enabling it, the
+your click in the Oto window. If you connect before enabling it, the
 client's connection waits about 25 s for you to click the banner and then
 fails with a message saying what to enable.
 
@@ -25,91 +25,91 @@ fails with a message saying what to enable.
   `export_wav`, transport, history, settings, plugins). Every editing tool
   returns the new revision and a compact diff; each call is one undo group.
   The grammar of both text forms is in the tool descriptions.
-- Resources: `libredaw://project`, `libredaw://pattern/<id>`,
-  `libredaw://mixer`, `libredaw://song`, `libredaw://suggestions_pending`.
+- Resources: `oto://project`, `oto://pattern/<id>`,
+  `oto://mixer`, `oto://song`, `oto://suggestions_pending`.
   Subscribe and you are told when the user changes the project.
 - Prompts: `make_beat` (genre, tempo), `add_hihat_roll`, `fix_my_mix`.
 - Progress notifications while an export or analysis runs; logging.
 - Suggestions: the Suggest button in the Pattern and Song views asks the
   connected agent. If the client supports MCP sampling the DAW asks its
   model directly; otherwise the request appears in
-  `libredaw://suggestions_pending` and the agent answers with
+  `oto://suggestions_pending` and the agent answers with
   `suggestion_submit`. Either way the user sees a preview and accepts or
-  rejects it; nothing changes before that. LibreDAW has no model, no API
+  rejects it; nothing changes before that. Oto has no model, no API
   key, and no network client of its own.
 - Names and tags from the project are untrusted: tools return them cleaned,
   capped, and only in quoted or structured fields.
 
 ## Flatpak
 
-Inside the LibreDAW Flatpak the program is started as
+Inside the Oto Flatpak the program is started as
 
 ```sh
-flatpak run --command=libredaw-mcp io.github.luohoa97.LibreDAW
+flatpak run --command=oto-mcp io.github.luohoa97.Oto
 ```
 
-and `libredaw-mcp setup` run inside the sandbox cannot see or run the AI
+and `oto-mcp setup` run inside the sandbox cannot see or run the AI
 clients on your host. It prints the exact commands to run on the host
 instead and changes nothing, for example:
 
 ```sh
-claude mcp add --scope user libredaw -- flatpak run --command=libredaw-mcp io.github.luohoa97.LibreDAW
-codex mcp add libredaw -- flatpak run --command=libredaw-mcp io.github.luohoa97.LibreDAW
+claude mcp add --scope user oto -- flatpak run --command=oto-mcp io.github.luohoa97.Oto
+codex mcp add oto -- flatpak run --command=oto-mcp io.github.luohoa97.Oto
 ```
 
-(`flatpak run --command=libredaw-mcp io.github.luohoa97.LibreDAW setup`
+(`flatpak run --command=oto-mcp io.github.luohoa97.Oto setup`
 prints them for every client.) The control socket lives in
-`$XDG_RUNTIME_DIR/app/io.github.luohoa97.LibreDAW/libredaw/`, the one
+`$XDG_RUNTIME_DIR/app/io.github.luohoa97.Oto/oto/`, the one
 runtime directory the Flatpak shares between separate `flatpak run`
 invocations, so the relay finds the running DAW.
 
 ## Easiest: one command for every client found
 
 ```sh
-libredaw-mcp setup            # shows each change, asks before applying
-libredaw-mcp setup --yes      # apply without asking
-libredaw-mcp setup --remove   # undo
-libredaw-mcp setup --only cursor
+oto-mcp setup            # shows each change, asks before applying
+oto-mcp setup --yes      # apply without asking
+oto-mcp setup --remove   # undo
+oto-mcp setup --only cursor
 ```
 
-It uses the absolute path of the `libredaw-mcp` you ran, prefers a client's
+It uses the absolute path of the `oto-mcp` you ran, prefers a client's
 own CLI where there is one, and otherwise edits the config file, keeping
-everything else and leaving a `*.libredaw-backup` copy. A config file that
+everything else and leaving a `*.oto-backup` copy. A config file that
 contains comments (Zed's `settings.json` often does) is not touched; the
 command prints what to add by hand.
 
 ## By hand, one line each
 
-Put the real path in place of `/path/to/libredaw-mcp` (`command -v libredaw-mcp`).
+Put the real path in place of `/path/to/oto-mcp` (`command -v oto-mcp`).
 
-For the Flatpak, replace `/path/to/libredaw-mcp` by
-`flatpak run --command=libredaw-mcp io.github.luohoa97.LibreDAW` (as
+For the Flatpak, replace `/path/to/oto-mcp` by
+`flatpak run --command=oto-mcp io.github.luohoa97.Oto` (as
 `command` plus `args` in JSON files).
 
 | Client | One-line setup |
 | --- | --- |
-| Claude Code | `claude mcp add --scope user libredaw -- /path/to/libredaw-mcp` |
-| Claude Code (plugin) | `claude --plugin-dir packaging/agents/claude-code-plugin` (needs `libredaw-mcp` on `PATH`) |
-| Codex | `codex mcp add libredaw -- /path/to/libredaw-mcp` |
-| Cursor | add `{"mcpServers":{"libredaw":{"command":"/path/to/libredaw-mcp","args":[]}}}` to `~/.cursor/mcp.json` |
-| VS Code | `code --add-mcp '{"name":"libredaw","command":"/path/to/libredaw-mcp","args":[]}'` |
-| Gemini CLI | `gemini mcp add -s user libredaw /path/to/libredaw-mcp` |
-| Zed | add `"context_servers": {"libredaw": {"command": "/path/to/libredaw-mcp", "args": [], "env": {}}}` to `~/.config/zed/settings.json` |
+| Claude Code | `claude mcp add --scope user oto -- /path/to/oto-mcp` |
+| Claude Code (plugin) | `claude --plugin-dir packaging/agents/claude-code-plugin` (needs `oto-mcp` on `PATH`) |
+| Codex | `codex mcp add oto -- /path/to/oto-mcp` |
+| Cursor | add `{"mcpServers":{"oto":{"command":"/path/to/oto-mcp","args":[]}}}` to `~/.cursor/mcp.json` |
+| VS Code | `code --add-mcp '{"name":"oto","command":"/path/to/oto-mcp","args":[]}'` |
+| Gemini CLI | `gemini mcp add -s user oto /path/to/oto-mcp` |
+| Zed | add `"context_servers": {"oto": {"command": "/path/to/oto-mcp", "args": [], "env": {}}}` to `~/.config/zed/settings.json` |
 | Claude Desktop | build the bundle below and open the `.mcpb` file |
 
 ## Files here
 
 - `claude-code-plugin/`: a Claude Code plugin (`.claude-plugin/plugin.json`
-  and `.mcp.json`). The server entry runs `libredaw-mcp` from `PATH`.
+  and `.mcp.json`). The server entry runs `oto-mcp` from `PATH`.
 - `claude-desktop/manifest.json`: MCP bundle (MCPB) manifest for Claude
   Desktop. A bundle is a zip with this `manifest.json` at the top and the
-  binary at `server/libredaw-mcp`:
+  binary at `server/oto-mcp`:
 
   ```sh
   mkdir -p build/bundle/server
   cp packaging/agents/claude-desktop/manifest.json build/bundle/
-  cp target/release/libredaw-mcp build/bundle/server/
-  (cd build/bundle && zip -r ../libredaw.mcpb .)
+  cp target/release/oto-mcp build/bundle/server/
+  (cd build/bundle && zip -r ../oto.mcpb .)
   ```
 
 ## Formats checked (2026-10-07)

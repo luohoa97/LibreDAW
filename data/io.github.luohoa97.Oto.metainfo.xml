@@ -1,16 +1,16 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 <component type="desktop-application">
-  <id>io.github.luohoa97.LibreDAW</id>
+  <id>io.github.luohoa97.Oto</id>
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>GPL-3.0-or-later</project_license>
-  <name>LibreDAW</name>
+  <name>Oto</name>
   <summary>Make beats and music on your desktop</summary>
   <developer id="io.github.luohoa97">
-    <name>The LibreDAW developers</name>
+    <name>The Oto developers</name>
   </developer>
   <description>
-    <p>LibreDAW is a free digital audio workstation for Linux that you can pick up and use right away. Start from a beat template, click steps into a drum pattern, play notes, arrange the song and mix it.</p>
+    <p>Oto is a free digital audio workstation for Linux that you can pick up and use right away. Start from a beat template, click steps into a drum pattern, play notes, arrange the song and mix it.</p>
     <p>It is built with GTK 4 and libadwaita, so it looks and behaves like the rest of your desktop.</p>
     <ul>
       <li>Home page with templates for Phonk, Trap, Boom Bap, Lo-fi and House beats</li>
@@ -21,13 +21,13 @@
       <li>AI agents can work inside your project through MCP, visibly, and only with your approval</li>
     </ul>
   </description>
-  <launchable type="desktop-id">io.github.luohoa97.LibreDAW.desktop</launchable>
+  <launchable type="desktop-id">io.github.luohoa97.Oto.desktop</launchable>
   <url type="homepage">https://github.com/luohoa97/LibreDAW</url>
   <url type="bugtracker">https://github.com/luohoa97/LibreDAW/issues</url>
   <provides>
-    <binary>libredaw</binary>
-    <binary>libredaw-mcp</binary>
-    <mediatype>application/x-libredaw-project</mediatype>
+    <binary>oto</binary>
+    <binary>oto-mcp</binary>
+    <mediatype>application/x-oto-project</mediatype>
   </provides>
   <supports>
     <control>keyboard</control>
@@ -52,15 +52,15 @@
   <screenshots>
     <screenshot type="default">
       <caption>Start a beat from the Home page</caption>
-      <image type="source">https://raw.githubusercontent.com/luohoa97/LibreDAW/main/docs/screenshots/home.png</image>
+      <image type="source">https://raw.githubusercontent.com/luohoa97/Oto/main/docs/screenshots/home.png</image>
     </screenshot>
     <screenshot>
       <caption>Click steps into a pattern</caption>
-      <image type="source">https://raw.githubusercontent.com/luohoa97/LibreDAW/main/docs/screenshots/pattern.png</image>
+      <image type="source">https://raw.githubusercontent.com/luohoa97/Oto/main/docs/screenshots/pattern.png</image>
     </screenshot>
     <screenshot>
       <caption>Mix your song</caption>
-      <image type="source">https://raw.githubusercontent.com/luohoa97/LibreDAW/main/docs/screenshots/mixer.png</image>
+      <image type="source">https://raw.githubusercontent.com/luohoa97/Oto/main/docs/screenshots/mixer.png</image>
     </screenshot>
   </screenshots>
   <releases>

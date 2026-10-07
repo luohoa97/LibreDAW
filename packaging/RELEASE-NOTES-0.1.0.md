@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
-# LibreDAW 0.1.0
+# Oto 0.1.0
 
-The first release of LibreDAW, a free (GPL-3.0-or-later) beat maker and
+The first release of Oto, a free (GPL-3.0-or-later) beat maker and
 digital audio workstation for Linux, built with GTK 4 and libadwaita.
 
 ## Highlights
@@ -22,9 +22,9 @@ digital audio workstation for Linux, built with GTK 4 and libadwaita.
 - **Plugins.** CLAP plugin hosting.
 - **Agents.** AI agents can work inside your project through MCP, with
   visible activity (an orange edge glow and an agent pill), a Stop button and
-  approvals that are always a click in the DAW window. LibreDAW contains no
+  approvals that are always a click in the DAW window. Oto contains no
   model, no API key and no network client. Agent setup:
-  `flatpak run --command=libredaw-mcp io.github.luohoa97.LibreDAW setup`.
+  `flatpak run --command=oto-mcp io.github.luohoa97.Oto setup`.
 - **Flatpak.** Ships as a Flatpak on the GNOME 50 runtime.
 
 ## Known limits
@@ -33,15 +33,15 @@ digital audio workstation for Linux, built with GTK 4 and libadwaita.
   (`org.freedesktop.LinuxAudio.Plugins.*`). Plugins in `/usr/lib/clap` on the
   host are not visible inside the sandbox.
 - Scripting is disabled in the Flatpak build.
-- `.ldaw` project bundles are directories, so GNOME Files shows them as
-  folders. Open them from Home or with `libredaw /path/MyBeat.ldaw`.
+- `.oto` project bundles are directories, so GNOME Files shows them as
+  folders. Open them from Home or with `oto /path/MyBeat.oto`.
 - Sound browser drag and drop polish and demo projects beyond the templates
   may come in 0.2.
 - Not on Flathub yet.
 
 ## Install
 
-    flatpak install --user LibreDAW-0.1.0.flatpak
-    flatpak run io.github.luohoa97.LibreDAW
+    flatpak install --user Oto-0.1.0.flatpak
+    flatpak run io.github.luohoa97.Oto
 
-Checksum: see `LibreDAW-0.1.0.flatpak.sha256`.
+Checksum: see `Oto-0.1.0.flatpak.sha256`.

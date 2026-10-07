@@ -1,5 +1,5 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
-# LibreDAW Specification
+# Oto (LibreDAW) Specification
 
 Status: APPROVED (draft 2, post adversarial review), 2026-10-07.
 Owner decisions are recorded at the end.
@@ -1504,6 +1504,20 @@ Status: approved scope, not yet adversarially reviewed.
   already applied stays and is undoable as usual (author-scoped history).
 - The Agent page in the inspector lists the activity log: time, activity
   text, and each undo group the agent made, with an Undo button per group.
+- Amendment 18 (owner): the glow is soft and clean, and it marks the
+  work itself. The instrument row, clip, or mixer track the agent is
+  changing glows (soft orange outer glow, no hard outline), tied to the
+  change tree: every agent activity is a group of commits in the tree;
+  the glowing objects are exactly those touched by the open activity, and
+  the History page shows that group glowing as "in progress".
+- Hard stop with one key: Escape stops the agent whenever an agent is
+  working (a focused text field or open popover takes the first Escape;
+  the next one stops the agent). The stop is immediate: the control
+  server rejects the agent's in-flight and further requests, disconnects
+  it, and keeps agents off for the rest of the run; the glow disappears
+  at once. A toast says "Agent stopped" with an "Undo Its Changes"
+  button, which restores the commit before the open activity as one
+  undoable step. The pill's Stop button does the same.
 
 ### 18.2 Activity reporting
 
@@ -1568,6 +1582,25 @@ Tools are designed for few round trips and small payloads:
 - Suggestions arrive as previews (ghost notes, highlighted rows) the user
   accepts or rejects; nothing changes the project until accepted.
 - LibreDAW itself contains no model, no API key, and no network client.
+
+### 18.6 Project-level actions by agents (Amendment 21)
+
+- An agent can choose which project to make and work in the user's
+  window. It can:
+  - list the Home projects (saved and unsaved)
+  - create a new project from a template, with a name
+  - open a project from the projects folder
+  - close the current project
+- The current project is always saved first (Amendment 10's close
+  behaviour and autosave), so nothing is lost. These actions need no
+  approval click. Opening a path outside the projects folder stays
+  PRIVILEGED (16).
+- These are **global actions**. While one runs, the whole window border
+  glows (18.1 window glow) instead of a single object. Afterwards a toast
+  names the action ("Claude opened Night Drive") and offers **Go Back**,
+  which reopens the previous project. Escape stops the agent as in 18.1.
+- The project switch is recorded in the activity list. Each project
+  keeps its own change tree.
 
 ## 19. Home, onboarding, and release (Amendment 14)
 
@@ -1743,6 +1776,220 @@ mixer; none adds a parallel concept.
 - The step and swing semantics of 17.2 apply per content.
 ---
 
+## 21. Voice: recording, hum to notes, and lyrics (Amendment 20)
+
+Owner direction: "hum a beat ... it turns into MIDI and Claude does the
+arranging ... through MCP", "it needs to support lyrics: record lyrics
+into the project, or import audio, or ask in natural language to add
+lyrics, and Claude goes through the flow with you: recording it, putting
+it in, putting it with the melody". Goal: a highly integrated flow from
+an idea in your head to audio. Everything in this section extends rows,
+clips and the mixer (20.4). It adds no parallel concept.
+
+### 21.1 Audio rows and audio clips
+
+- An instrument row can be an **Audio** row. Its clips hold audio
+  instead of notes. Clip content gains a second kind, `Audio { sample:
+  hash, gain_db, fade_in, fade_out }`, stored in the content-addressed
+  sample store (7.4). Move, resize, split, duplicate (linked), mute and
+  undo work exactly as for note clips. Trimming a start uses the clip
+  offset.
+- **Import:** drop an audio file on the timeline or on a row, or use
+  Import Audio. WAV, FLAC, Ogg Vorbis and MP3 are supported. The file is
+  decoded off the GTK thread and resampled to the project rate once.
+- **Takes:** each recording pass over the same range adds a take to the
+  clip. The clip plays one chosen take. The other takes stay in the
+  project until the user deletes them. Full comping (splicing parts of
+  several takes) is post-0.2.
+
+### 21.2 Recording
+
+- The engine opens one PipeWire input stream next to the output stream.
+  The input callback copies frames into a preallocated SPSC ring. A disk
+  writer thread drains that ring into a temporary WAV file. The audio
+  thread rules still apply: no allocation, no locks, no syscalls.
+- **Flow:** select a row, then press Record (R). There is a one-bar
+  count-in, which can be turned off. Recording runs until Stop. A new
+  audio clip appears on the row while recording, with a live waveform.
+- **Latency compensation:** the recorded audio is shifted by the input
+  and output latency that PipeWire reports. An optional loopback
+  calibration in Preferences measures the real offset. Target: recorded
+  clips land within 1 ms of the click after calibration. This is a
+  measured acceptance test.
+- **Monitoring:** off by default; a per-row toggle turns it on.
+- **Privacy:**
+  - The microphone opens only after a click or key press by the user.
+    Each recording needs its own press.
+  - An agent can prepare a recording: arm a row, set the range, show the
+    lyrics. Only the human starts it. A PRIVILEGED approval is not
+    enough here; the human presses Record.
+  - GNOME's microphone indicator shows while capture runs.
+  - Recordings never leave the machine.
+- **Flatpak:** microphone access goes through the PipeWire socket. The
+  manifest documents this permission and the reason for it.
+
+### 21.3 Hum to notes
+
+- **Model:** Spotify's Basic Pitch (Apache-2.0), using the upstream ONNX
+  model `saved_models/icassp_2022/nmp.onnx`, SHA-256
+  `2c3c1d144bfa61ad236e92e169c13535c880469a12a047d4e73451f2c059a0ec`.
+  It is shipped with the app and listed in ASSETS.md and THIRD_PARTY.md.
+- **Inference:** runs locally on the CPU, in pure Rust, with `tract-onnx`
+  (MIT/Apache-2.0), on a worker thread. There is no Python and no network
+  access. The note extraction step of Basic Pitch (onsets, frames, note
+  events) is ported to Rust. A golden test checks it against the
+  upstream output on reference clips.
+- **Flow:** select a row (or let Oto pick a lead synth), then press Hum.
+  Same count-in and privacy rules as 21.2. When Stop is pressed, Oto
+  transcribes the recording into a new clip of notes on that row. Notes
+  are quantized to the grid, with a "Keep my timing" option; the key is
+  detected and suggested. The raw hum is kept as a muted audio take so
+  the user can compare.
+- The same transcription works on any audio clip ("Turn Into Notes").
+- **Targets:**
+  - 30 s of hum transcribes in under 3 s on the reference machine.
+  - On a monophonic reference set of hummed melodies, at least 85% of
+    notes are correct (onset within 50 ms, right pitch).
+  - Both are measured before release.
+
+### 21.4 Lyrics
+
+- **Data:** a row can have a **Lyrics** lane. Each lyric line has start,
+  end and text. Syllables can be linked to the notes of a melody clip on
+  any row ("putting it with the melody"). A linked syllable moves with
+  its note.
+- **Teleprompter:** while recording, the current and next lines show
+  above the timeline, highlighted with the playhead.
+- **Writing:** the user types lyrics into the lane, or pastes them. An
+  agent writes them through MCP and aligns them to a melody. Splitting
+  words into syllables is done by the agent or by the user. Oto ships no
+  language model.
+- **Vocal recording:** a vocal take is an audio clip on an Audio row,
+  recorded with the lyrics on screen. Pitch correction and time
+  alignment of vocals are post-0.2; nudge and split work from day one.
+
+### 21.5 MCP tools for the voice flow
+
+These follow the frontend rule (Amendment 19): each tool calls the same
+bridge operation as the matching UI action.
+
+| Tool | Does |
+|---|---|
+| `audio_import` | Imports a file from a folder the user chose, onto a row. |
+| `record_prepare` | Arms a row, sets the range and count-in, shows a lyric section, and asks the user to press Record. Returns when the take is done or declined. |
+| `hum_prepare` | Same as `record_prepare`, but the result is transcribed into notes. |
+| `transcribe` | Turns an audio clip into notes on a row. |
+| `takes_list`, `take_choose` | List the takes of a clip, and choose which take plays. |
+| `lyrics_get`, `lyrics_set` | Read and write lyric lines. |
+| `lyrics_align` | Links syllables to note ids of a melody clip. |
+
+- **The flow an agent runs with the user:**
+  1. User: "add lyrics about X". The agent writes the lyrics and shows
+     them in the lane, as a suggestion if Suggest is on.
+  2. The agent aligns the lyrics to the melody.
+  3. The agent calls `record_prepare` for verse 1. The user records.
+  4. The agent picks or asks for the best take, then arranges.
+- The glow (18.1) marks the row being recorded or transcribed. The pill
+  reads, for example, "Waiting for you to record verse 1".
+
+### 21.6 Format version 4
+
+- Clip content gains the `Audio` kind and takes, and rows gain an
+  optional lyrics lane.
+- v3 files load unchanged; v4 adds fields only.
+
+### 21.7 Milestone and risks
+
+- **Milestone "Voice"** starts after the first testable build of the
+  timeline. Teammates:
+  - engine: input stream, recording, audio clip playback, latency
+  - doc: model, takes, lyrics, format v4
+  - a new `transcribe` crate: tract, Basic Pitch, note extraction
+  - ui: Record, Hum, takes, lyrics lane, teleprompter
+  - control/mcp: the 21.5 tools
+- **Risks:**
+  - `tract-onnx` adds many crates and build time. It needs a
+    justification row and a cargo-deny check.
+  - Basic Pitch accuracy on humming is not proven; the 21.3 targets
+    decide.
+  - Real latency varies by device; the calibration covers it.
+  - Recording adds disk I/O, which stays off the audio thread.
+
+---
+
+## 22. Provenance export (Amendment 22)
+
+Owner direction: one click gives a log of which parts the artist made and
+which an AI made. Platforms and labels are tightening rules on AI music,
+and artists want evidence. The change tree (15.11) already records who
+made every edit, so this section turns that record into a report.
+
+### 22.1 What is recorded
+
+- Every commit already has an author: the human (the person at the
+  keyboard), a script, or a named agent (17.1).
+  - The bridge sets the author from the transport and the connection.
+  - A client cannot claim to be the human, and no MCP tool can write or
+    edit provenance.
+- Each object in the final project traces back through history to the
+  commits that created and changed it. Objects are notes, clips, audio
+  takes, lyric lines, mixer and plugin settings.
+- The report uses these factual origin labels:
+  - **Entered by you:** notes, steps or clips you placed in the UI or
+    played from MIDI.
+  - **Recorded by you:** audio takes and hums from your microphone
+    (21.2).
+  - **Transcribed from your recording:** notes made from your hum or
+    audio by the local Basic Pitch model (21.3). The report names the
+    source take and the tool.
+  - **Imported by you:** audio files you added; the file name and hash
+    are listed.
+  - **From a sound pack:** samples and presets, with the pack name and
+    license (CC0 for the built-in packs).
+  - **Made by agent `<name>`:** edits made through MCP or Suggest.
+    Accepted suggestions say so.
+  - **Made by agent, then changed by you:** the report lists both, and
+    which properties you changed.
+  - **Made by script `<name>`.**
+- Agent activity text (18.2) is kept with agent commits as context. Oto
+  never sees the prompts that the user typed into the agent's client.
+
+### 22.2 The report
+
+- **File > Export Provenance** writes, next to the project, one
+  human-readable HTML page and one machine-readable JSON file (format
+  versioned).
+- **Contents:**
+  - A summary: the share of notes, clip time and audio time by origin.
+  - A per-row breakdown, and a timeline strip colored by origin.
+  - The full list of commits, with author, time and description.
+  - The project's HEAD commit hash and the hash of every listed commit.
+- **The same view in the app:** Provenance in the Versions panel colors
+  the timeline by origin.
+- **Integrity, stated honestly in the report:**
+  - Commit ids are content hashes, so the report can be checked against
+    the project bundle with `oto --verify-provenance`.
+  - This is a record kept on the user's own machine. It is not
+    tamper-proof against someone who rewrites the files, and it is not
+    third-party attestation.
+  - Optional signing (for example minisign) is post-0.2.
+
+### 22.3 Wording rule (binding)
+
+- The app, report, store listing and any marketing describe facts only:
+  who made which part, and with which tool.
+- They never say a work is "human made", "copyrightable", or "eligible"
+  for anything. They never tell the user that detailed prompting makes a
+  work theirs.
+- The U.S. Copyright Office's January 2025 report (Copyright and AI,
+  Part 2) says prompts alone, however detailed, do not give enough
+  control for authorship. It says human-authored material that is
+  perceptible in the output, and human selection, arrangement or
+  modification, can be protected.
+- Any legal claim needs review by a lawyer first.
+
+---
+
 ## Owner decisions (approved 2026-10-07)
 
 1. Approved: the futex syscall exception for sandboxed plugins (risk 3, 9.4).
@@ -1754,6 +2001,49 @@ mixer; none adds a parallel concept.
 ---
 
 ## Changelog
+
+### Amendment 22 (2026-10-07, owner)
+
+- Added section 22: one-click provenance export. It is a factual
+  who-made-what report from the change tree, with HTML and JSON output,
+  content-hash verification, and a binding rule that wording states
+  facts only and makes no legal claims.
+
+### Amendment 21 (2026-10-07, owner)
+
+- Added 18.6: an agent can list, create, open and close projects in the
+  user's window. The current project is saved first, so no approval is
+  needed except for paths outside the projects folder. These global
+  actions make the whole window glow and end with a Go Back toast.
+
+### Amendment 20 (2026-10-07, owner)
+
+- Added section 21: Voice. It covers audio rows and clips, import,
+  recording with takes and latency compensation, and hum to notes
+  through Basic Pitch with local inference in Rust (tract-onnx, no
+  Python). It also covers lyrics lanes linked to melody notes, a
+  teleprompter, MCP tools for the voice flow, and format v4.
+- Privacy rule: only the human starts the microphone, for every take.
+
+### Amendment 19 (2026-10-07, owner)
+
+- **Name:** the user-facing name is **Oto**, and the app ID is
+  `io.github.luohoa97.Oto`.
+  - The binaries are `oto` and `oto-mcp`, the MCP server name is `oto`,
+    and the project extension is `.oto`. `.ldaw` still opens.
+  - Internal crate names (`libredaw-*`) and the GitHub repository name
+    are unchanged.
+- **Frontend rule:** the MCP is a first-class frontend. It is the main
+  way an agent uses Oto, and it uses the same bridge as the UI. Every
+  user action is a named bridge operation that both the UI and MCP call;
+  no action lives only in a widget. `crates/control/PARITY.md` maps each
+  user action to its MCP tool, and gaps must be listed.
+
+### Amendment 18 (2026-10-07, owner)
+
+Agent glow sits on the objects being changed and is tied to the change
+tree (one commit group per activity); Escape is a hard stop that cancels
+the agent and removes the glow, with "Undo Its Changes" (18.1).
 
 ### Amendment 17 (2026-10-07, owner)
 
