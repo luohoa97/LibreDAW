@@ -952,7 +952,7 @@ fn kit_get_asks_for_one_kit_and_sound_search_filters_by_kit() {
     c.ok("kit_get", json!({"id": "fl:kit:abc"}));
     let reqs = rig.ui.requests();
     assert!(reqs.iter().any(|q| matches!(&q.body,
-        RequestBody::SoundSearch { tags, .. } if kit.as_deref() == Some("909"))));
+        RequestBody::SoundSearch { kit, .. } if kit.as_deref() == Some("909"))));
     assert!(reqs.iter().any(|q| matches!(&q.body,
         RequestBody::SoundSearch { kit, .. } if kit.as_deref() == Some("fl:kit:abc"))));
 }
