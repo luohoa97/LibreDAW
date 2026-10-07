@@ -94,22 +94,52 @@ pub fn apply(doc: &Document, edit: &Edit) -> Result<(Document, Vec<u32>), EditEr
 /// Applies edits in order as one atomic group: one new document, one
 /// revision step. If any edit fails, nothing is applied.
 pub fn apply_batch(doc: &Document, edits: &[Edit]) -> Result<(Document, Vec<u32>), EditError> {
+    apply_batch_indexed(doc, edits).map_err(|(_, e)| e)
+}
+
+/// Like `apply_batch`; on failure also returns the position of the edit
+/// that failed (for the control API, 17.1). A failure that only shows in
+/// the final validation is traced to the first edit after which the
+/// project is invalid.
+pub fn apply_batch_indexed(
+    doc: &Document,
+    edits: &[Edit],
+) -> Result<(Document, Vec<u32>), (Option<u32>, EditError)> {
     let mut w = Work {
         p: (*doc.project).clone(),
         next_id: doc.next_id,
         created: Vec::new(),
     };
-    for e in edits {
-        apply_one(&mut w, e)?;
+    for (i, e) in edits.iter().enumerate() {
+        apply_one(&mut w, e).map_err(|err| (Some(i as u32), err))?;
     }
     sort_canonical(&mut w.p);
-    validate(&w.p)?;
+    if let Err(err) = validate(&w.p) {
+        return Err((first_invalid_edit(doc, edits), err.into()));
+    }
     let out = Document {
         project: Arc::new(w.p),
         next_id: w.next_id,
         revision: doc.revision + 1,
     };
     Ok((out, w.created))
+}
+
+/// Slow path for a failed batch: replays it validating after each edit.
+fn first_invalid_edit(doc: &Document, edits: &[Edit]) -> Option<u32> {
+    let mut w = Work {
+        p: (*doc.project).clone(),
+        next_id: doc.next_id,
+        created: Vec::new(),
+    };
+    for (i, e) in edits.iter().enumerate() {
+        apply_one(&mut w, e).ok()?;
+        sort_canonical(&mut w.p);
+        if validate(&w.p).is_err() {
+            return Some(i as u32);
+        }
+    }
+    None
 }
 
 /// Records captured plugin state: the new blob name and its bytes, and

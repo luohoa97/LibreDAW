@@ -1660,3 +1660,25 @@ fn max_size_batch_applies() {
     assert_eq!(created.len(), MAX_EDITS_PER_REQUEST);
     assert_eq!(d2.project.note_count(), MAX_EDITS_PER_REQUEST);
 }
+
+#[test]
+fn failing_edit_index_is_reported() {
+    let (d, c, _) = base();
+    let edits = [
+        Edit::SetTempo { bpm: 90.0 },
+        Edit::RenameChannel {
+            channel: c,
+            name: "ok".into(),
+        },
+        Edit::SetTempo { bpm: 5000.0 },
+    ];
+    let (idx, _) = apply_batch_indexed(&d, &edits).unwrap_err();
+    assert_eq!(idx, Some(2));
+    let bad = [
+        Edit::SetTempo { bpm: 90.0 },
+        Edit::RemoveChannel {
+            channel: ChannelId(4242),
+        },
+    ];
+    assert_eq!(apply_batch_indexed(&d, &bad).unwrap_err().0, Some(1));
+}
