@@ -1,11 +1,16 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! The left utility pane: the sound browser (docs/ui-design.md 3.8). It
-//! lists the built-in sounds with a search box and role filters. Activating
-//! a row adds the sound as a new channel; the button on the row puts it on
-//! the selected channel instead. Auditioning without changing the project
-//! arrives with the preview slot (SPEC 17.2).
+//! lists the built-in sounds, then the kits of installed sound packs and the
+//! folders the user added, with a search box and role filters.
+//!
+//! Activating a built-in row, or a piece of a kit, adds it as a new channel;
+//! the button on a built-in row puts it on the selected channel instead. A
+//! kit's "Add Kit" button adds all of its pieces. Pack sounds are copied
+//! into the project (after the pack index hash is checked); sounds from a
+//! folder the user added stay where they are (`local_only`, 17.2).
 
 use std::cell::RefCell;
+use std::path::PathBuf;
 use std::rc::Rc;
 
 use adw::prelude::*;
@@ -14,6 +19,8 @@ use protocol::model::Instrument;
 
 use crate::app::App;
 use crate::channels::{self, NewChannel};
+use crate::samples_ui;
+use crate::soundlib::{self, Kit, Piece, Source};
 use doc::presets::{self, Preset};
 
 /// The label of a role in the filter row and the subtitle.
@@ -42,6 +49,32 @@ pub fn matches(p: &Preset, search: &str, role: Option<&str>) -> bool {
         .any(|f| f.to_lowercase().contains(&q))
 }
 
+/// The same test for a piece of a kit: name, role tag, kit, and "pack" or
+/// "your folder" are searchable; the filter compares the role group.
+pub fn matches_piece(kit: &Kit, piece: &Piece, search: &str, role: Option<&str>) -> bool {
+    if let Some(r) = role
+        && soundlib::role_group(&piece.role) != r
+    {
+        return false;
+    }
+    let q = search.trim().to_lowercase();
+    if q.is_empty() {
+        return true;
+    }
+    let source = match kit.source {
+        Source::Pack => "pack",
+        Source::UserFolder => "your folder",
+    };
+    [
+        piece.name.as_str(),
+        &soundlib::role_title(&piece.role),
+        &kit.title,
+        source,
+    ]
+    .iter()
+    .any(|f| f.to_lowercase().contains(&q))
+}
+
 /// The roles that have a sound, in list order.
 pub fn roles(all: &[Preset]) -> Vec<&'static str> {
     let mut out: Vec<&'static str> = Vec::new();
@@ -58,12 +91,28 @@ struct State {
     role: Option<&'static str>,
 }
 
+/// What `apply` toggles: a plain row, or a kit with its piece rows.
+enum Entry {
+    Preset {
+        row: adw::ActionRow,
+        index: usize,
+    },
+    Kit {
+        expander: adw::ExpanderRow,
+        kit: Kit,
+        rows: Vec<adw::ActionRow>,
+    },
+}
+
+type Entries = Rc<RefCell<Vec<Entry>>>;
+
 pub fn build(app: &Rc<App>) -> gtk::Widget {
     let all = presets::presets();
     let state = Rc::new(RefCell::new(State {
         search: String::new(),
         role: None,
     }));
+    let entries: Entries = Rc::new(RefCell::new(Vec::new()));
 
     let search = gtk::SearchEntry::new();
     search.set_placeholder_text(Some("Search sounds"));
@@ -92,7 +141,6 @@ pub fn build(app: &Rc<App>) -> gtk::Widget {
     filter_scroller.set_policy(gtk::PolicyType::Automatic, gtk::PolicyType::Never);
     filter_scroller.set_child(Some(&filters));
 
-    // The list.
     let list = gtk::ListBox::new();
     list.add_css_class("boxed-list");
     list.set_selection_mode(gtk::SelectionMode::None);
@@ -100,50 +148,6 @@ pub fn build(app: &Rc<App>) -> gtk::Widget {
     list.set_margin_end(12);
     list.set_margin_top(6);
     list.set_margin_bottom(12);
-    for p in &all {
-        let row = adw::ActionRow::new();
-        row.set_title(p.name);
-        row.set_subtitle(&format!("{} - Built-in", role_label(p.role)));
-        row.set_activatable(true);
-        row.set_tooltip_text(Some("Add as a New Channel"));
-        let use_btn = gtk::Button::from_icon_name("emblem-synchronizing-symbolic");
-        use_btn.add_css_class("flat");
-        use_btn.set_valign(gtk::Align::Center);
-        use_btn.set_tooltip_text(Some("Use on the Selected Channel"));
-        use_btn.update_property(&[gtk::accessible::Property::Label(&format!(
-            "Use {} on the selected channel",
-            p.name
-        ))]);
-        row.add_suffix(&use_btn);
-        let (a, name) = (app.clone(), p.name.to_string());
-        row.connect_activated(move |_| {
-            if channels::add(&a, NewChannel::Preset(name.clone())).is_some() {
-                let a2 = a.clone();
-                a.toast_action(&format!("Added {name}"), "Undo", move || a2.undo());
-            }
-        });
-        let (a, params) = (app.clone(), p.params);
-        use_btn.connect_clicked(move |_| {
-            let ch = a.current_channel();
-            let is_synth = ch
-                .and_then(|c| {
-                    a.session
-                        .borrow()
-                        .document()
-                        .project
-                        .channel(c)
-                        .map(|c| matches!(c.instrument, Instrument::Synth(_)))
-                })
-                .unwrap_or(false);
-            match ch {
-                Some(c) if is_synth => {
-                    a.edit(presets::apply_edits(c, &params));
-                }
-                _ => a.toast("Select a channel with a built-in sound first"),
-            }
-        });
-        list.append(&row);
-    }
 
     // Empty results.
     let none = adw::StatusPage::new();
@@ -166,28 +170,80 @@ pub fn build(app: &Rc<App>) -> gtk::Widget {
     stack.add_named(&none, Some("empty"));
 
     let apply: Rc<dyn Fn()> = Rc::new({
-        let (state, list, stack, all) = (
-            state.clone(),
-            list.clone(),
-            stack.clone(),
-            presets::presets(),
-        );
+        let (state, entries, stack) = (state.clone(), entries.clone(), stack.clone());
         move || {
             let s = state.borrow();
+            let searching = !s.search.trim().is_empty();
+            let all = presets::presets();
             let mut shown = 0;
-            let mut i = 0;
-            while let Some(row) = list.row_at_index(i) {
-                let ok = all
-                    .get(i as usize)
-                    .map(|p| matches(p, &s.search, s.role))
-                    .unwrap_or(false);
-                row.set_visible(ok);
-                shown += ok as usize;
-                i += 1;
+            for e in entries.borrow().iter() {
+                match e {
+                    Entry::Preset { row, index } => {
+                        let ok = all
+                            .get(*index)
+                            .map(|p| matches(p, &s.search, s.role))
+                            .unwrap_or(false);
+                        row.set_visible(ok);
+                        shown += ok as usize;
+                    }
+                    Entry::Kit {
+                        expander,
+                        kit,
+                        rows,
+                    } => {
+                        let mut any = false;
+                        for (row, piece) in rows.iter().zip(&kit.pieces) {
+                            let ok = matches_piece(kit, piece, &s.search, s.role);
+                            row.set_visible(ok);
+                            any |= ok;
+                        }
+                        expander.set_visible(any);
+                        if searching && any {
+                            expander.set_expanded(true);
+                        }
+                        shown += any as usize;
+                    }
+                }
             }
             stack.set_visible_child_name(if shown == 0 { "empty" } else { "results" });
         }
     });
+
+    // Builds the rows: built-in sounds, then the kits.
+    let rebuild: Rc<dyn Fn()> = Rc::new({
+        let (app, list, entries, apply) =
+            (app.clone(), list.clone(), entries.clone(), apply.clone());
+        move || {
+            while let Some(c) = list.first_child() {
+                list.remove(&c);
+            }
+            let mut es = Vec::new();
+            for (i, p) in presets::presets().iter().enumerate() {
+                let row = preset_row(&app, p);
+                list.append(&row);
+                es.push(Entry::Preset { row, index: i });
+            }
+            let mut kits = soundlib::discover(&soundlib::default_roots());
+            for dir in samples_ui::load_folders(&app) {
+                if let Some(k) = soundlib::scan_folder(&dir) {
+                    kits.push(k);
+                }
+            }
+            for kit in kits {
+                let (expander, rows) = kit_rows(&app, &kit);
+                list.append(&expander);
+                es.push(Entry::Kit {
+                    expander,
+                    kit,
+                    rows,
+                });
+            }
+            *entries.borrow_mut() = es;
+            apply();
+        }
+    });
+    rebuild();
+
     {
         let (st, ap) = (state.clone(), apply.clone());
         search.connect_search_changed(move |e| {
@@ -220,16 +276,174 @@ pub fn build(app: &Rc<App>) -> gtk::Widget {
         });
     }
 
+    // Bottom bar: Add Sound Folder...
+    let add_folder = gtk::Button::new();
+    add_folder.set_child(Some(
+        &adw::ButtonContent::builder()
+            .icon_name("folder-new-symbolic")
+            .label("Add Sound Folder…")
+            .build(),
+    ));
+    add_folder.add_css_class("flat");
+    add_folder.set_tooltip_text(Some("Add a Folder of Your Own WAV Sounds"));
+    {
+        let (app, rebuild) = (app.clone(), rebuild.clone());
+        add_folder.connect_clicked(move |b| add_sound_folder(b, &app, rebuild.clone()));
+    }
+    let bottom = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    bottom.add_css_class("toolbar");
+    bottom.append(&add_folder);
+
     let view = adw::ToolbarView::new();
     view.add_top_bar(&search_box);
     view.add_top_bar(&filter_scroller);
     view.set_content(Some(&stack));
+    view.add_bottom_bar(&bottom);
     view.upcast()
+}
+
+fn preset_row(app: &Rc<App>, p: &Preset) -> adw::ActionRow {
+    let row = adw::ActionRow::new();
+    row.set_title(p.name);
+    row.set_subtitle(&format!("{} - Built-in", role_label(p.role)));
+    row.set_activatable(true);
+    row.set_tooltip_text(Some("Add as a New Channel"));
+    let use_btn = gtk::Button::from_icon_name("emblem-synchronizing-symbolic");
+    use_btn.add_css_class("flat");
+    use_btn.set_valign(gtk::Align::Center);
+    use_btn.set_tooltip_text(Some("Use on the Selected Channel"));
+    use_btn.update_property(&[gtk::accessible::Property::Label(&format!(
+        "Use {} on the selected channel",
+        p.name
+    ))]);
+    row.add_suffix(&use_btn);
+    let (a, name) = (app.clone(), p.name.to_string());
+    row.connect_activated(move |_| {
+        if channels::add(&a, NewChannel::Preset(name.clone())).is_some() {
+            let a2 = a.clone();
+            a.toast_action(&format!("Added {name}"), "Undo", move || a2.undo());
+        }
+    });
+    let (a, params) = (app.clone(), p.params);
+    use_btn.connect_clicked(move |_| {
+        let ch = a.current_channel();
+        let is_synth = ch
+            .and_then(|c| {
+                a.session
+                    .borrow()
+                    .document()
+                    .project
+                    .channel(c)
+                    .map(|c| matches!(c.instrument, Instrument::Synth(_)))
+            })
+            .unwrap_or(false);
+        match ch {
+            Some(c) if is_synth => {
+                a.edit(presets::apply_edits(c, &params));
+            }
+            _ => a.toast("Select a channel with a built-in sound first"),
+        }
+    });
+    row
+}
+
+/// The expander row of a kit and its piece rows.
+fn kit_rows(app: &Rc<App>, kit: &Kit) -> (adw::ExpanderRow, Vec<adw::ActionRow>) {
+    let expander = adw::ExpanderRow::new();
+    expander.set_title(&kit.title);
+    let kind = match kit.source {
+        Source::Pack => "Sound pack",
+        Source::UserFolder => "Your folder",
+    };
+    expander.set_subtitle(&format!("{} - {} sounds", kind, kit.pieces.len()));
+    if kit.source == Source::UserFolder {
+        let icon = gtk::Image::from_icon_name("computer-symbolic");
+        icon.set_tooltip_text(Some("On this computer only (not saved in shared projects)"));
+        expander.add_prefix(&icon);
+    }
+    let add_all = gtk::Button::with_label("Add Kit");
+    add_all.add_css_class("flat");
+    add_all.set_valign(gtk::Align::Center);
+    add_all.set_tooltip_text(Some("Add All Sounds as New Channels"));
+    add_all.update_property(&[gtk::accessible::Property::Label(&format!(
+        "Add all sounds of {}",
+        kit.title
+    ))]);
+    {
+        let (a, k) = (app.clone(), kit.clone());
+        add_all.connect_clicked(move |_| samples_ui::add_kit(&a, &k));
+    }
+    expander.add_suffix(&add_all);
+    let mut rows = Vec::new();
+    for piece in &kit.pieces {
+        let row = adw::ActionRow::new();
+        row.set_title(&piece.name);
+        row.set_subtitle(&format!(
+            "{} - {}",
+            soundlib::role_title(&piece.role),
+            kit.title
+        ));
+        row.set_activatable(true);
+        row.set_tooltip_text(Some("Add as a New Channel"));
+        let (a, k, p) = (app.clone(), kit.clone(), piece.clone());
+        row.connect_activated(move |_| samples_ui::add_piece(&a, &k, &p));
+        expander.add_row(&row);
+        rows.push(row);
+    }
+    (expander, rows)
+}
+
+/// Asks for a folder, explains what adding it means, then lists it.
+fn add_sound_folder(parent: &gtk::Button, app: &Rc<App>, rebuild: Rc<dyn Fn()>) {
+    let dialog = gtk::FileDialog::builder().title("Add Sound Folder").build();
+    let win = parent.root().and_then(|r| r.downcast::<gtk::Window>().ok());
+    let (app, parent) = (app.clone(), parent.clone());
+    dialog.select_folder(win.as_ref(), gtk::gio::Cancellable::NONE, move |res| {
+        let Ok(f) = res else { return };
+        let Some(dir) = f.path() else { return };
+        if soundlib::scan_folder(&dir).is_none() {
+            app.toast("That folder has no WAV sounds");
+            return;
+        }
+        let alert = adw::AlertDialog::new(
+            Some("Use These Sounds on This Computer?"),
+            Some(
+                "LibreDAW only reads the files in this folder. They stay where they are and \
+                 are not copied into your projects or shared. Whether you may use them is up \
+                 to the license they came with.",
+            ),
+        );
+        alert.add_responses(&[("cancel", "_Cancel"), ("add", "_Add Folder")]);
+        alert.set_response_appearance("add", adw::ResponseAppearance::Suggested);
+        alert.set_default_response(Some("add"));
+        alert.set_close_response("cancel");
+        let (app2, rebuild) = (app.clone(), rebuild.clone());
+        alert.connect_response(None, move |_, r| {
+            if r == "add" {
+                remember_folder(&app2, dir.clone());
+                rebuild();
+            }
+        });
+        alert.present(Some(&parent));
+    });
+}
+
+fn remember_folder(app: &App, dir: PathBuf) {
+    let mut folders = samples_ui::load_folders(app);
+    if !folders.contains(&dir) {
+        folders.push(dir);
+    }
+    if let Err(e) = samples_ui::save_folders(app, &folders) {
+        app.toast(&format!("Could not remember the folder: {e}"));
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::soundlib::parse_kit;
+    use std::collections::HashMap;
+    use std::path::Path;
 
     #[test]
     fn search_and_role_filter() {
@@ -264,5 +478,20 @@ mod tests {
         for role in roles(&all) {
             assert!(all.iter().any(|p| matches(p, "", Some(role))), "{role}");
         }
+    }
+
+    #[test]
+    fn kit_pieces_filter_by_group_and_search_by_name_role_and_kit() {
+        let text = "name = \"phonk\"\n[[piece]]\nfile = \"kick_deep.wav\"\nrole = \"kick\"\n[[piece]]\nfile = \"808_sub.wav\"\nrole = \"808\"\n";
+        let kit = parse_kit(text, Path::new("/x/phonk"), Source::Pack, &HashMap::new()).unwrap();
+        let (kick, bass) = (&kit.pieces[0], &kit.pieces[1]);
+        assert!(matches_piece(&kit, kick, "", Some("Drum")));
+        assert!(!matches_piece(&kit, kick, "", Some("Bass")));
+        assert!(matches_piece(&kit, bass, "", Some("Bass")));
+        assert!(matches_piece(&kit, kick, "phonk", None), "kit name");
+        assert!(matches_piece(&kit, kick, "KICK", None), "role tag");
+        assert!(matches_piece(&kit, kick, "deep", None), "name");
+        assert!(matches_piece(&kit, kick, "pack", None));
+        assert!(!matches_piece(&kit, kick, "snare", None));
     }
 }

@@ -26,6 +26,7 @@ use crate::slots::SlotAllocator;
 
 pub use engine::groove::{ratchet_part, swing_delay_ticks, swung_start};
 pub use engine::render::Rendered;
+pub use engine::samples::SampleState;
 pub use engine::{Compiled, EngineConfig, EngineError, Host, SampleStore, Slots};
 
 /// Runs on the compiler thread.

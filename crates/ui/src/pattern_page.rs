@@ -79,6 +79,10 @@ pub fn add_channel_menu() -> gio::Menu {
         };
         menu.append_section(Some(title), &section);
     }
+    let native = gio::Menu::new();
+    native.append(Some("_808 Bass"), Some("win.add-808"));
+    native.append(Some("_Sampler…"), Some("win.add-sampler"));
+    menu.append_section(None, &native);
     let plugin = gio::Menu::new();
     plugin.append(Some("_Plugin…"), Some("win.add-instrument"));
     menu.append_section(None, &plugin);
@@ -471,6 +475,8 @@ fn build_steps(app: &Rc<App>, channels: &Rc<ChannelList>) -> gtk::Widget {
     vscroll.set_vexpand(true);
     vscroll.set_child(Some(&column));
     stack.add_named(&vscroll, Some("rows"));
+    // WAV files dropped from the file manager become sampler channels.
+    crate::samples_ui::install_drop_target(&stack, app);
 
     let sync = {
         let (a, st) = (app.clone(), stack.clone());

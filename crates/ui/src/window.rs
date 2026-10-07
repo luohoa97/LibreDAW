@@ -312,7 +312,7 @@ pub fn build(gapp: &adw::Application, app: Rc<App>) -> adw::ApplicationWindow {
         app.on_change(move || sync_header(&u, &a));
     }
     sync_header(&ui, &app);
-    install_debug_shot(gapp, &ui);
+    install_debug_shot(gapp, &ui, &app);
     window
 }
 
@@ -320,12 +320,30 @@ pub fn build(gapp: &adw::Application, app: Rc<App>) -> adw::ApplicationWindow {
 /// `LIBREDAW_PAGE=pattern|song|mixer` picks the page,
 /// `LIBREDAW_THEME=light|dark` the color scheme, and
 /// `LIBREDAW_SHOT=/path.png` writes the window to a PNG a moment after it
-/// is shown and quits. `LIBREDAW_SIZE=360x640` sets the size.
-fn install_debug_shot(gapp: &adw::Application, ui: &Rc<Ui>) {
+/// is shown and quits. `LIBREDAW_SIZE=360x640` sets the size, and
+/// `LIBREDAW_CHANNEL=Name` selects the channel of that name.
+fn install_debug_shot(gapp: &adw::Application, ui: &Rc<Ui>, app: &Rc<App>) {
     if let Ok(p) = std::env::var("LIBREDAW_PAGE") {
         // After the project's saved view has been restored.
         let u = ui.clone();
         glib::timeout_add_local_once(Duration::from_millis(900), move || go_to_page(&u, &p));
+    }
+    if let Ok(name) = std::env::var("LIBREDAW_CHANNEL") {
+        let a = app.clone();
+        glib::timeout_add_local_once(Duration::from_millis(1000), move || {
+            let id = {
+                let s = a.session.borrow();
+                s.document()
+                    .project
+                    .channels
+                    .iter()
+                    .find(|c| c.name == name)
+                    .map(|c| c.id)
+            };
+            if let Some(id) = id {
+                a.select_channel(id);
+            }
+        });
     }
     if let Ok(p) = std::env::var("LIBREDAW_PANES") {
         // "sounds", "inspector", or both separated by a comma.
@@ -714,6 +732,18 @@ fn install_actions(gapp: &adw::Application, ui: &Rc<Ui>, app: &Rc<App>) {
         }
     });
     window.add_action(&preset);
+    let a = app.clone();
+    add(
+        "add-808",
+        Box::new(move || {
+            channels::add(&a, NewChannel::Bass808);
+        }),
+    );
+    let (a, w) = (app.clone(), window.clone());
+    add(
+        "add-sampler",
+        Box::new(move || crate::samples_ui::choose_for_new_channels(&w, &a)),
+    );
     let (a, w) = (app.clone(), window.clone());
     add(
         "add-instrument",

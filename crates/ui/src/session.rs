@@ -304,6 +304,22 @@ impl Session {
         self.request_samples();
     }
 
+    /// True if `c` is a sampler whose audio file cannot be found or loaded:
+    /// it plays silence and the UI shows a placeholder.
+    pub fn sample_missing(&self, c: &protocol::model::Channel) -> bool {
+        let Instrument::Sampler(s) = &c.instrument else {
+            return false;
+        };
+        let Some(h) = &s.sample else {
+            return false;
+        };
+        self.missing_samples.contains(h)
+            || matches!(
+                self.store.state(h),
+                Some(crate::engine_adapter::SampleState::Failed(_))
+            )
+    }
+
     /// Asks the loader for every sample the project names and records the
     /// ones whose file is missing.
     pub fn request_samples(&mut self) {
@@ -458,6 +474,8 @@ impl Session {
                 }
             }
             self.request_compile();
+            // Rows and pages show "loading" and "missing" states.
+            report.changed = true;
         }
 
         // Rings: parameter events, then the newest compiled state.

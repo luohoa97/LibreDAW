@@ -15,6 +15,7 @@ use protocol::ids::{ChannelId, InstanceId};
 use protocol::model::{Instrument, SynthParam, SynthParams, Wave};
 
 use crate::app::{App, UiCommand};
+use crate::inspector_native::{Bass808Page, SamplerPage};
 use crate::knob_logic::{MACROS, MORE, format_value, from_unit, to_unit, vary};
 use crate::shortcuts;
 use crate::widgets::color_bar::ColorBar;
@@ -56,6 +57,8 @@ struct SoundPage {
     plugin_name: gtk::Label,
     expert: gtk::Button,
     no_window: gtk::Label,
+    bass: Rc<Bass808Page>,
+    samp: Rc<SamplerPage>,
     updating: Cell<bool>,
     seed: Cell<u64>,
     instance: Cell<Option<InstanceId>>,
@@ -268,6 +271,10 @@ impl SoundPage {
         plug.append(&expert);
         plug.append(&no_window);
         stack.add_named(&plug, Some("clap"));
+        let bass = Bass808Page::new(app);
+        stack.add_named(&bass.widget, Some("bass808"));
+        let samp = SamplerPage::new(app);
+        stack.add_named(&samp.widget, Some("sampler"));
 
         let page = Rc::new(SoundPage {
             app: app.clone(),
@@ -282,6 +289,8 @@ impl SoundPage {
             plugin_name,
             expert,
             no_window,
+            bass,
+            samp,
             updating: Cell::new(false),
             seed: Cell::new(0x9e37_79b9_7f4a_7c15),
             instance: Cell::new(None),
@@ -442,14 +451,14 @@ impl SoundPage {
             self.stack.set_visible_child_name("none");
             return;
         };
-        let (name, id, instr) = {
+        let (name, id, instr, channel) = {
             let s = self.app.session.borrow();
             let Some(c) = s.document().project.channel(ch) else {
                 drop(s);
                 self.stack.set_visible_child_name("none");
                 return;
             };
-            (c.name.clone(), c.id, c.instrument.clone())
+            (c.name.clone(), c.id, c.instrument.clone(), c.clone())
         };
         self.updating.set(true);
         match instr {
@@ -482,8 +491,13 @@ impl SoundPage {
                     }
                 }
             }
-            Instrument::Sampler(_) | Instrument::Bass808(_) => {
-                self.stack.set_visible_child_name("none");
+            Instrument::Bass808(_) => {
+                self.stack.set_visible_child_name("bass808");
+                self.bass.sync(&channel);
+            }
+            Instrument::Sampler(_) => {
+                self.stack.set_visible_child_name("sampler");
+                self.samp.sync(&channel);
             }
             Instrument::Clap(r) => {
                 self.stack.set_visible_child_name("clap");

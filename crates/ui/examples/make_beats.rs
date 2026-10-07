@@ -6,10 +6,10 @@
 
 use doc::bundle;
 use doc::document::{Document, apply_batch};
-use protocol::beats::BuiltinFxKind;
+use protocol::beats::{BuiltinFxKind, SampleMode};
 use protocol::edit::{Edit, MixValue, NewInstrument, NewNote};
 use protocol::ids::{ChannelId, PatternId, PlaylistTrackId, TrackId};
-use protocol::model::SynthParams;
+use protocol::model::{SampleRef, SynthParams};
 
 fn main() {
     let Some(path) = std::env::args().nth(1) else {
@@ -76,6 +76,44 @@ fn main() {
             instrument,
             root_key: key,
             track,
+        });
+    }
+    // With a WAV file as the second argument: a sampler channel that plays
+    // it, and one whose sample file is missing (the placeholder).
+    if let Some(wav) = std::env::args().nth(2) {
+        let r = doc::samples::import_sample(
+            std::path::Path::new(&path),
+            std::path::Path::new(&wav),
+            false,
+        )
+        .expect("import");
+        edits.push(Edit::AddSample { sample: r.clone() });
+        edits.push(Edit::AddChannel {
+            name: "Clap".into(),
+            instrument: NewInstrument::Sampler {
+                sample: Some(r.hash),
+                mode: SampleMode::OneShot,
+            },
+            root_key: 60,
+            track: drums,
+        });
+        let ghost = SampleRef {
+            hash: format!("{:0>64}", "1"),
+            orig_name: "lost.wav".into(),
+            size: 10,
+            local_only: false,
+        };
+        edits.push(Edit::AddSample {
+            sample: ghost.clone(),
+        });
+        edits.push(Edit::AddChannel {
+            name: "Lost sound".into(),
+            instrument: NewInstrument::Sampler {
+                sample: Some(ghost.hash),
+                mode: SampleMode::Pitched,
+            },
+            root_key: 48,
+            track: drums,
         });
     }
     let (d, ids) = apply_batch(&d, &edits).expect("channels");

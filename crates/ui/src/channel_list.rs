@@ -35,8 +35,12 @@ pub fn signature(app: &App, row_h: u32) -> String {
     let mut out = format!("{row_h}|");
     for c in &p.channels {
         out.push_str(&format!(
-            "{}:{}:{}:{};",
-            c.id, c.name, c.mix.mute as u8, c.choke_group
+            "{}:{}:{}:{}:{};",
+            c.id,
+            c.name,
+            c.mix.mute as u8,
+            c.choke_group,
+            s.sample_missing(c) as u8
         ));
     }
     out
@@ -135,8 +139,12 @@ impl ChannelList {
             .project
             .channels
             .clone();
-        for ch in chans {
-            let row = self.build_row(ch.id, &ch.name, ch.mix.mute, ch.choke_group, row_h);
+        let missing: Vec<bool> = {
+            let s = self.app.session.borrow();
+            chans.iter().map(|c| s.sample_missing(c)).collect()
+        };
+        for (ch, miss) in chans.into_iter().zip(missing) {
+            let row = self.build_row(ch.id, &ch.name, ch.mix.mute, ch.choke_group, miss, row_h);
             self.rows.append(&row);
             self.row_widgets.borrow_mut().push((ch.id, row));
         }
@@ -148,6 +156,7 @@ impl ChannelList {
         name: &str,
         muted: bool,
         choke: u8,
+        sample_missing: bool,
         row_h: u32,
     ) -> gtk::Box {
         let row = gtk::Box::new(gtk::Orientation::Horizontal, 4);
@@ -218,6 +227,15 @@ impl ChannelList {
         }
         self.labels.borrow_mut().push((id, label.clone()));
         row.append(&label);
+        if sample_missing {
+            // A placeholder: the channel stays, silent, until the file is found.
+            let w = gtk::Image::from_icon_name("dialog-warning-symbolic");
+            w.set_tooltip_text(Some("The sound file cannot be found"));
+            w.update_property(&[gtk::accessible::Property::Label(
+                "The sound file cannot be found",
+            )]);
+            row.append(&w);
+        }
 
         // A click anywhere on the row selects the channel and plays it.
         let click = gtk::GestureClick::new();
