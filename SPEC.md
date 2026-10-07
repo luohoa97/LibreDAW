@@ -86,6 +86,7 @@ LibreDAW/
     plugin-host/          CLAP loading; later the sandbox runner binary
     ui/                   GTK4 app shell, widgets, document + undo; binary `libredaw`
     script/               Deno child-process bridge
+    mcp/                  libredaw-mcp binary (MCP server for agents, section 16)
 ```
 
 Dependency direction (no cycles):
@@ -1041,6 +1042,90 @@ A preset is a small TOML file: engine id, plugin state or native
 parameters, macro mappings, tags, loudness. User libraries from other
 installed DAWs (15.3) appear as local-only packs in the same browser.
 
+
+## 16. Agent control (LibreDAW MCP)
+
+Status: approved scope (Amendment 6), not yet adversarially reviewed.
+
+Goal: AI agents can operate the DAW: change settings, install packs, add
+plugins, edit everything a user can edit, and make beats.
+
+### 16.1 One control API
+
+- `protocol` defines one `ControlRequest` / `ControlReply` enum pair. The
+  Deno script bridge (section 10) and the MCP bridge both use it. A control
+  request becomes `Edit` values (section 6) or a non-edit action (transport,
+  save, export, scan).
+- Every request that changes the document is one undo group, applied on
+  the GTK thread through the same path as a UI edit (queued while a gesture
+  is open, section 6). The user can undo anything an agent did.
+- Control rate only. No audio passes through this API.
+
+### 16.2 Transport between DAW and agent
+
+- The running DAW listens on a Unix socket
+  `$XDG_RUNTIME_DIR/libredaw/control.sock`, mode 0600, same user only, no
+  network listener. Newline-delimited JSON (`serde_json`).
+- `libredaw-mcp` is a separate small binary (stdio MCP server) that an agent
+  host launches. It connects to the socket, or starts LibreDAW if it is not
+  running. MCP protocol: the official Rust SDK `rmcp` if it passes
+  `cargo deny`, else a hand-written JSON-RPC 2.0 layer over `serde_json`.
+- The control socket is off by default. Preferences: "Allow agents to
+  control LibreDAW". While an agent is connected, the header bar shows an
+  indicator, and an "Agent activity" panel lists each request.
+
+### 16.3 MCP tools (grouped)
+
+- Projects: `project_list`, `project_new` (from template), `project_open`,
+  `project_save`, `project_info`.
+- Transport: `play`, `stop`, `set_tempo`, `set_key`, `set_loop`.
+- Channels and sounds: `sound_search` (by role, genre, tags),
+  `channel_add` (preset or instrument), `channel_remove`,
+  `channel_set_macro`, `preset_load`.
+- Patterns and notes: `pattern_new`, `steps_set` (row of steps with
+  velocity, pitch, ratchet lanes), `notes_add`, `notes_remove`,
+  `notes_list`, `swing_set`.
+- Mixer: `track_set` (volume, pan, mute, solo), `fx_add`, `fx_set`,
+  `send_set`, `sidechain_set`.
+- Playlist: `clip_add`, `clip_move`, `clip_remove`.
+- Packs: `pack_list`, `pack_install` (from the `libredaw-sounds` index
+  only), `library_add_folder` (local folder, marked local-only, 15.3).
+- Plugins: `plugin_scan`, `plugin_list`, `plugin_add` (only plugins found
+  by the scan of standard CLAP paths, never an arbitrary file path),
+  `plugin_param_set`.
+- Settings: `settings_get`, `settings_set` (audio device, buffer size,
+  theme, and so on; the setting that enables the control socket itself is
+  not settable over the socket).
+- Output: `export_wav` (pattern or song), returns the file path.
+- Listening: an agent cannot hear. `analyze` renders offline and returns
+  numbers: integrated loudness (LUFS), true peak, clipping count, per-track
+  peak and RMS, low/mid/high energy balance, and kick-to-808 overlap. The
+  agent uses these to judge and fix a mix.
+- Undo: `undo`, `redo`, `history`.
+
+### 16.4 Safety
+
+- Destructive actions (delete a project, overwrite an existing file,
+  remove a pack) require `confirm: true` and are shown in the activity
+  panel. Projects are never deleted, only moved to the trash.
+- Loading a plugin runs native code. Agents can only load plugins already
+  installed in standard CLAP paths, and the first load of any plugin by an
+  agent asks the user in the UI.
+- No network access through the API except `pack_install`, which fetches
+  only from the configured `libredaw-sounds` index URL.
+
+### 16.5 Milestones and ownership
+
+- The MCP surface grows with the milestones: Milestone A tools first
+  (projects, transport, channels with the built-in synth, steps, notes,
+  mixer, export, undo), then B, C, and D tools as those features land.
+- Phase 2 ownership: the `script` teammate owns both the Deno bridge and a
+  new crate `crates/mcp` (binary `libredaw-mcp`). The control socket server
+  lives in `ui` (it runs on the GTK thread side). The team stays at 5
+  sessions.
+- Validator test: an agent session with only the MCP tools builds a
+  4-bar beat (kick, snare or clap, hats with a roll, 808 line) from an empty
+  project and exports it, with `analyze` reporting no clipping.
 ---
 
 ## Owner decisions (approved 2026-10-07)
@@ -1054,6 +1139,14 @@ installed DAWs (15.3) appear as local-only packs in the same browser.
 ---
 
 ## Changelog
+
+### Amendment 6 (2026-10-07, owner)
+
+Agents can control the DAW through MCP (section 16): one control API shared
+with scripting, a same-user Unix socket (off by default), a separate
+`libredaw-mcp` binary, tools for projects, sounds, patterns, mixer,
+playlist, packs, plugins, settings, export, and offline `analyze` so agents
+can judge a mix by numbers. Owned by the `script` teammate.
 
 ### Amendment 5 (2026-10-07, owner)
 
