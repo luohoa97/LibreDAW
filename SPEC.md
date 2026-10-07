@@ -1853,6 +1853,22 @@ clips and the mixer (20.4). It adds no parallel concept.
 - **Import:** drop an audio file on the timeline or on a row, or use
   Import Audio. WAV, FLAC, Ogg Vorbis and MP3 are supported. The file is
   decoded off the GTK thread and resampled to the project rate once.
+- **Drag and drop audio (Amendment 28).** Dragging any sound from the
+  Sounds pane (FL Studio, folders, effects) or a file from Files onto the
+  timeline creates an audio clip where it is dropped:
+  - On an Audio row, it goes on that row.
+  - On the empty area below the rows, it goes on a new Audio row named
+    after the sound.
+  - The clip shows its waveform (peak summaries, 23.3).
+  - Dragging a clip's left or right edge trims it to the exact part
+    wanted. The start is trimmed through the clip offset, the audio is
+    not stretched, and the edge snaps to the grid unless Shift is held.
+  - Corner handles set the fade in and fade out.
+  - Move, copy, split (S), mute and delete work as for note clips.
+  - Dragging onto an instrument row instead loads the sound into that
+    row's sampler (the current "+" behaviour).
+  - Audio clips and drag and drop are the first part of the Voice wave,
+    ahead of recording.
 - **Takes:** each recording pass over the same range adds a take to the
   clip. The clip plays one chosen take. The other takes stay in the
   project until the user deletes them. Full comping (splicing parts of
@@ -2260,6 +2276,12 @@ feature is an MCP tool (Amendment 19).
 ---
 
 ## Changelog
+
+### Amendment 28 (2026-10-07, owner)
+
+- 21.1: dragging any sound or file onto the timeline makes an audio clip
+  that can be trimmed by its edges, faded, moved and split. This is the
+  first part of the Voice wave.
 
 ### Amendment 27 (2026-10-07, owner)
 
