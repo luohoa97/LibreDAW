@@ -111,6 +111,8 @@ pub enum UiCommand {
     ShowAgent,
     /// The agent state changed (banner, indicator, Agent page).
     AgentChanged,
+    /// Open the Hum sheet (`hum.rs` listens).
+    Hum,
 }
 
 impl App {

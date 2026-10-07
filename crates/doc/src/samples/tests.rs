@@ -219,7 +219,7 @@ fn import_rejects_what_is_not_a_wav() {
         assert!(
             matches!(
                 import_sample_with(&t.bundle(), &p, false, &t.registry()),
-                Err(BundleError::NotWav(_))
+                Err(BundleError::NotWav(_) | BundleError::Undecodable(..))
             ),
             "{}",
             p.display()
@@ -227,7 +227,7 @@ fn import_rejects_what_is_not_a_wav() {
     }
     assert!(matches!(
         import_sample_with(&t.bundle(), &dir, false, &t.registry()),
-        Err(BundleError::NotWav(_))
+        Err(BundleError::NotWav(_) | BundleError::Undecodable(..))
     ));
     assert!(matches!(
         import_sample_with(&t.bundle(), &dir.join("missing.wav"), false, &t.registry()),
@@ -580,8 +580,52 @@ fn other_audio_formats_are_local_only() {
         assert!(r.local_only);
         assert!(matches!(
             import_sample_with(&t.bundle(), &p, false, &t.registry()),
-            Err(BundleError::NotWav(_))
+            Err(BundleError::NotWav(_) | BundleError::Undecodable(..))
         ));
     }
     assert!(sample_files(&t.bundle()).is_empty());
+}
+
+#[test]
+fn mp3_flac_ogg_import_save_reopen_render() {
+    let fx = Path::new(env!("CARGO_MANIFEST_DIR")).join("../audiofile/tests/fixtures");
+    for (name, ext) in [
+        ("sine440.mp3", "mp3"),
+        ("sine440.flac", "flac"),
+        ("sine440.ogg", "ogg"),
+    ] {
+        let t = Tmp::new();
+        let src = fx.join(name);
+        let r = import_sample_with(&t.bundle(), &src, false, &t.registry()).unwrap();
+        assert!(!r.local_only);
+        let mut e = Editor::new(Document::new(), true);
+        e.submit(
+            Author::User,
+            None,
+            vec![Edit::AddSample { sample: r.clone() }],
+            0,
+        )
+        .unwrap();
+        save(&t.bundle(), e.document()).unwrap();
+        let stored = t
+            .bundle()
+            .join(SAMPLES_DIR)
+            .join(sample_file_name_ext(&r.hash, ext));
+        assert_eq!(
+            fs::read(&stored).unwrap(),
+            fs::read(&src).unwrap(),
+            "{name}"
+        );
+        // Reopen: the sample is still named and resolves.
+        let doc = load(&t.bundle()).unwrap();
+        let s = &doc.doc.project.samples[0];
+        let found = resolve_sample(&t.bundle(), s, &LocalSamples::load(&t.registry())).unwrap();
+        assert_eq!(found, stored);
+        let audio = audiofile::decode_file(&found).unwrap();
+        let peak = audio.data.iter().fold(0f32, |m, v| m.max(v.abs()));
+        assert!(peak > 0.0, "{name}");
+        // Garbage collection removes it once nothing names it.
+        let w = save(&t.bundle(), &Document::new()).unwrap();
+        assert_eq!(w.samples_deleted, [format!("{}.{ext}", r.hash)]);
+    }
 }

@@ -1092,6 +1092,7 @@ dependencies = [
 name = "libredaw-doc"
 version = "0.0.0"
 dependencies = [
+ "libredaw-audiofile",
  "libredaw-protocol",
  "serde",
  "toml",
@@ -1172,12 +1173,14 @@ version = "0.0.0"
 dependencies = [
  "gtk4",
  "libadwaita",
+ "libredaw-audiofile",
  "libredaw-control",
  "libredaw-doc",
  "libredaw-engine",
  "libredaw-library",
  "libredaw-plugin-host",
  "libredaw-protocol",
+ "libredaw-transcribe",
 ]
 
 [[package]]

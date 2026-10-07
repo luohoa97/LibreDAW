@@ -42,7 +42,19 @@ enum JobKind {
     Analyze,
 }
 
+/// What the fake user does with the Hum sheet.
+pub enum HumReply {
+    /// Closes it.
+    Decline,
+    /// Hums these notes (positions in ticks from the clip start).
+    Notes(Vec<protocol::edit::NewNote>),
+}
+
 pub struct RefDaw {
+    /// Sheets agents asked for through `hum_prepare`.
+    pub hum_asked: Vec<control::hum::Prepare>,
+    pub hum_reply: HumReply,
+    hum_applied: Option<Applied>,
     pub editor: Editor,
     pub playing: bool,
     pub activity: Vec<(Option<String>, Option<Focus>)>,
@@ -89,6 +101,9 @@ impl RefDaw {
     /// An empty project.
     pub fn empty() -> RefDaw {
         RefDaw {
+            hum_asked: Vec::new(),
+            hum_reply: HumReply::Decline,
+            hum_applied: None,
             editor: Editor::new(Document::new(), true),
             playing: false,
             activity: Vec::new(),
@@ -324,6 +339,41 @@ impl RefDaw {
                     revision: self.revision(),
                 })
             }
+            RequestBody::JobStatus { job } if *job == control::hum::JOB => {
+                if self.hum_asked.is_empty() {
+                    return err(ControlError::NotFound { what: "job".into() });
+                }
+                let state = match (&self.hum_reply, &self.hum_applied) {
+                    (HumReply::Decline, _) => JobState::Cancelled,
+                    (HumReply::Notes(_), Some(_)) => JobState::Done,
+                    (HumReply::Notes(notes), None) => {
+                        let notes = notes.clone();
+                        let made = self.user_edit(vec![Edit::AddClip {
+                            instrument: ChannelId(1),
+                            pattern: None,
+                            start: 3840,
+                            len: 3840,
+                        }]);
+                        self.user_edit(vec![Edit::AddNotes {
+                            pattern: protocol::ids::PatternId(made.created[0]),
+                            notes,
+                        }]);
+                        self.hum_applied = Some(made);
+                        JobState::Running
+                    }
+                };
+                ok(ReplyBody::JobStatus {
+                    job: *job,
+                    state,
+                    progress: 0.0,
+                })
+            }
+            RequestBody::JobResult { job } if *job == control::hum::JOB => {
+                match &self.hum_applied {
+                    Some(a) => ok(ReplyBody::Applied(a.clone())),
+                    None => bad("the hum has not finished"),
+                }
+            }
             RequestBody::JobStatus { job } => {
                 match self.jobs.get_mut((*job as usize).wrapping_sub(1)) {
                     Some((_, polls)) => {
@@ -374,6 +424,10 @@ impl RefDaw {
             RequestBody::SettingsSet { .. } | RequestBody::PluginScan => ok(ReplyBody::Done),
             RequestBody::PluginList => ok(ReplyBody::Plugins { plugins: vec![] }),
             RequestBody::SetActivity { text, focus } => {
+                if let Some(p) = text.as_deref().and_then(control::hum::decode) {
+                    self.hum_asked.push(p);
+                    self.hum_applied = None;
+                }
                 self.activity.push((text.clone(), *focus));
                 ok(ReplyBody::Done)
             }

@@ -195,8 +195,10 @@ pub fn add(app: &Rc<App>, what: NewChannel) -> Option<ChannelId> {
     };
     let fallback = app.ui.borrow().track;
     let grouped = app.gesture_begin("Add instrument");
+    // A caller may already hold the gesture (one undo step for more).
+    let in_gesture = grouped || app.session.borrow().editor.gesture_open();
     let run = |e: Vec<Edit>| {
-        if grouped {
+        if in_gesture {
             app.gesture_edit(e)
         } else {
             app.edit(e)

@@ -474,7 +474,7 @@ fn add_sound_folder(parent: &gtk::Button, app: &Rc<App>, rebuild: Rc<dyn Fn()>) 
         let Ok(f) = res else { return };
         let Some(dir) = f.path() else { return };
         if soundlib::scan_folder(&dir).is_none() {
-            app.toast("That folder has no WAV sounds");
+            app.toast("That folder has no sounds Oto can read");
             return;
         }
         let alert = adw::AlertDialog::new(

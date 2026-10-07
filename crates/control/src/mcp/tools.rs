@@ -42,6 +42,8 @@ pub enum Plan {
         job: u64,
         cancel: bool,
     },
+    /// Ask the user to hum a melody (SPEC 21.5).
+    Hum(crate::hum::Prepare),
     Undo {
         redo: bool,
         steps: u32,
@@ -389,6 +391,14 @@ struct ActivityArgs {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+struct HumArgs {
+    instrument: Option<u32>,
+    bars: Option<u32>,
+    message: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct KitAddArgs {
     pack: String,
     kit: String,
@@ -712,6 +722,19 @@ pub fn plan(name: &str, args: Value) -> Result<Plan, PlanError> {
                 pack: a.pack,
                 kit: a.kit,
                 track: a.track,
+            })
+        }),
+        "hum_prepare" => parse::<HumArgs>(args).map(|a| {
+            Plan::Hum(crate::hum::Prepare {
+                instrument: a.instrument,
+                bars: a.bars.map(|b| b.clamp(1, 16)),
+                message: a
+                    .message
+                    .unwrap_or_default()
+                    .chars()
+                    .filter(|c| !c.is_control())
+                    .take(protocol::control::MAX_ACTIVITY_CHARS)
+                    .collect(),
             })
         }),
         "plugins" => parse::<PluginsArgs>(args).map(|a| Plan::Plugins { scan: a.scan }),
@@ -1140,6 +1163,12 @@ pub fn definitions() -> Vec<Value> {
             "Add a whole built-in or folder drum kit by pack and kit names (from sound_search results of kind drum kit). Prefer sound_add with the id, which also adds the user's FL Studio kits. One sampler instrument per kit piece, in ONE undo group, on a new mixer track named after the kit unless `track` is given. New instrument ids are in `created`; then give them clips with clips_add.",
             json!({"pack": {"type": "string"}, "kit": {"type": "string"}, "track": int("Existing mixer track (default: a new one).")}),
             &["pack", "kit"],
+        ),
+        tool(
+            "hum_prepare",
+            "Ask the user to hum a melody, then get it back as notes to compose around. Oto shows a small sheet with your `message` (for example \"Hum the chorus melody\"); ONLY the user starts the microphone, you cannot. It waits for them (up to a few minutes). When they finish, the hum is turned into notes on a new clip on `instrument` (default: the selected instrument, or a new \"Hum Melody\" lead) at the playhead. Returns state done with: clip, content and instrument ids, the notes (bars and beats, like content_get), the key (for example \"A minor\"), the tempo and bars. Build the song around those notes. If the user closes the sheet it returns state declined: do not ask again unless they say so. If it returns waiting, call job with the given job id later.",
+            json!({"instrument": {"type": "integer", "minimum": 1, "description": "Instrument id to put the melody on."}, "bars": {"type": "integer", "minimum": 1, "maximum": 16, "description": "How many bars you want hummed."}, "message": {"type": "string", "maxLength": 80, "description": "What to tell the user, in plain words."}}),
+            &[],
         ),
         tool(
             "plugins",

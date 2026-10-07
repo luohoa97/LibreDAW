@@ -976,4 +976,65 @@ fn seek_goes_to_a_bar() {
         })
         .collect();
     assert_eq!(ticks, [8 * 3840, 960]);
+
+fn hum_prepare_returns_declined_when_the_user_closes_the_sheet() {
+    let mut daw = RefDaw::kick_and_hat();
+    daw.hum_reply = support::HumReply::Decline;
+    let rig = support::rig_with(daw, true, |_| {});
+    let mut c = Mcp::connect(&rig);
+    c.init();
+    let r = c.ok(
+        "hum_prepare",
+        json!({"message": "Hum the chorus melody", "bars": 4, "instrument": 1}),
+    );
+    assert_eq!(r["state"], "declined", "{r}");
+    let q = rig.ui.requests();
+    let ask = q
+        .iter()
+        .find_map(|q| match &q.body {
+            RequestBody::SetActivity {
+                text: Some(t),
+                focus,
+            } => control::hum::decode(t).map(|p| (p, *focus)),
+            _ => None,
+        })
+        .expect("the sheet was asked for");
+    assert_eq!(ask.0.message, "Hum the chorus melody");
+    assert_eq!((ask.0.bars, ask.0.instrument), (Some(4), Some(1)));
+    assert_eq!(ask.1, Some(Focus::Channel(ChannelId(1))));
+}
+
+#[test]
+fn hum_prepare_returns_the_notes_the_fake_transcription_made() {
+    use protocol::edit::NewNote;
+    let n = |start, key| NewNote {
+        start,
+        len: 960,
+        key,
+        vel: 100,
+    };
+    // A minor: A B C D E A.
+    let notes = vec![
+        n(0, 57),
+        n(960, 59),
+        n(1920, 60),
+        n(2880, 62),
+        n(3840 - 960, 64),
+        n(3840 - 1920, 57),
+    ];
+    let mut daw = RefDaw::kick_and_hat();
+    daw.hum_reply = support::HumReply::Notes(notes);
+    let rig = support::rig_with(daw, true, |_| {});
+    let mut c = Mcp::connect(&rig);
+    c.init();
+    let r = c.ok("hum_prepare", json!({"message": "Hum the verse"}));
+    assert_eq!(r["state"], "done", "{r}");
+    assert_eq!(r["note_count"], 6);
+    assert_eq!(r["key"], "A minor");
+    assert_eq!(r["instrument"], 1);
+    assert_eq!(r["starts_at_bar"], "1");
+    assert!(r["notes"].as_str().unwrap().contains("A3:0:1/4"), "{r}");
+    assert!(r["tempo_bpm"].as_f64().unwrap() > 0.0);
+    let clip = r["clip"].as_u64().unwrap() as u32;
+    assert!(rig.project().clips.iter().any(|c| c.id.0 == clip));
 }

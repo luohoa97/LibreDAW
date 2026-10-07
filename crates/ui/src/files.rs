@@ -458,9 +458,16 @@ pub fn copy_samples(
         doc::samples::samples_root(to),
     );
     for h in hashes {
-        let name = doc::samples::sample_file_name(&h);
-        let (s, d) = (src.join(&name), dst.join(&name));
-        if !s.is_file() || d.exists() {
+        let Some(s) = doc::samples::find_bundle_sample(&src, &h) else {
+            continue;
+        };
+        let name = s
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned();
+        let d = dst.join(&name);
+        if d.exists() {
             continue;
         }
         std::fs::create_dir_all(&dst)?;
