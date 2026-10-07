@@ -1218,7 +1218,8 @@ plugins, edit everything a user can edit, and make beats.
 
 - Projects: `project_list`, `project_new` (from template), `project_open`,
   `project_save`, `project_info`.
-- Transport: `play`, `stop`, `set_tempo`, `set_key`, `set_loop`.
+- Channels and sounds: `sound_search` (by query, role, source, genre; pages),
+  `sound_add` (by id, from every source in the Sounds pane),
 - Channels and sounds: `sound_search` (by role, genre, tags),
   `channel_add` (preset or instrument), `channel_remove`,
   `channel_set_macro`, `preset_load`.
@@ -1569,7 +1570,7 @@ Tools are designed for few round trips and small payloads:
 - `project_summary`: one compact text block (tempo, key, channels with
   instrument and track, patterns with row grids, song layout), sized for
   an LLM context.
-- `kit_add { pack, kit }`, `sound_search { role, genre }`, `channel_add`
+- `sound_search { query, role, source, genre, offset, limit }`, `sound_add { id, track? }`, `kit_add { pack, kit }`, `channel_add`
   with preset names, `mix_set` batching mixer changes.
 - `activity_set { text, focus? }` (18.2).
 - Every tool that edits returns the new revision and a compact diff, so

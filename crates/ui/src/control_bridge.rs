@@ -268,6 +268,10 @@ impl Bridge {
         self.server.agents_enabled()
     }
 
+    pub fn socket_path(&self) -> &std::path::Path {
+        self.server.socket_path()
+    }
+
     pub fn shutdown(self) {
         if let Ok(s) = Rc::try_unwrap(self.server) {
             s.shutdown();
