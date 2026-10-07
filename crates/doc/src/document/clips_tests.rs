@@ -155,10 +155,9 @@ fn overlap_on_a_row_names_the_clips() {
             },
         ) {
             EditError::Invalid {
-                reason: ValidationError::Overlap { what, id },
+                reason: ValidationError::Overlap { a: new, b },
             } => {
-                assert_eq!(id, a.0);
-                assert!(what.contains(&a.0.to_string()), "{what}");
+                assert_eq!((new, b), (0, a.0), "0 is the clip being added");
             }
             e => panic!("{e:?}"),
         }

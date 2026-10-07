@@ -7,7 +7,7 @@
 //!   content_len`. Edits keep that mapping: splitting and start-resizing
 //!   adjust `offset` modulo the content length.
 //! - Overlap on a row is an `Invalid(Overlap)` error naming both clip ids
-//!   (`new clip` stands for a clip that has no id yet). Nothing is
+//!   (`a` is 0 for a clip that has no id yet). Nothing is
 //!   clamped, moved aside, or trimmed.
 //! - `created` order: new contents first (in the order of their first
 //!   source clip), then new clips (in the order of the request). Notes of
@@ -38,11 +38,10 @@ use super::{Work, bad, channel_idx, not_found, out_of_range, pattern_idx, too_ma
 type Placement = (ChannelId, u32, u32, Option<ClipId>);
 
 fn overlap(a: Option<ClipId>, b: ClipId) -> EditError {
-    let first = a.map_or("new clip".to_string(), |id| format!("clip {}", id.0));
     EditError::Invalid {
         reason: ValidationError::Overlap {
-            what: format!("{first} and clip {}", b.0),
-            id: b.0,
+            a: a.map_or(0, |id| id.0),
+            b: b.0,
         },
     }
 }
