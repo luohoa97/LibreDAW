@@ -1471,6 +1471,15 @@ range checks.
 
 ## Changelog
 
+### Amendment 12 (2026-10-07, orchestrator, under the owner's HIG direction)
+
+The UI follows `docs/ui-design.md`. Its section 0 decisions are accepted:
+transport bar under the header bar (not in it); Space is play/stop and
+Return toggles steps and notes; HIG capitalization; "Expert Window" for a
+plugin's own GUI; views named Pattern, Song, Mixer (Steps and Notes are
+the two halves of Pattern); libadwaita 1.5 widgets only for now;
+user-initiated file choosers are allowed modals.
+
 ### Amendment 11 (2026-10-07, owner)
 
 Playlist moved from Milestone C to B; audio clips added to C; automation
