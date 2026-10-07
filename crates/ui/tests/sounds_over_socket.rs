@@ -108,7 +108,7 @@ fn talk(rig: &Rig, requests: Vec<String>) -> Vec<String> {
 }
 
 fn search(q: &str) -> String {
-    format!(r#"{{"id":1,"body":{{"op":"sound_search",{q}}}}}"#)
+    format!(r#"{{"id":1,"body":{{"op":"sound_search","tags":[],{q}}}}}"#)
 }
 
 /// The first `"id":"<prefix>..."` in a reply.
