@@ -591,6 +591,7 @@ impl Runtime {
                     self.seq.set_pattern_id(pattern);
                 }
             }
+            EngineCommand::SetTransportMode { .. } => {}
             EngineCommand::Preview {
                 channel,
                 key,
@@ -754,6 +755,7 @@ impl Runtime {
                     }
                     self.track_dirty[t] = true;
                 }
+                InstrumentC::Sampler | InstrumentC::Bass808 { .. } => {}
                 InstrumentC::Clap => {
                     let ps = PluginSlot::Instrument(cs);
                     if !self.plug.attached(ps) {

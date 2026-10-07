@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! Slot assignment and the immutable compiled state (SPEC 4.1).
 
-use protocol::consts::{MAX_CHANNELS, TRACK_SLOTS};
+use protocol::consts::{MAX_CHANNELS, MAX_CHOKE_GROUP, MAX_SENDS, TRACK_SLOTS};
 use protocol::engine::{ChannelSlot, SlotGen, TrackSlot};
 use protocol::ids::{ChannelId, PatternId, TrackId};
 use protocol::model::{Instrument, Project, Wave};
@@ -189,12 +189,36 @@ pub enum InstrumentC {
     },
     /// A CLAP instrument; the plugin sits in `PluginSlot::Instrument`.
     Clap,
+    /// Sample playback (15.1); silent until the sampler lands.
+    Sampler,
+    /// 808 bass (15.2); silent until the 808 lands.
+    Bass808 { mono: bool },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ChannelC {
     pub instrument: InstrumentC,
     pub track: TrackSlot,
+    /// 0 = none, else 1 to 16 (15.1).
+    pub choke_group: u8,
+    /// Key a step plays; the pitched sampler tracks pitch from it.
+    pub root_key: u8,
+}
+
+/// A send from a track to another, as the audio thread uses it (15.5).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SendC {
+    /// Target track slot.
+    pub to: u16,
+    pub pre_fader: bool,
+    /// Position in `Track::sends`, for `send_control`.
+    pub index: u8,
+}
+
+/// Per track routing and effects.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct TrackC {
+    pub sends: Vec<SendC>,
 }
 
 /// A note ready for the audio thread. `end` is clamped to the pattern end.
@@ -229,6 +253,12 @@ pub struct Compiled {
     pub track_gen: [SlotGen; TRACK_SLOTS],
     pub channels: Vec<Option<ChannelC>>,
     pub tracks_present: [bool; TRACK_SLOTS],
+    /// Indexed by track slot.
+    pub tracks: Vec<TrackC>,
+    /// Present track slots, every track after the tracks that feed it
+    /// (sends, sidechain keys, the implicit edge to the master); the master
+    /// is last (17.2).
+    pub order: Vec<u16>,
     /// Sorted by id.
     pub patterns: Vec<PatternC>,
 }
@@ -252,12 +282,24 @@ pub fn compile(project: &Project, slots: &Slots, sample_rate: f64) -> Box<Compil
         track_gen: [0; TRACK_SLOTS],
         channels: vec![None; MAX_CHANNELS],
         tracks_present: [false; TRACK_SLOTS],
+        tracks: vec![TrackC::default(); TRACK_SLOTS],
+        order: Vec::new(),
         patterns: Vec::with_capacity(project.patterns.len()),
     };
     for t in &project.tracks {
         if let Some(s) = slots.track_slot(t.id) {
             c.track_gen[s.0 as usize] = slots.track_gen(s);
             c.tracks_present[s.0 as usize] = true;
+            let tc = &mut c.tracks[s.0 as usize];
+            for (index, snd) in t.sends.iter().enumerate().take(MAX_SENDS) {
+                if let Some(to) = slots.track_slot(snd.to) {
+                    tc.sends.push(SendC {
+                        to: to.0,
+                        pre_fader: snd.pre_fader,
+                        index: index as u8,
+                    });
+                }
+            }
         }
     }
     for ch in &project.channels {
@@ -273,8 +315,19 @@ pub fn compile(project: &Project, slots: &Slots, sample_rate: f64) -> Box<Compil
                 osc2: p.osc2.wave,
             },
             Instrument::Clap(_) => InstrumentC::Clap,
+            Instrument::Sampler(_) => InstrumentC::Sampler,
+            Instrument::Bass808(b) => InstrumentC::Bass808 { mono: b.mono },
         };
-        c.channels[i] = Some(ChannelC { instrument, track });
+        c.channels[i] = Some(ChannelC {
+            instrument,
+            track,
+            choke_group: if ch.choke_group <= MAX_CHOKE_GROUP {
+                ch.choke_group
+            } else {
+                0
+            },
+            root_key: ch.root_key,
+        });
     }
     for p in &project.patterns {
         let len = p.length_ticks().max(1);
@@ -311,12 +364,55 @@ pub fn compile(project: &Project, slots: &Slots, sample_rate: f64) -> Box<Compil
         });
     }
     c.patterns.sort_by_key(|p| p.id);
+    c.order = topo_order(&c);
     Box::new(c)
+}
+
+/// Processing order of the present tracks (17.2): every track comes after
+/// the tracks that feed it, the master last. Edges: sends, and the implicit
+/// track-to-master edge. `apply()` rejects cycles; a cycle that gets here
+/// anyway is broken by slot order instead of dropping tracks.
+pub fn topo_order(c: &Compiled) -> Vec<u16> {
+    let present: Vec<usize> = (1..TRACK_SLOTS).filter(|&t| c.tracks_present[t]).collect();
+    let mut indeg = [0u32; TRACK_SLOTS];
+    for &t in &present {
+        for s in &c.tracks[t].sends {
+            let to = s.to as usize;
+            if to != 0 && to != t && c.tracks_present[to] {
+                indeg[to] += 1;
+            }
+        }
+    }
+    let mut done = [false; TRACK_SLOTS];
+    let mut out = Vec::with_capacity(present.len() + 1);
+    while out.len() < present.len() {
+        // Lowest slot with no unprocessed feeder; on a cycle, lowest left.
+        let next = present
+            .iter()
+            .copied()
+            .find(|&t| !done[t] && indeg[t] == 0)
+            .or_else(|| present.iter().copied().find(|&t| !done[t]))
+            .expect("a track is left");
+        done[next] = true;
+        out.push(next as u16);
+        for s in &c.tracks[next].sends {
+            let to = s.to as usize;
+            if to != 0 && to != next && c.tracks_present[to] && indeg[to] > 0 {
+                indeg[to] -= 1;
+            }
+        }
+    }
+    if c.tracks_present[0] {
+        out.push(0);
+    }
+    out
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use protocol::model::{Mix, Send, Track};
+    use std::sync::Arc;
 
     #[test]
     fn slots_assign_lowest_free_and_bump_generation() {
@@ -345,5 +441,59 @@ mod tests {
             assert_eq!(s.alloc_track(TrackId(i)).unwrap().0 as u32, i);
         }
         assert_eq!(s.alloc_track(TrackId(99)), Err(SlotsFull));
+    }
+
+    fn rtrack(id: u32, sends: &[(u32, bool)]) -> Arc<Track> {
+        Arc::new(Track {
+            id: TrackId(id),
+            name: format!("t{id}"),
+            mix: Mix::default(),
+            inserts: Vec::new(),
+            sends: sends
+                .iter()
+                .map(|&(to, pre)| Send {
+                    to: TrackId(to),
+                    level_db: -6.0,
+                    pre_fader: pre,
+                })
+                .collect(),
+        })
+    }
+
+    fn compiled_of(tracks: Vec<Arc<Track>>) -> Box<Compiled> {
+        let mut p = Project::empty();
+        p.tracks.extend(tracks);
+        let mut slots = Slots::new();
+        slots.sync(&p).unwrap();
+        compile(&p, &slots, 48000.0)
+    }
+
+    #[test]
+    fn sends_come_before_their_return_and_master_is_last() {
+        // Track 1 sends to return 3 and 2; track 2 is a return that sends to 3.
+        let c = compiled_of(vec![
+            rtrack(1, &[(2, false), (3, true)]),
+            rtrack(2, &[(3, false)]),
+            rtrack(3, &[]),
+        ]);
+        assert_eq!(c.order, vec![1, 2, 3, 0]);
+        assert_eq!(c.tracks[1].sends.len(), 2);
+        assert_eq!(c.tracks[1].sends[1].to, 3);
+        assert!(c.tracks[1].sends[1].pre_fader);
+        assert_eq!(c.tracks[1].sends[1].index, 1);
+    }
+
+    #[test]
+    fn order_respects_edges_against_slot_order() {
+        // The return has the lowest slot, the source the highest.
+        let c = compiled_of(vec![rtrack(1, &[]), rtrack(2, &[(1, false)])]);
+        assert_eq!(c.order, vec![2, 1, 0]);
+    }
+
+    #[test]
+    fn a_cycle_still_processes_every_track() {
+        let c = compiled_of(vec![rtrack(1, &[(2, false)]), rtrack(2, &[(1, false)])]);
+        assert_eq!(c.order.len(), 3);
+        assert_eq!(*c.order.last().unwrap(), 0);
     }
 }
