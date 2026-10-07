@@ -21,6 +21,7 @@ use protocol::ids::{ChannelId, PatternId, TrackId};
 use crate::history::{Applied, Author, HistoryError, Scope, Submitted};
 use crate::persist::ViewState;
 use crate::session::Session;
+use crate::settings::Settings;
 
 /// What the user picked. Not part of the document and not undoable (6).
 pub struct UiState {
@@ -33,6 +34,10 @@ pub struct UiState {
     pub playing: bool,
     /// Why audio is off, if it is.
     pub audio_error: Option<String>,
+    /// The preview note that is sounding now, if any.
+    pub preview_held: Option<(ChannelId, u8)>,
+    /// The Play button is suggested until the first play of a new project.
+    pub played_once: bool,
 }
 
 /// How the window reads and restores its view (`.view.toml`).
@@ -56,14 +61,24 @@ pub struct App {
     listeners: RefCell<Vec<Rc<dyn Fn()>>>,
     toaster: RefCell<Option<Toaster>>,
     notifying: Cell<bool>,
+    pub settings: RefCell<Settings>,
+    preview_timer: RefCell<Option<gtk::glib::SourceId>>,
 }
 
 impl App {
     pub fn new(session: Session) -> Rc<App> {
+        App::with_dirs(session, crate::files::real_dirs())
+    }
+
+    /// As `new`, with explicit directories (tests use a temp dir).
+    pub fn with_dirs(session: Session, dirs: crate::persist::Dirs) -> Rc<App> {
+        let settings = Settings::read(&dirs);
         let app = Rc::new(App {
             session: RefCell::new(session),
             tasks: crate::tasks::Tasks::new(),
-            dirs: crate::files::real_dirs(),
+            settings: RefCell::new(settings),
+            preview_timer: RefCell::new(None),
+            dirs,
             session_id: crate::persist::session_id(
                 std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
@@ -80,6 +95,8 @@ impl App {
                 track: TrackId::MASTER,
                 playing: false,
                 audio_error: None,
+                preview_held: None,
+                played_once: false,
             }),
             listeners: RefCell::new(Vec::new()),
             toaster: RefCell::new(None),
@@ -317,11 +334,93 @@ impl App {
         }
     }
 
+    // ---- note preview (owner request, SPEC 17.2 audition) ----
+
+    /// Starts a preview note on `channel`, releasing the one that sounds.
+    /// Does nothing when "Preview Notes" is off or the channel has no slot.
+    /// Returns whether a note was started.
+    pub fn preview_on(&self, channel: ChannelId, key: u8, vel: u8) -> bool {
+        if !self.settings.borrow().preview_notes {
+            return false;
+        }
+        self.preview_off();
+        let slot = self
+            .session
+            .borrow()
+            .slots
+            .channel_slot(channel)
+            .map(|(s, _)| s);
+        let Some(slot) = slot else { return false };
+        let sent = self
+            .session
+            .borrow_mut()
+            .link
+            .command(EngineCommand::Preview {
+                channel: slot,
+                key,
+                vel,
+                on: true,
+            })
+            .is_ok();
+        if sent {
+            self.ui.borrow_mut().preview_held = Some((channel, key));
+        }
+        sent
+    }
+
+    /// Releases the sounding preview note, if any.
+    pub fn preview_off(&self) {
+        if let Some(id) = self.preview_timer.borrow_mut().take() {
+            id.remove();
+        }
+        let held = self.ui.borrow_mut().preview_held.take();
+        let Some((channel, key)) = held else { return };
+        let slot = self
+            .session
+            .borrow()
+            .slots
+            .channel_slot(channel)
+            .map(|(s, _)| s);
+        if let Some(slot) = slot {
+            let _ = self
+                .session
+                .borrow_mut()
+                .link
+                .command(EngineCommand::Preview {
+                    channel: slot,
+                    key,
+                    vel: 0,
+                    on: false,
+                });
+        }
+    }
+
+    /// A short preview: on now, released after `hold_ms`.
+    pub fn preview_pulse(self: &Rc<App>, channel: ChannelId, key: u8, vel: u8, hold_ms: u64) {
+        if !self.preview_on(channel, key, vel) {
+            return;
+        }
+        let me = Rc::downgrade(self);
+        let id = gtk::glib::timeout_add_local_once(
+            std::time::Duration::from_millis(hold_ms),
+            move || {
+                if let Some(a) = me.upgrade() {
+                    // The timer fired: forget its id before releasing.
+                    a.preview_timer.borrow_mut().take();
+                    a.preview_off();
+                }
+            },
+        );
+        *self.preview_timer.borrow_mut() = Some(id);
+    }
+
     pub fn play(&self) {
         self.send_pattern();
         let r = self.session.borrow_mut().link.command(EngineCommand::Play);
         if r.is_ok() {
-            self.ui.borrow_mut().playing = true;
+            let mut ui = self.ui.borrow_mut();
+            ui.playing = true;
+            ui.played_once = true;
         } else {
             self.toast("The audio engine is busy; try again");
         }
@@ -359,5 +458,98 @@ impl App {
 
     pub fn current_channel(&self) -> Option<ChannelId> {
         self.ui.borrow().channel
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::document::Document;
+    use crate::engine_adapter::EngineLink;
+    use crate::persist::Dirs;
+    use crate::registry::Registry;
+    use protocol::edit::NewInstrument;
+    use protocol::model::SynthParams;
+
+    fn app() -> Rc<App> {
+        let dir = std::env::temp_dir().join(format!("ldaw-app-{}", std::process::id()));
+        let dirs = Dirs {
+            music: dir.join("m"),
+            data: dir.join("d"),
+            config: dir.join("c"),
+        };
+        let s = Session::new(
+            Document::new(),
+            true,
+            EngineLink::stub(48000.0),
+            Registry::new(Vec::new(), 48000.0),
+        );
+        App::with_dirs(s, dirs)
+    }
+
+    fn add_channel(a: &Rc<App>) -> ChannelId {
+        let r = a
+            .edit(vec![Edit::AddChannel {
+                name: "c".into(),
+                instrument: NewInstrument::Synth {
+                    params: SynthParams::default(),
+                },
+                root_key: 60,
+                track: TrackId::MASTER,
+            }])
+            .expect("edit");
+        ChannelId(r.created[0])
+    }
+
+    fn previews(a: &App) -> Vec<(u8, bool)> {
+        a.session
+            .borrow()
+            .link
+            .commands
+            .iter()
+            .filter_map(|c| match c {
+                EngineCommand::Preview { key, on, .. } => Some((*key, *on)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn preview_sends_on_then_off() {
+        let a = app();
+        let c = add_channel(&a);
+        assert!(a.preview_on(c, 60, 100));
+        assert_eq!(a.ui.borrow().preview_held, Some((c, 60)));
+        a.preview_off();
+        assert_eq!(previews(&a), vec![(60, true), (60, false)]);
+        assert_eq!(a.ui.borrow().preview_held, None);
+        // Releasing twice sends nothing more.
+        a.preview_off();
+        assert_eq!(previews(&a).len(), 2);
+    }
+
+    #[test]
+    fn a_new_preview_releases_the_old_one() {
+        let a = app();
+        let c = add_channel(&a);
+        a.preview_on(c, 60, 100);
+        a.preview_on(c, 64, 100);
+        assert_eq!(previews(&a), vec![(60, true), (60, false), (64, true)]);
+    }
+
+    #[test]
+    fn preview_can_be_switched_off() {
+        let a = app();
+        let c = add_channel(&a);
+        a.settings.borrow_mut().preview_notes = false;
+        assert!(!a.preview_on(c, 60, 100));
+        assert!(previews(&a).is_empty());
+    }
+
+    #[test]
+    fn preview_of_a_missing_channel_is_ignored() {
+        let a = app();
+        assert!(!a.preview_on(ChannelId(999), 60, 100));
+        assert!(previews(&a).is_empty());
     }
 }

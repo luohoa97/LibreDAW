@@ -39,6 +39,10 @@ impl Dirs {
         self.config.join("libredaw").join("last.toml")
     }
 
+    pub fn settings_file(&self) -> PathBuf {
+        self.config.join("libredaw").join("settings.toml")
+    }
+
     /// First free `Untitled <n>.ldaw` in the projects folder.
     pub fn next_untitled(&self) -> PathBuf {
         let root = self.projects();
@@ -73,7 +77,7 @@ pub struct LastSession {
     pub note: Option<String>,
 }
 
-fn quote(s: &str) -> String {
+pub(crate) fn quote(s: &str) -> String {
     let mut o = String::from("\"");
     for c in s.chars() {
         match c {
@@ -88,7 +92,7 @@ fn quote(s: &str) -> String {
     o
 }
 
-fn unquote(s: &str) -> Option<String> {
+pub(crate) fn unquote(s: &str) -> Option<String> {
     let s = s.trim().strip_prefix('"')?.strip_suffix('"')?;
     let mut o = String::new();
     let mut it = s.chars();
@@ -107,7 +111,7 @@ fn unquote(s: &str) -> Option<String> {
     Some(o)
 }
 
-fn key_values(text: &str) -> Vec<(&str, &str)> {
+pub(crate) fn key_values(text: &str) -> Vec<(&str, &str)> {
     text.lines()
         .filter_map(|l| {
             let l = l.trim();

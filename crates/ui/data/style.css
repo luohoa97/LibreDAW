@@ -1,0 +1,74 @@
+/* SPDX-License-Identifier: GPL-3.0-or-later */
+/* LibreDAW style additions. Only what libadwaita has no class for.
+   Colors are libadwaita named colors; nothing here is a hex value. */
+
+/* Probes read by palette.rs. They take no space and are never painted. */
+.ldaw-probes {
+  min-width: 0;
+  min-height: 0;
+  opacity: 0;
+}
+.ldaw-probes > box { min-width: 0; min-height: 0; }
+.ldaw-probe-view-bg { color: @view_bg_color; }
+.ldaw-probe-view-fg { color: @view_fg_color; }
+.ldaw-probe-window-bg { color: @window_bg_color; }
+.ldaw-probe-window-fg { color: @window_fg_color; }
+.ldaw-probe-card-bg { color: @card_bg_color; }
+.ldaw-probe-accent-bg { color: @accent_bg_color; }
+.ldaw-probe-accent-fg { color: @accent_fg_color; }
+.ldaw-probe-accent { color: @accent_color; }
+.ldaw-probe-success { color: @success_color; }
+.ldaw-probe-warning { color: @warning_color; }
+.ldaw-probe-error { color: @error_color; }
+.ldaw-probe-error-bg { color: @error_bg_color; }
+
+/* Channel identity colors: tone 5 on light, tone 3 on dark. */
+.ldaw-probe-ch0 { color: @blue_5; }
+.ldaw-probe-ch1 { color: @green_5; }
+.ldaw-probe-ch2 { color: @yellow_5; }
+.ldaw-probe-ch3 { color: @orange_5; }
+.ldaw-probe-ch4 { color: @red_5; }
+.ldaw-probe-ch5 { color: @purple_5; }
+.ldaw-probe-ch6 { color: @brown_5; }
+.ldaw-probe-ch7 { color: @blue_3; }
+.ldaw-probe-ch8 { color: @purple_3; }
+.ldaw-probe-ch9 { color: @red_3; }
+.ldaw-probes.dark .ldaw-probe-ch0 { color: @blue_3; }
+.ldaw-probes.dark .ldaw-probe-ch1 { color: @green_3; }
+.ldaw-probes.dark .ldaw-probe-ch2 { color: @yellow_3; }
+.ldaw-probes.dark .ldaw-probe-ch3 { color: @orange_3; }
+.ldaw-probes.dark .ldaw-probe-ch4 { color: @red_3; }
+.ldaw-probes.dark .ldaw-probe-ch5 { color: @purple_3; }
+.ldaw-probes.dark .ldaw-probe-ch6 { color: @brown_3; }
+.ldaw-probes.dark .ldaw-probe-ch7 { color: @blue_1; }
+.ldaw-probes.dark .ldaw-probe-ch8 { color: @purple_1; }
+.ldaw-probes.dark .ldaw-probe-ch9 { color: @red_1; }
+
+/* Transport bar: the position readout uses tabular figures. */
+.ldaw-position {
+  font-feature-settings: "tnum";
+  font-weight: bold;
+}
+
+/* Mixer strips are cards with a color bar on top. */
+.ldaw-strip { padding: 0; }
+.ldaw-strip-bar { min-height: 4px; border-radius: 6px 6px 0 0; }
+.ldaw-strip.silenced scale, .ldaw-strip.silenced meter { opacity: 0.4; }
+.ldaw-strip.soloed { outline: 2px solid @accent_color; outline-offset: -2px; }
+.ldaw-fader trough { min-width: 6px; }
+.ldaw-fader slider { min-height: 20px; min-width: 20px; }
+
+/* Channel header rows in the step section. */
+.ldaw-channel-color { min-width: 4px; border-radius: 2px; }
+.ldaw-channel-row.muted label.ldaw-channel-name { opacity: 0.55; }
+.ldaw-channel-row.selected { background-color: alpha(@accent_bg_color, 0.18); }
+
+/* Touch sizes (bp-narrow). */
+window.touch .toolbar button { min-height: 44px; min-width: 44px; }
+
+/* Custom widgets with one focus stop draw a ring from the stylesheet. */
+knob:focus-visible {
+  outline: 2px solid alpha(@accent_color, 0.8);
+  outline-offset: 2px;
+  border-radius: 50%;
+}
