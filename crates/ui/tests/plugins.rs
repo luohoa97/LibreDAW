@@ -256,3 +256,56 @@ fn unknown_plugin_id_gives_a_message_and_keeps_the_reference() {
     assert_eq!(s.document().project.tracks[0].inserts.len(), 1);
     assert!(s.registry.is_empty());
 }
+
+/// The picker's path with the real Surge XT Flatpak extension: choosing a
+/// sound loads it and the document keeps the plugin state, so the saved
+/// project plays the sound without the preset file.
+#[test]
+#[ignore = "needs the Surge XT Flatpak extension"]
+fn a_chosen_sound_is_loaded_and_its_state_is_in_the_document() {
+    let catalog = ui::plugin_adapter::scan();
+    let id = "org.surge-synth-team.surge-xt";
+    assert!(catalog.iter().any(|d| d.id == id), "Surge XT not installed");
+    let state_of = |preset: Option<&str>| {
+        let mut s = Session::new(
+            Document::new(),
+            true,
+            EngineLink::stub(48000.0),
+            Registry::new(catalog.clone(), 48000.0),
+        );
+        let r = s
+            .submit(
+                Author::User,
+                None,
+                vec![Edit::AddChannel {
+                    name: "Sound".into(),
+                    instrument: protocol::edit::NewInstrument::Clap {
+                        plugin_id: id.into(),
+                        preset: preset.map(str::to_string),
+                    },
+                    root_key: 36,
+                    track: TrackId::MASTER,
+                }],
+                0,
+            )
+            .unwrap();
+        assert!(matches!(r, Submitted::Applied(_)));
+        assert!(s.take_messages().is_empty(), "no load error");
+        if preset.is_some() {
+            let Instrument::Clap(c) = &s.document().project.channels[0].instrument else {
+                panic!()
+            };
+            assert!(c.state_bytes.is_some(), "captured before any save");
+        }
+        let doc = s.snapshot_for_save();
+        let Instrument::Clap(c) = &doc.project.channels[0].instrument else {
+            panic!()
+        };
+        c.state_bytes.clone().expect("state captured")
+    };
+    assert_ne!(
+        state_of(Some("Basses/Sub 1.fxp")),
+        state_of(None),
+        "the chosen sound is in the state"
+    );
+}

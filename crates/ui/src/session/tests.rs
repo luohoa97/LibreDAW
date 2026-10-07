@@ -409,3 +409,31 @@ fn rejected_batch_reports_the_edit_index_and_changes_nothing() {
     assert_eq!(s.document().revision, rev);
     assert_eq!(s.link.controls.tempo(), 120.0);
 }
+
+#[test]
+fn a_new_plugin_instrument_with_a_chosen_sound_is_kept_even_when_it_cannot_load() {
+    let mut s = session();
+    let add = |preset: Option<&str>| Edit::AddChannel {
+        name: "Sub 1".into(),
+        instrument: NewInstrument::Clap {
+            plugin_id: "not.installed".into(),
+            preset: preset.map(str::to_string),
+        },
+        root_key: 36,
+        track: TrackId::MASTER,
+    };
+    assert_eq!(
+        wanted_presets(&[add(Some("Basses/Sub 1.fxp")), add(None)]),
+        vec![Some("Basses/Sub 1.fxp".to_string()), None]
+    );
+    user(&mut s, vec![add(Some("Basses/Sub 1.fxp"))]);
+    let m = s.take_messages();
+    assert!(
+        m.iter().any(|m| m.contains("Could not load the sound")),
+        "{m:?}"
+    );
+    let Instrument::Clap(r) = &s.document().project.channels[0].instrument else {
+        panic!("a plugin instrument");
+    };
+    assert_eq!(r.plugin_id, "not.installed");
+}

@@ -122,6 +122,8 @@ pub struct InstrumentArg {
     /// Built-in synth settings merged over the defaults.
     pub synth: Option<Value>,
     pub plugin_id: Option<String>,
+    /// A factory sound of the plugin, from `sounds` in the plugins tool.
+    pub preset: Option<String>,
     /// A sample already in the project (its hash, see `inspect`).
     pub sample: Option<String>,
     pub mode: Option<SampleMode>,
@@ -179,6 +181,12 @@ fn copy_sound(src: &Instrument, id: ChannelId) -> Vec<Edit> {
     }
 }
 
+/// The picker entry an instrument argument names, if any: its key and level
+/// suit that sound.
+fn sound_of(a: &InstrumentArg) -> Option<&'static plugin_host::sounds::Sound> {
+    plugin_host::sounds::find(a.plugin_id.as_deref()?, a.preset.as_deref()?)
+}
+
 fn new_instrument(
     project: &Project,
     a: &InstrumentArg,
@@ -218,6 +226,7 @@ fn new_instrument(
     };
     only("synth", a.synth.is_none() || kind == "synth")?;
     only("plugin_id", a.plugin_id.is_none() || kind == "plugin")?;
+    only("preset", a.preset.is_none() || kind == "plugin")?;
     only("sample", a.sample.is_none() || kind == "sampler")?;
     only("mode", a.mode.is_none() || kind == "sampler")?;
     only("mono", a.mono.is_none() || kind == "808")?;
@@ -268,9 +277,9 @@ fn new_instrument(
             (
                 NewInstrument::Clap {
                     plugin_id,
-                    preset: None,
+                    preset: a.preset.clone(),
                 },
-                a.root_key.unwrap_or(60),
+                a.root_key.unwrap_or(sound_of(a).map_or(60, |s| s.note)),
                 Some("instance"),
             )
         }
@@ -402,6 +411,7 @@ pub fn instruments_add(project: &Project, ids: &mut IdGen, list: &[InstrumentArg
                 Some(*t)
             }
         };
+        let own_track = track.is_none();
         let track = match track {
             Some(t) => t,
             None => {
@@ -426,6 +436,18 @@ pub fn instruments_add(project: &Project, ids: &mut IdGen, list: &[InstrumentArg
         let ch = ChannelId(ids.alloc());
         if extra.is_some() {
             ids.alloc();
+        }
+        if let Some(s) = sound_of(a)
+            && own_track
+            && s.gain_db != 0.0
+        {
+            b.push(
+                format!("{label}: turn the loud sound down"),
+                Edit::SetTrackMix {
+                    track,
+                    value: protocol::edit::MixValue::VolumeDb(s.gain_db),
+                },
+            );
         }
         if let Some(src) = a.copy_of.and_then(|s| project.channel(s)) {
             for e in copy_sound(&src.instrument, ch) {
@@ -1874,6 +1896,53 @@ mod tests {
 
     fn arg(v: Value) -> InstrumentArg {
         serde_json::from_value(v).unwrap()
+    }
+
+    #[test]
+    fn a_plugin_sound_is_passed_on_with_its_key_and_level() {
+        let p = project();
+        let mut ids = IdGen::new(&p, None);
+        let id = "org.surge-synth-team.surge-xt";
+        let b = instruments_add(
+            &p,
+            &mut ids,
+            &[
+                arg(json!({"name": "Lead", "plugin_id": id, "preset": "Leads/Classic Lead 1.fxp"})),
+                arg(json!({"name": "Sub", "plugin_id": id, "preset": "Basses/Sub 1.fxp"})),
+            ],
+        )
+        .unwrap();
+        let clap = |e: &Edit| match e {
+            Edit::AddChannel {
+                instrument: NewInstrument::Clap { preset, .. },
+                root_key,
+                ..
+            } => Some((preset.clone(), *root_key)),
+            _ => None,
+        };
+        let added: Vec<_> = b.edits.iter().filter_map(clap).collect();
+        assert_eq!(
+            added,
+            vec![
+                (Some("Leads/Classic Lead 1.fxp".into()), 60),
+                (Some("Basses/Sub 1.fxp".into()), 36)
+            ]
+        );
+        // Only the loud sound turns its new track down.
+        let turned: Vec<_> = b
+            .edits
+            .iter()
+            .filter(|e| matches!(e, Edit::SetTrackMix { .. }))
+            .collect();
+        assert_eq!(turned.len(), 1);
+        assert!(
+            instruments_add(
+                &p,
+                &mut ids,
+                &[arg(json!({"name": "x", "kind": "808", "preset": "a"}))]
+            )
+            .is_err()
+        );
     }
 
     #[test]

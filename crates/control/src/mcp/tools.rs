@@ -771,12 +771,12 @@ pub fn definitions() -> Vec<Value> {
         tool(
             "instruments_add",
             &format!(
-                "Add instruments (rows) in ONE undo group, each optionally with its first clip already filled, so a whole drum kit plus an 808 line is one call. Per instrument: name; kind = synth (default, built-in synth; `synth` overrides its settings, for example {{\"osc1\":{{\"wave\":\"sine\"}},\"cutoff_hz\":400}}), 808 (sub bass with pitch drop; `mono` default true), sampler (`sample` = a sample hash already in the project; for pack sounds use kit_add), or plugin (`plugin_id` from plugins; first load needs the user's approval); or copy_of = an instrument id to copy its sound. root_key: the key a step plays (default 60, 36 for 808). track: \"new\" (default, its own mixer track), \"master\", or a track id. clip: {{start, length, grid or notes}} for its first clip. Returns per instrument its instrument, track, clip and content ids. {UNITS}"
+                "Add instruments (rows) in ONE undo group, each optionally with its first clip already filled, so a whole drum kit plus an 808 line is one call. Per instrument: name; kind = synth (default, built-in synth; `synth` overrides its settings, for example {{\"osc1\":{{\"wave\":\"sine\"}},\"cutoff_hz\":400}}), 808 (sub bass with pitch drop; `mono` default true), sampler (`sample` = a sample hash already in the project; for pack sounds use kit_add), or plugin (`plugin_id` from plugins; `preset` = a sound from the `sounds` list of plugins, for example a Pad, loaded into the new instrument; first load needs the user's approval); or copy_of = an instrument id to copy its sound. root_key: the key a step plays (default 60, 36 for 808). track: \"new\" (default, its own mixer track), \"master\", or a track id. clip: {{start, length, grid or notes}} for its first clip. Returns per instrument its instrument, track, clip and content ids. {UNITS}"
             ),
             json!({"instruments": {"type": "array", "minItems": 1, "maxItems": 64, "items": {"type": "object", "required": ["name"], "additionalProperties": false, "properties": {
                 "name": {"type": "string", "maxLength": 128},
                 "kind": {"type": "string", "enum": ["synth", "808", "sampler", "plugin"]},
-                "synth": {"type": "object"}, "plugin_id": {"type": "string"}, "sample": {"type": "string"},
+                "synth": {"type": "object"}, "plugin_id": {"type": "string"}, "preset": {"type": "string", "maxLength": 200}, "sample": {"type": "string"},
                 "mode": {"type": "string", "enum": ["one_shot", "pitched"]}, "mono": {"type": "boolean"},
                 "root_key": {"type": "integer", "minimum": 0, "maximum": 127},
                 "track": {"type": ["integer", "string"], "description": "\"new\" (default), \"master\", or a mixer track id."},
@@ -1037,7 +1037,7 @@ pub fn definitions() -> Vec<Value> {
         ),
         tool(
             "plugins",
-            "Installed CLAP plugins: plugin_id, name, vendor, instrument or effect, and whether the user already approved agent loading. scan: true scans the plugin folders first.",
+            "Installed CLAP plugins: plugin_id, name, vendor, instrument or effect, and whether the user already approved agent loading. Also `sounds`: the instruments the user picks by role (Bass, 808, Lead, Pad, Keys, Pluck, Bell, Strings, Brass, FX, Arp), each with name, plugin_id and preset; add one with instruments_add (kind plugin, that plugin_id and preset); it needs that plugin installed. scan: true scans the plugin folders first.",
             json!({"scan": {"type": "boolean"}}),
             &[],
         ),

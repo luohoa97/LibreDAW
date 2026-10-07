@@ -11,6 +11,8 @@ name = "control"
 
 [dependencies]
 libredaw-protocol = { path = "../protocol" }
+# The beginner instrument list (roles and factory sounds), data only.
+libredaw-plugin-host = { path = "../plugin-host" }
 # JSON lines on the control socket (SPEC 16.2, 17.1).
 serde_json = "1"
 # Typed tool arguments and suggestion kinds.

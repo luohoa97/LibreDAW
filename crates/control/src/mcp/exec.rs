@@ -820,8 +820,33 @@ impl Exec {
         let body = self.body(RequestBody::PluginList, None)?;
         let mut v = serde_json::to_value(&body).unwrap_or(Value::Null);
         for_agent(&mut v);
+        if let Value::Object(o) = &mut v {
+            o.insert("sounds".into(), instrument_sounds());
+        }
         Ok(ToolOutput::ok(v))
     }
+}
+
+/// The beginner instrument list the user sees in Add Instrument: roles, each
+/// with its factory sounds. An agent adds one with `instruments_add`
+/// (`kind` plugin, this `plugin_id` and `preset`).
+fn instrument_sounds() -> Value {
+    use plugin_host::sounds;
+    let roles: Vec<Value> = sounds::roles()
+        .into_iter()
+        .map(|role| {
+            let items: Vec<Value> = sounds::sounds()
+                .iter()
+                .filter(|s| s.role == role)
+                .filter_map(|s| {
+                    let p = sounds::plugin_of(s)?;
+                    Some(json!({"name": s.label(), "plugin_id": p.clap_id, "preset": s.preset}))
+                })
+                .collect();
+            json!({"role": role, "sounds": items})
+        })
+        .collect();
+    Value::Array(roles)
 }
 
 fn branches_json(current: &str, list: &[BranchInfo]) -> Value {
