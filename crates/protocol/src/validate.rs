@@ -295,6 +295,31 @@ pub fn validate(p: &Project) -> Result<(), ValidationError> {
     if has_cycle(&edges) {
         return Err(ValidationError::RoutingCycle);
     }
+    // Effect pools (17.2).
+    let mut counts = [0usize; 6];
+    for t in &p.tracks {
+        for ins in &t.inserts {
+            if let Insert::Builtin { fx, .. } = ins {
+                counts[fx.kind() as usize] += 1;
+            }
+        }
+    }
+    let pools = [
+        ("EQ", FX_POOL_EQ),
+        ("compressors", FX_POOL_COMPRESSOR),
+        ("saturators", FX_POOL_SATURATOR),
+        ("reverbs", FX_POOL_REVERB),
+        ("delays", FX_POOL_DELAY),
+        ("limiters", FX_POOL_LIMITER),
+    ];
+    for (n, (what, max)) in counts.iter().zip(pools) {
+        if *n > max {
+            return Err(ValidationError::TooMany {
+                what: what.into(),
+                max,
+            });
+        }
+    }
 
     let mut channel_roots = std::collections::HashMap::new();
     for (i, c) in p.channels.iter().enumerate() {
