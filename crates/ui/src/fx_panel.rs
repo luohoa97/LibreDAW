@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! The panel of a built-in effect (SPEC 24.2, 20.6): a pick of ready-made
-//! styles first, an On switch where the effect has a Mix, and the knobs
+//! styles first, an On switch (every effect has one), and the knobs
 //! behind More. It opens as a popover from the effect's name in the mixer
 //! strip. Every change is an edit (`SetFxParam` and friends), so it can be
 //! undone and is heard at once through the parameter table.
@@ -13,9 +13,7 @@ use adw::prelude::*;
 use control::fxpresets;
 use control::mcp::compose::BuildResult;
 use control::mcp::ids::IdGen;
-use protocol::beats::{
-    BuiltinFx, BuiltinFxKind, CompressorParam, DelayParam, ReverbParam, SaturatorParam,
-};
+use protocol::beats::BuiltinFx;
 use protocol::edit::Edit;
 use protocol::ids::{InstanceId, TrackId};
 use protocol::model::Insert;
@@ -24,17 +22,6 @@ use crate::app::App;
 use crate::menus;
 use crate::native_logic::fx_specs;
 use crate::native_panel::ParamPanel;
-
-/// Table index of the Mix knob, for the effects that have one.
-pub fn mix_index(kind: BuiltinFxKind) -> Option<usize> {
-    match kind {
-        BuiltinFxKind::Compressor => Some(CompressorParam::Mix.index()),
-        BuiltinFxKind::Saturator => Some(SaturatorParam::Mix.index()),
-        BuiltinFxKind::Reverb => Some(ReverbParam::Mix.index()),
-        BuiltinFxKind::Delay => Some(DelayParam::Mix.index()),
-        BuiltinFxKind::Eq | BuiltinFxKind::Limiter => None,
-    }
-}
 
 /// The effect, read from the document.
 fn current(app: &App, track: TrackId, inst: InstanceId) -> Option<BuiltinFx> {
@@ -46,48 +33,31 @@ fn current(app: &App, track: TrackId, inst: InstanceId) -> Option<BuiltinFx> {
     })
 }
 
-/// Edits for switching an effect on or off. Off writes Mix 0 (and a
-/// Saturator's output back to 0 dB), so the sound passes unchanged. `kept`
-/// holds the values to bring back.
-pub fn power_edits(
-    track: TrackId,
-    inst: InstanceId,
-    fx: &BuiltinFx,
-    on: bool,
-    kept: &Cell<Option<(f64, f64)>>,
-) -> Vec<Edit> {
-    let Some(mix) = mix_index(fx.kind()) else {
-        return Vec::new();
-    };
-    let set = |param: usize, value: f64| Edit::SetFxParam {
+/// The edit for the On switch: the effect is skipped while it is off
+/// (SetInsertBypass), whatever its settings (24.1).
+pub fn power_edit(track: TrackId, inst: InstanceId, on: bool) -> Edit {
+    Edit::SetInsertBypass {
         track,
         instance: inst,
-        param: param as u8,
-        value,
-    };
-    let out = SaturatorParam::OutputDb.index();
-    let is_sat = fx.kind() == BuiltinFxKind::Saturator;
-    if on {
-        let d = BuiltinFx::new(fx.kind());
-        let (m, o) = kept
-            .take()
-            .unwrap_or((d.param(mix).unwrap_or(1.0), d.param(out).unwrap_or(0.0)));
-        let mut e = vec![set(mix, m)];
-        if is_sat {
-            e.push(set(out, o));
-        }
-        e
-    } else {
-        kept.set(Some((
-            fx.param(mix).unwrap_or(1.0),
-            fx.param(out).unwrap_or(0.0),
-        )));
-        let mut e = vec![set(mix, 0.0)];
-        if is_sat {
-            e.push(set(out, 0.0));
-        }
-        e
+        bypass: !on,
     }
+}
+
+/// Whether the effect is on (not bypassed).
+fn is_on(app: &App, track: TrackId, inst: InstanceId) -> bool {
+    let s = app.session.borrow();
+    s.document()
+        .project
+        .track(track)
+        .and_then(|t| {
+            t.inserts.iter().find_map(|i| match i {
+                Insert::Builtin {
+                    instance, bypass, ..
+                } if *instance == inst => Some(!*bypass),
+                _ => None,
+            })
+        })
+        .unwrap_or(true)
 }
 
 /// Position in the style list: 0 is Custom, then each ready-made style.
@@ -121,7 +91,6 @@ pub fn build(app: &Rc<App>, track: TrackId, inst: InstanceId) -> Option<gtk::Wid
     head.append(&title);
     let power = gtk::Switch::new();
     power.set_valign(gtk::Align::Center);
-    power.set_visible(mix_index(kind).is_some());
     let tip = format!("Turn {name} on or off");
     power.set_tooltip_text(Some(&tip));
     power.update_property(&[gtk::accessible::Property::Label(&tip)]);
@@ -146,7 +115,6 @@ pub fn build(app: &Rc<App>, track: TrackId, inst: InstanceId) -> Option<gtk::Wid
     col.append(&row);
 
     let updating = Rc::new(Cell::new(false));
-    let kept: Rc<Cell<Option<(f64, f64)>>> = Rc::new(Cell::new(None));
 
     let a = app.clone();
     let panel = ParamPanel::new(fx_specs(kind), 0, 3, name, {
@@ -193,9 +161,7 @@ pub fn build(app: &Rc<App>, track: TrackId, inst: InstanceId) -> Option<gtk::Wid
                 .and_then(|c| styles.iter().position(|s| s.name == c.name))
                 .map_or(0, |i| i as u32 + 1);
             pick.set_selected(at);
-            if let Some(m) = mix_index(fx.kind()) {
-                power.set_active(fx.param(m).unwrap_or(0.0) > 0.0);
-            }
+            power.set_active(is_on(&a, track, inst));
             updating.set(false);
         })
     };
@@ -219,17 +185,13 @@ pub fn build(app: &Rc<App>, track: TrackId, inst: InstanceId) -> Option<gtk::Wid
         });
     }
     {
-        let (a, updating, refresh, kept) = (a.clone(), updating.clone(), refresh.clone(), kept);
+        let (a, updating, refresh) = (a.clone(), updating.clone(), refresh.clone());
         power.connect_active_notify(move |s| {
             if updating.get() {
                 return;
             }
-            let Some(fx) = current(&a, track, inst) else {
-                return;
-            };
-            let edits = power_edits(track, inst, &fx, s.is_active(), &kept);
-            if !edits.is_empty() {
-                a.edit(edits);
+            if is_on(&a, track, inst) != s.is_active() {
+                a.edit(vec![power_edit(track, inst, s.is_active())]);
             }
             refresh();
         });
@@ -490,27 +452,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn off_and_on_bring_the_values_back() {
-        let mut fx = BuiltinFx::new(BuiltinFxKind::Saturator);
-        fx.set_param(SaturatorParam::OutputDb.index(), -8.8);
-        fx.set_param(SaturatorParam::Mix.index(), 0.7);
-        let kept = Cell::new(None);
-        let off = power_edits(TrackId(1), InstanceId(2), &fx, false, &kept);
-        assert_eq!(off.len(), 2);
-        let on = power_edits(TrackId(1), InstanceId(2), &fx, true, &kept);
-        match (&on[0], &on[1]) {
-            (Edit::SetFxParam { value: m, .. }, Edit::SetFxParam { value: o, .. }) => {
-                assert_eq!((*m, *o), (0.7, -8.8))
-            }
-            _ => panic!("{on:?}"),
+    fn the_switch_bypasses_without_touching_the_settings() {
+        match power_edit(TrackId(1), InstanceId(2), false) {
+            Edit::SetInsertBypass { bypass, .. } => assert!(bypass),
+            e => panic!("{e:?}"),
         }
-    }
-
-    #[test]
-    fn effects_without_a_mix_have_no_switch() {
-        assert!(mix_index(BuiltinFxKind::Eq).is_none());
-        assert!(mix_index(BuiltinFxKind::Limiter).is_none());
-        let fx = BuiltinFx::new(BuiltinFxKind::Eq);
-        assert!(power_edits(TrackId(1), InstanceId(2), &fx, false, &Cell::new(None)).is_empty());
+        match power_edit(TrackId(1), InstanceId(2), true) {
+            Edit::SetInsertBypass { bypass, .. } => assert!(!bypass),
+            e => panic!("{e:?}"),
+        }
     }
 }
