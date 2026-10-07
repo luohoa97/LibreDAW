@@ -239,7 +239,11 @@ pub fn import_sample_with(
         return Err(BundleError::TooLarge(path.to_path_buf()));
     }
     let mut head = [0u8; 12];
-    if src.read_exact(&mut head).is_err() || &head[0..4] != b"RIFF" || &head[8..12] != b"WAVE" {
+    // A user library also holds FLAC, Ogg and WavPack files; those are only
+    // ever referenced in place (`local_only`), never copied into a bundle.
+    if src.read_exact(&mut head).is_err()
+        || !(is_wav_head(&head) || (local_only && is_other_audio_head(&head)))
+    {
         return Err(BundleError::NotWav(path.to_path_buf()));
     }
 
@@ -279,6 +283,14 @@ pub fn import_sample_with(
         size,
         local_only,
     })
+}
+
+fn is_wav_head(head: &[u8; 12]) -> bool {
+    &head[0..4] == b"RIFF" && &head[8..12] == b"WAVE"
+}
+
+fn is_other_audio_head(head: &[u8; 12]) -> bool {
+    head.starts_with(b"fLaC") || head.starts_with(b"OggS") || head.starts_with(b"wvpk")
 }
 
 /// Hashes the rest of `src` (after `head`), copying it to `out` if given.

@@ -564,3 +564,24 @@ fn sample_file_names_parse_only_our_form() {
         1
     );
 }
+
+/// A user library holds FLAC, Ogg and WavPack too: they may be referenced
+/// in place, never copied into a bundle.
+#[test]
+fn other_audio_formats_are_local_only() {
+    let t = Tmp::new();
+    for (name, magic) in [("a.flac", b"fLaC"), ("b.ogg", b"OggS"), ("c.wv", b"wvpk")] {
+        let p = t.0.join("lib").join(name);
+        fs::create_dir_all(p.parent().unwrap()).unwrap();
+        let mut bytes = magic.to_vec();
+        bytes.extend_from_slice(&[7u8; 64]);
+        fs::write(&p, bytes).unwrap();
+        let r = import_sample_with(&t.bundle(), &p, true, &t.registry()).unwrap();
+        assert!(r.local_only);
+        assert!(matches!(
+            import_sample_with(&t.bundle(), &p, false, &t.registry()),
+            Err(BundleError::NotWav(_))
+        ));
+    }
+    assert!(sample_files(&t.bundle()).is_empty());
+}
