@@ -140,3 +140,46 @@ step grid and piano roll, change mixer volume/pan/mute/solo, play with the
 metronome, load one CLAP plugin (Surge XT) as instrument or insert and open
 its GUI, undo/redo everything, save, reopen, and export WAV. An agent can do
 the same through `libredaw-mcp`. `tools/ci.fish` passes.
+
+## control -> ui (added for the control-server split)
+
+Owner of `crates/control`: the control teammate. `ui` depends on it and
+only wires it up; all socket, thread, limit, and approval bookkeeping
+lives in `control`. `control` depends only on `protocol` (and std).
+
+```rust
+pub struct ControlConfig {
+    pub socket_dir: PathBuf,            // $XDG_RUNTIME_DIR/libredaw (0700, flock lock file)
+    pub agents_enabled: bool,           // per session; off by default
+    pub agent_request: bool,            // started with --agent-request (show the enable banner)
+}
+pub struct ControlServer { /* listener + client threads */ }
+impl ControlServer {
+    pub fn start(cfg: ControlConfig) -> Result<ControlServer, ControlStartError>;
+    pub fn set_agents_enabled(&self, on: bool);          // from Preferences or the banner
+    pub fn poll(&self) -> Vec<Incoming>;                 // GTK thread, every 10 ms tick
+    pub fn reply(&self, ticket: Ticket, outcome: Outcome); // answer one request
+    pub fn approval(&self, ticket: Ticket, allowed: bool); // human clicked Allow / Deny
+    pub fn clients(&self) -> Vec<ClientInfo>;            // for the agent indicator and activity panel
+    pub fn shutdown(self);
+}
+pub struct Incoming { pub ticket: Ticket, pub client: ClientInfo, pub request: protocol::control::Request }
+pub struct ClientInfo { pub id: u64, pub transport: Transport, pub name: String, pub pid: Option<u32> }
+pub enum UiEvent { /* also delivered by poll(): */ AgentRequestedControl { client: ClientInfo },
+                   ApprovalNeeded { ticket: Ticket, summary: String }, ApprovalTimedOut { ticket: Ticket },
+                   ClientConnected(ClientInfo), ClientGone { id: u64 } }
+```
+
+`poll()` returns requests that already passed hello, capability mask
+(`RequestBody::allowed_for`), line and batch limits. `control` tracks the 60 s
+approval deadline (replies `needs_user_approval` itself on timeout) and the
+10 s `Busy` deadline when `ui` defers a request with `defer(ticket)`. `ui`
+decides PRIVILEGED (it knows dirty state and approved plugins) by calling
+`require_approval(ticket, summary)`. Exact names may change by agreement
+with the orchestrator; this block is the starting contract.
+
+Analysis (16.3 `analyze`): `control::analysis::analyze(frames: &[[f32; 2]],
+rate: u32, per_track: &[(u32, Vec<[f32; 2]>)]) -> protocol::control::Analysis`:
+BS.1770 gated integrated loudness, true peak (4x oversampled), clipped
+sample count, per-track peak and RMS, three-band energy balance. Pure
+functions; `ui` renders and calls it on the export thread.
