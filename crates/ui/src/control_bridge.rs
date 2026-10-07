@@ -915,7 +915,8 @@ fn start_job(app: &Rc<App>, target: JobTarget, fmt: Option<WavFormat>) -> Outcom
                 &p2,
                 &c2,
             )
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| e.to_string())?
+            .audio;
             if c2.load(Ordering::Relaxed) {
                 return Err("cancelled".into());
             }

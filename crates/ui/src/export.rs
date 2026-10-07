@@ -197,7 +197,7 @@ fn start(
     let (app2, dialog2, running2) = (app.clone(), dialog.clone(), running.clone());
     app.tasks.spawn(
         "export",
-        move || -> Result<(), String> {
+        move || -> Result<Vec<String>, String> {
             let frames = engine_adapter::render(
                 RenderJob {
                     project,
@@ -213,19 +213,27 @@ fn start(
                 &c2,
             )
             .map_err(|e| e.to_string())?;
+            let warnings = frames.warnings;
+            let frames = frames.audio;
             if c2.load(Ordering::Relaxed) {
                 return Err("cancelled".into());
             }
-            engine_adapter::write_wav(&out, &frames, rate, fmt).map_err(|e| e.to_string())
+            engine_adapter::write_wav(&out, &frames, rate, fmt).map_err(|e| e.to_string())?;
+            Ok(warnings)
         },
         move |r| {
             done.set(true);
             running2.set(false);
             dialog2.close();
             match r {
-                Ok(()) => {
+                Ok(warnings) => {
+                    let title = if warnings.is_empty() {
+                        "Export finished".to_string()
+                    } else {
+                        format!("Export finished. {}", warnings.join(" "))
+                    };
                     let target = path.clone();
-                    app2.toast_action("Export finished", "Show in Files", move || {
+                    app2.toast_action(&title, "Show in Files", move || {
                         let file = gio::File::for_path(&target);
                         gtk::FileLauncher::new(Some(&file)).open_containing_folder(
                             None::<&gtk::Window>,

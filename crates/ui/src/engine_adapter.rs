@@ -24,6 +24,7 @@ use protocol::model::Project;
 use crate::compiler::CompileJob;
 use crate::slots::SlotAllocator;
 
+pub use engine::render::Rendered;
 pub use engine::{Compiled, EngineConfig, EngineError, Host, SampleStore, Slots};
 
 /// Runs on the compiler thread.
@@ -76,11 +77,12 @@ pub fn render(
     plugins: &[(PluginSlot, PluginHandle)],
     progress: &AtomicU32,
     cancel: &AtomicBool,
-) -> Result<Vec<[f32; 2]>, EngineError> {
+) -> Result<Rendered, EngineError> {
     if let Some(tail) = job.song_tail {
         let req = engine::SongRequest {
             project: job.project,
             tail_seconds: tail,
+            store: job.store,
             sample_rate: job.sample_rate,
         };
         return engine::render_song(&req, &slots.inner, plugins, progress, cancel);
@@ -90,6 +92,7 @@ pub fn render(
         pattern: job.pattern,
         loops: job.loops,
         tail_seconds: 2.0,
+        store: job.store,
         sample_rate: job.sample_rate,
     };
     engine::render_offline(&req, &slots.inner, plugins, progress, cancel)
