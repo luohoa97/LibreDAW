@@ -469,31 +469,28 @@ pub fn tempo_from_text(text: &str) -> Option<f64> {
     })
 }
 
+/// The projects Home shows, as the bridge reports them: unsaved work is
+/// not a project yet, so only saved ones are listed (newest first).
 fn list_projects(app: &App) -> Vec<ProjectInfo> {
-    let root = app.dirs.projects();
-    let mut out = Vec::new();
-    let Ok(rd) = std::fs::read_dir(&root) else {
-        return out;
-    };
-    for e in rd.flatten().take(200) {
-        let p = e.path();
-        if !doc::persist::is_bundle(&p) {
-            continue;
-        }
-        let tempo = std::fs::read_to_string(p.join(doc::bundle::PROJECT_FILE))
-            .ok()
-            .and_then(|t| tempo_from_text(&t))
-            .unwrap_or(0.0);
-        out.push(ProjectInfo {
-            name: agent_string(&files::display_name(&Some(p.clone()))),
-            path: p.to_string_lossy().to_string(),
-            tempo_bpm: tempo,
-            modified_unix_s: mtime(&p),
-            dirty: false,
-        });
-    }
-    out.sort_by(|a, b| a.name.cmp(&b.name));
-    out
+    let open = app.ui.borrow().path.clone();
+    let dirty = app.is_dirty();
+    crate::home_logic::scan(&app.dirs, &[])
+        .recent
+        .into_iter()
+        .map(|it| {
+            let tempo = std::fs::read_to_string(it.path.join(doc::bundle::PROJECT_FILE))
+                .ok()
+                .and_then(|t| tempo_from_text(&t))
+                .unwrap_or(0.0);
+            ProjectInfo {
+                name: agent_string(&it.name),
+                dirty: dirty && open.as_ref() == Some(&it.path),
+                path: it.path.to_string_lossy().to_string(),
+                tempo_bpm: tempo,
+                modified_unix_s: it.modified,
+            }
+        })
+        .collect()
 }
 
 /// Whether `path` is inside the projects folder (no `..` tricks).
@@ -819,8 +816,18 @@ fn execute(app: &Rc<App>, ticket: Ticket, author: &Author, req: Request) -> Opti
                 Err(f) => err(map_failure(f)),
             }
         }
-        // Closing returns to Home, which comes with the next build.
-        RequestBody::ProjectClose => bad("closing a project is not available in this build yet"),
+        // Saves, then shows Home (18.6).
+        RequestBody::ProjectClose => {
+            let server = app.bridge.borrow().as_ref()?.server.clone();
+            files::go_home(app, move |r| {
+                let o = match r {
+                    Ok(()) => ok(ReplyBody::Done),
+                    Err(e) => err(ControlError::Internal { reason: e }),
+                };
+                server.reply(ticket, o);
+            });
+            return None;
+        }
         // The change tree and versions (15.11, 15.12) follow BRIDGE.md in
         // the next build; until then they answer plainly.
         RequestBody::HistoryTree { .. }

@@ -20,6 +20,8 @@ pub mod engine_adapter;
 pub mod export;
 pub mod files;
 pub mod help;
+pub mod home;
+pub mod home_logic;
 pub mod inspector;
 pub mod inspector_native;
 pub mod keys;

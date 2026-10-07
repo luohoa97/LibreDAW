@@ -41,6 +41,7 @@ pub const SHORTCUTS: &[Shortcut] = &[
     // General
     s("win.new", &["<Control>n"], "New Project", "General"),
     s("win.open", &["<Control>o"], "Open Project", "General"),
+    s("win.home", &["<Control><Shift>h"], "Home", "General"),
     s("win.save", &["<Control>s"], "Save", "General"),
     s("win.save-as", &["<Control><Shift>s"], "Save As", "General"),
     s("win.export", &["<Control>e"], "Export Audio", "General"),

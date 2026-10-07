@@ -268,6 +268,17 @@ pub fn open(parent: &impl IsA<gtk::Widget>, app: &Rc<App>) {
     });
 }
 
+/// Saves the open project, then shows Home. `done` runs after the switch.
+pub fn go_home(app: &Rc<App>, done: impl FnOnce(Result<(), String>) + 'static) {
+    let a = app.clone();
+    save_before_switch(app, move |r| {
+        if r.is_ok() {
+            a.show_home();
+        }
+        done(r);
+    });
+}
+
 pub fn new_project(app: &Rc<App>) {
     let a = app.clone();
     save_then(app, move || fresh_project(&a));
@@ -289,6 +300,7 @@ pub fn fresh_project(a: &Rc<App>) {
     // A starter beat: one pattern and four channels, ready to play.
     crate::channels::add_starter_beat(a);
     a.session.borrow_mut().editor.mark_saved();
+    a.show_project();
     a.notify();
 }
 
@@ -340,6 +352,7 @@ pub fn open_path_then(
                     note: None,
                 }
                 .write(&a.dirs);
+                a.show_project();
                 done(Ok(()));
             }
             Err(e) => {
@@ -382,6 +395,7 @@ pub fn open_recovery_bundle(app: &Rc<App>, bundle_dir: PathBuf, modified: System
                 a.reset_selection();
                 a.notify();
                 recovered_toast(&a, modified);
+                a.show_project();
                 // The old recovery bundle goes away once this session has
                 // written its own.
                 *a.stale_recovery.borrow_mut() = Some(bundle_dir);
@@ -402,8 +416,7 @@ fn recovered_toast(app: &Rc<App>, modified: SystemTime) {
     );
 }
 
-/// At launch: reopen the last project (with its view), or recover a crashed
-/// session, or start fresh. Also shows the note left by the last close.
+/// At launch: shows the note left by the last close.
 pub fn restore_last_session(app: &Rc<App>) {
     let last = LastSession::read(&app.dirs);
     if let Some(n) = &last.note {
@@ -414,15 +427,7 @@ pub fn restore_last_session(app: &Rc<App>) {
         }
         .write(&app.dirs);
     }
-    if let Some(p) = last.path.filter(|p| persist::is_bundle(p)) {
-        open_path(app, p);
-        return;
-    }
-    if let Some((b, m)) = persist::find_recovery_bundles(&app.dirs).into_iter().next() {
-        open_recovery_bundle(app, b, m);
-        return;
-    }
-    fresh_project(app);
+    // Launch opens on Home (SPEC 19.1): unsaved work is offered there.
 }
 
 // ---------------------------------------------------------------------------
