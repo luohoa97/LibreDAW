@@ -31,12 +31,26 @@ use crate::hum_logic::{Effect, Flow, HumNote, Input, Phase, PlaceOpts, free_star
 /// Turns a recording into the notes heard in it.
 pub type Transcriber = fn(&engine::Captured) -> Result<Vec<HumNote>, String>;
 
-/// Until the transcription crate is wired in.
-fn not_ready(_: &engine::Captured) -> Result<Vec<HumNote>, String> {
-    Err("Turning a hum into notes is not ready in this version of Oto.".into())
+/// The real model: the hum downmixed to mono, one voice.
+fn real(c: &engine::Captured) -> Result<Vec<HumNote>, String> {
+    let opts = transcribe::Options {
+        monophonic: true,
+        onset_threshold: 0.4,
+        ..Default::default()
+    };
+    let notes = transcribe::transcribe(&c.mono(), c.rate, &opts).map_err(|e| e.to_string())?;
+    Ok(notes
+        .iter()
+        .map(|n| HumNote {
+            start_s: n.start_s,
+            end_s: n.end_s,
+            key: n.midi_key,
+            volume: n.velocity as f32 / 127.0,
+        })
+        .collect())
 }
 
-static TRANSCRIBER: Mutex<Transcriber> = Mutex::new(not_ready);
+static TRANSCRIBER: Mutex<Transcriber> = Mutex::new(real);
 
 /// Replaces the transcription (the real model, or a fake in tests).
 pub fn set_transcriber(f: Transcriber) {

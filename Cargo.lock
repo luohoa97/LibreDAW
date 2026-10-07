@@ -1180,6 +1180,7 @@ dependencies = [
  "libredaw-library",
  "libredaw-plugin-host",
  "libredaw-protocol",
+ "libredaw-transcribe",
 ]
 
 [[package]]
