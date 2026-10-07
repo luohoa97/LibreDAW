@@ -65,7 +65,7 @@ impl Default for Settings {
 
 impl Settings {
     pub fn emit(&self) -> String {
-        let mut o = String::from("# LibreDAW preferences.\n");
+        let mut o = String::from("# Oto preferences.\n");
         o.push_str(&format!("preview_notes = {}\n", self.preview_notes));
         o.push_str(&format!(
             "color_scheme = {}\n",

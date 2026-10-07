@@ -45,7 +45,7 @@ pub fn show(window: &adw::ApplicationWindow, app: &Rc<App>) {
 
     let out = adw::PreferencesGroup::new();
     out.set_title("Output");
-    out.set_description(Some("Changes take effect the next time LibreDAW starts."));
+    out.set_description(Some("Changes take effect the next time Oto starts."));
     let mut devices = engine_adapter::devices(Host::PipeWire);
     if devices.is_empty() {
         devices = engine_adapter::devices(Host::Alsa);
@@ -171,9 +171,9 @@ fn agents_page(app: &Rc<App>) -> adw::PreferencesPage {
     ));
     let available = app.bridge.borrow().is_some();
     let allow = adw::SwitchRow::new();
-    allow.set_title("Allow Agents to Control LibreDAW");
+    allow.set_title("Allow Agents to Control Oto");
     allow.set_subtitle(if available {
-        "Until you quit LibreDAW"
+        "Until you quit Oto"
     } else {
         "Not available: the control socket could not start"
     });

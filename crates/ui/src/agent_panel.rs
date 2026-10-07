@@ -16,7 +16,7 @@ use crate::control_bridge::{self, AgentUi};
 /// The banner title for the current state, if the banner should show.
 pub fn banner_title(ui: &AgentUi) -> Option<String> {
     match ui.pending.len() {
-        0 if ui.wants_control && !ui.enabled => Some("An agent wants to control LibreDAW".into()),
+        0 if ui.wants_control && !ui.enabled => Some("An agent wants to control Oto".into()),
         0 => None,
         1 => Some(format!("An agent wants to {}", ui.pending[0].summary)),
         n => Some(format!("{n} agent requests need your approval")),
@@ -98,7 +98,7 @@ impl AgentPanel {
         let allow = adw::SwitchRow::new();
         allow.set_title("Allow Agent Control");
         allow.set_subtitle(if available {
-            "Until you quit LibreDAW"
+            "Until you quit Oto"
         } else {
             "Not available: the control socket could not start"
         });
@@ -211,7 +211,7 @@ mod tests {
         ui.wants_control = true;
         assert_eq!(
             banner_title(&ui).as_deref(),
-            Some("An agent wants to control LibreDAW")
+            Some("An agent wants to control Oto")
         );
         ui.enabled = true;
         assert_eq!(banner_title(&ui), None, "nothing to say once it is allowed");

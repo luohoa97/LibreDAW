@@ -353,7 +353,7 @@ impl Session {
             return Ok(());
         }
         if !self.registry.is_empty() {
-            return Err("plugins are loaded; restart LibreDAW to turn audio on".into());
+            return Err("plugins are loaded; restart Oto to turn audio on".into());
         }
         let mut last = String::from("no audio host available");
         for cfg in configs {

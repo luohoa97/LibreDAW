@@ -105,7 +105,7 @@ pub fn build(gapp: &adw::Application, app: Rc<App>) -> adw::ApplicationWindow {
         .default_height(h)
         .width_request(360)
         .height_request(294)
-        .title("LibreDAW")
+        .title("Oto")
         .build();
 
     // ---- header bar ----
@@ -692,7 +692,7 @@ fn sync_header(ui: &Ui, app: &App) {
         name.clone()
     };
     ui.narrow_title.set_title(&shown);
-    ui.window.set_title(Some(&format!("{shown} - LibreDAW")));
+    ui.window.set_title(Some(&format!("{shown} - Oto")));
     let sub = match app.ui.borrow().audio_error.clone() {
         Some(_) => "Audio is off".to_string(),
         None => String::new(),

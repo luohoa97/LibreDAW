@@ -420,7 +420,7 @@ fn add_sound_folder(parent: &gtk::Button, app: &Rc<App>, rebuild: Rc<dyn Fn()>) 
         let alert = adw::AlertDialog::new(
             Some("Use These Sounds on This Computer?"),
             Some(
-                "LibreDAW only reads the files in this folder. They stay where they are and \
+                "Oto only reads the files in this folder. They stay where they are and \
                  are not copied into your projects or shared. Whether you may use them is up \
                  to the license they came with.",
             ),

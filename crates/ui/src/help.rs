@@ -7,12 +7,12 @@ use crate::shortcuts;
 
 pub fn show_about(window: &adw::ApplicationWindow) {
     let d = adw::AboutDialog::builder()
-        .application_name("LibreDAW")
+        .application_name("Oto")
         .application_icon("audio-x-generic")
-        .developer_name("The LibreDAW contributors")
+        .developer_name("The Oto contributors")
         .version(env!("CARGO_PKG_VERSION"))
         .comments("A free digital audio workstation for Linux, made for beginners.")
-        .copyright("Copyright The LibreDAW contributors")
+        .copyright("Copyright The Oto contributors")
         .license_type(gtk::License::Gpl30)
         .build();
     d.present(Some(window));

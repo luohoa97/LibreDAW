@@ -124,7 +124,7 @@ fn bad(reason: &str) -> Outcome {
 
 /// What a script hears in the Flatpak build.
 pub const SCRIPTS_OFF_IN_FLATPAK: &str =
-    "Scripting is not available in the Flatpak version of LibreDAW. Agents still work.";
+    "Scripting is not available in the Flatpak version of Oto. Agents still work.";
 
 /// Whether LibreDAW runs inside a Flatpak sandbox.
 pub fn in_flatpak() -> bool {
@@ -792,6 +792,8 @@ fn execute(app: &Rc<App>, ticket: Ticket, author: &Author, req: Request) -> Opti
                 Err(f) => err(map_failure(f)),
             }
         }
+        // Closing returns to Home, which comes with the next build.
+        RequestBody::ProjectClose => bad("closing a project is not available in this build yet"),
         // The change tree and versions (15.11, 15.12) follow BRIDGE.md in
         // the next build; until then they answer plainly.
         RequestBody::HistoryTree { .. }

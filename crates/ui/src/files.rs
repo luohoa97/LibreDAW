@@ -52,13 +52,16 @@ pub fn display_name(path: &Option<PathBuf>) -> String {
     }
 }
 
-/// Makes sure a chosen path ends in `.ldaw`.
+/// Makes sure a chosen path ends in `.oto` (an older `.ldaw` name is kept).
+/// The extension of new projects.
+pub const EXTENSION: &str = "oto";
+
 pub fn with_extension(p: &Path) -> PathBuf {
-    if p.extension().is_some_and(|e| e == "ldaw") {
+    if p.extension().is_some_and(|e| e == EXTENSION || e == "ldaw") {
         p.to_path_buf()
     } else {
         let mut s = p.as_os_str().to_os_string();
-        s.push(".ldaw");
+        s.push(".oto");
         PathBuf::from(s)
     }
 }
@@ -196,7 +199,7 @@ pub fn save(parent: &impl IsA<gtk::Widget>, app: &Rc<App>) {
 pub fn save_as(parent: &impl IsA<gtk::Widget>, app: &Rc<App>) {
     let dialog = gtk::FileDialog::builder()
         .title("Save project")
-        .initial_name(format!("{}.ldaw", display_name(&app.ui.borrow().path)))
+        .initial_name(format!("{}.oto", display_name(&app.ui.borrow().path)))
         .build();
     let app = app.clone();
     dialog.save(
@@ -445,7 +448,7 @@ mod tests {
     fn extension_is_added_once() {
         assert_eq!(
             with_extension(Path::new("/a/Song")),
-            PathBuf::from("/a/Song.ldaw")
+            PathBuf::from("/a/Song.oto")
         );
         assert_eq!(
             with_extension(Path::new("/a/Song.ldaw")),
@@ -453,7 +456,7 @@ mod tests {
         );
         assert_eq!(
             with_extension(Path::new("/a/Song.v2")),
-            PathBuf::from("/a/Song.v2.ldaw")
+            PathBuf::from("/a/Song.v2.oto")
         );
     }
 

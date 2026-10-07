@@ -15,7 +15,7 @@ use crate::slots::SlotAllocator;
 use crate::window;
 use doc::document::Document;
 
-pub const APP_ID: &str = "io.github.luohoa97.LibreDAW";
+pub const APP_ID: &str = "io.github.luohoa97.Oto";
 
 /// Prints start-up stages when `LIBREDAW_DEBUG` is set.
 fn trace(what: &str) {
@@ -84,7 +84,7 @@ pub fn run() -> glib::ExitCode {
         };
         match paths.into_iter().next() {
             Some(p) => crate::files::open_path(&app, p),
-            None => app.toast("That is not a LibreDAW project"),
+            None => app.toast("That is not an Oto project"),
         }
     });
     gapp.add_main_option(

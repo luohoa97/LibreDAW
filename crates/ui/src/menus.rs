@@ -67,7 +67,7 @@ pub fn main_menu() -> gio::Menu {
     let end = gio::Menu::new();
     end.append(Some("_Preferences"), Some("app.preferences"));
     end.append(Some("_Keyboard Shortcuts"), Some("win.show-help-overlay"));
-    end.append(Some("_About LibreDAW"), Some("app.about"));
+    end.append(Some("_About Oto"), Some("app.about"));
     menu.append_section(None, &end);
     menu
 }

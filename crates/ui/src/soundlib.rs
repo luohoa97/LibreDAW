@@ -424,7 +424,7 @@ pub fn parse_folders(text: &str) -> Vec<PathBuf> {
 }
 
 pub fn emit_folders(folders: &[PathBuf]) -> String {
-    let mut s = String::from("# LibreDAW: sound folders added in the sound browser.\n");
+    let mut s = String::from("# Oto: sound folders added in the sound browser.\n");
     for f in folders {
         s.push_str("[[folder]]\npath = ");
         s.push_str(&doc::persist::quote(&f.to_string_lossy()));
