@@ -82,7 +82,7 @@ pub fn get(name: &str, args: &Map<String, Value>) -> Result<Value, String> {
 1. activity_set: say what you are doing (\"Making a {genre} beat\").\n\
 2. project_summary: see what exists. Reuse instruments and clips that fit; do not start over unless asked.\n\
 3. song_set tempo if a tempo was given or the genre calls for one.\n\
-4. Sounds: sound_search by role (kick, snare or clap, hat, 808) and genre; kit_add for a whole drum kit if one fits, then clips_add with a grid for each kit piece. Otherwise ONE instruments_add call: kick, snare, hats and an 808, each with its first one-bar clip and its grid or notes, for example kick grid \"x...|..x.|x...|....\", snare \"....|x...|....|x...\", hat \"x.x.|x.x.|x.x.|x.4.\" (X accents, digits ratchet) and 808 notes \"C2:0:1/4 C2:3/8:1/8 G1:1/2:1/4\" (fractions of a bar).\n\
+4. Sounds: sound_search first (query, role such as kick, snare, hat, 808, and source such as FL Studio), then sound_add with the id (a whole drum kit if one fits, or one sound at a time; never a file path), then clips_add with a grid for each kit piece. Otherwise ONE instruments_add call: kick, snare, hats and an 808, each with its first one-bar clip and its grid or notes, for example kick grid \"x...|..x.|x...|....\", snare \"....|x...|....|x...\", hat \"x.x.|x.x.|x.x.|x.4.\" (X accents, digits ratchet) and 808 notes \"C2:0:1/4 C2:3/8:1/8 G1:1/2:1/4\" (fractions of a bar).\n\
 5. clips_copy those clips with times 3 to fill 4 bars as linked copies (edit one, all follow). Make one copy unique (clips_change make_unique) for a fill in bar 4 if you like.\n\
 6. loop_set over the 4 bars, then play.\n\
 7. mix_set: kick and 808 around -6 dB, hats lower, master below 0 dB. Later changes: beat_grid_set for drum rows, notes_write for notes.\n\
@@ -110,7 +110,7 @@ pub fn get(name: &str, args: &Map<String, Value>) -> Result<Value, String> {
             Ok(user(format!(
                 "Add a hi-hat roll to {target} in LibreDAW ({style} style).\n\
 1. activity_set: \"Adding a hi-hat roll\", with the hat instrument as focus.\n\
-2. project_summary: find the hat instrument and its clip; content_get shows its row as text. If there is no hat, add one with instruments_add or kit_add.\n\
+2. project_summary: find the hat instrument and its clip; content_get shows its row as text. If there is no hat, add one with sound_search then sound_add, or instruments_add.\n\
 3. beat_grid_set with ONE row for that clip: keep the existing hits and add {how}. Digits 2, 3, 4, 6, 8 mean that step is played that many times; X is an accent. Linked copies change too; to roll only one bar, clips_change make_unique that clip first.\n\
 4. Lower the hat with mix_set if the roll sounds busy (levels around -12 dB), then analyze to check for clipping."
             )))

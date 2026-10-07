@@ -256,7 +256,7 @@ fn new_instrument(
                 && !project.samples.iter().any(|s| &s.hash == h)
             {
                 return Err(format!(
-                    "sample {} is not in the project; use kit_add for pack sounds, or a hash from inspect",
+                    "sample {} is not in the project; use sound_search and sound_add for library sounds, or a hash from inspect",
                     quoted(h)
                 ));
             }
