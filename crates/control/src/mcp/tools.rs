@@ -33,6 +33,8 @@ pub enum Plan {
     Summary,
     /// `pattern_list`.
     PatternList,
+    /// `audio_clip_add` of a whole sound: the DAW imports and measures it.
+    AudioDrop(super::v4::AudioClipAddArgs),
     Inspect(InspectArgs),
     /// Contents to show; empty: all.
     ContentGet(Vec<Target>),
@@ -625,7 +627,14 @@ pub fn plan(name: &str, args: Value) -> Result<Plan, PlanError> {
             }
             Ok(edits(vec![Edit::RemoveClips { clips: a.ids }]))
         }
-        "audio_clip_add" => c(Compose::AudioClipAdd(parse(args)?)),
+        "audio_clip_add" => {
+            let a: super::v4::AudioClipAddArgs = parse(args)?;
+            if a.is_drop() {
+                Ok(Plan::AudioDrop(a))
+            } else {
+                c(Compose::AudioClipAdd(a))
+            }
+        }
         "audio_clip_set" => c(Compose::AudioClipSet(parse(args)?)),
         "pattern_make" => c(Compose::PatternMake(parse(args)?)),
         "pattern_place" => c(Compose::PatternPlace(parse(args)?)),
@@ -1027,9 +1036,9 @@ pub fn definitions() -> Vec<Value> {
         ),
         tool(
             "audio_clip_add",
-            "Put a sound file on the timeline as an audio clip, in ONE undo group (the same as dropping a file on the timeline). sample = the hash of a sample already in the project (inspect shows it); start in bars; give the length of the whole sound as length (bars) or seconds. instrument = an existing audio row; leave it out to get a new audio row with its own mixer track, named after the file. offset = bars into the sound where playing starts. Returns the clip and instrument ids. Change the clip later with audio_clip_set.",
-            json!({"sample": {"type": "string", "description": "Sample hash (64 hex digits)."}, "instrument": instrument(), "start": bars("Where the clip starts."), "length": bars("Clip length."), "seconds": {"type": "number", "exclusiveMinimum": 0, "description": "Or the clip length in seconds."}, "offset": bars("Where in the sound playing starts."), "name": {"type": "string", "maxLength": 128}}),
-            &["sample", "start"],
+            "Put a sound on the timeline as an audio clip, in ONE undo group (the same as dragging it there: a new audio row with its own mixer track, named after the sound, and one clip as long as the whole sound). Give sound = an id from sound_search (it is imported first), or sample = the hash of a sample already in the project (inspect shows it). start is in bars. Leave out length and seconds to get the whole sound; give length (bars) or seconds only to cut the clip shorter or longer. instrument = an existing audio row; leave it out to get a new audio row. offset = bars into the sound where playing starts (with length). Returns the clip and instrument ids. Change the clip later with audio_clip_set.",
+            json!({"sound": {"type": "string", "description": "A sound id from sound_search."}, "sample": {"type": "string", "description": "Or a sample hash (64 hex digits) already in the project."}, "instrument": instrument(), "start": bars("Where the clip starts."), "length": bars("Clip length (default: the whole sound)."), "seconds": {"type": "number", "exclusiveMinimum": 0, "description": "Or the clip length in seconds."}, "offset": bars("Where in the sound playing starts."), "name": {"type": "string", "maxLength": 128}}),
+            &["start"],
         ),
         tool(
             "audio_clip_set",

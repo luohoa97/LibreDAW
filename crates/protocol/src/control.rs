@@ -190,6 +190,17 @@ pub enum RequestBody {
         kit: String,
         track: Option<crate::ids::TrackId>,
     },
+    /// Drops one sound on the timeline exactly like dragging it there
+    /// (Amendment 31): `sound` is a catalogue id from `SoundSearch` or the
+    /// hash of a sample already in the project. It makes a new Audio row
+    /// (or uses `instrument`, an Audio row) with one clip at `start` ticks
+    /// as long as the whole sound, in one undo step. Needs
+    /// `base_revision`; replies `Applied` with the clip last in `created`.
+    AudioClipAdd {
+        sound: String,
+        instrument: Option<crate::ids::ChannelId>,
+        start: u32,
+    },
 }
 
 /// Which client kinds may send a request (17.1).

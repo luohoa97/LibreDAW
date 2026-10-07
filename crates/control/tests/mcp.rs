@@ -1107,6 +1107,55 @@ fn fx_add_with_a_sound_duck_to_kick_and_loudness_through_the_tools() {
     assert!(e.contains("0 to 10"), "{e}");
 }
 
+/// Drop "Final Countdown" on empty space: one audio row, one full-length
+/// clip, no pattern asked for, one undo step (Amendment 31).
+#[test]
+fn a_whole_sound_becomes_one_full_length_clip_in_one_step() {
+    use protocol::model::{Instrument, SampleRef};
+    let hash = "cd".repeat(32);
+    let mut daw = RefDaw::kick_and_hat();
+    daw.user_edit(vec![Edit::AddSample {
+        sample: SampleRef {
+            hash: hash.clone(),
+            orig_name: "Final Countdown.mp3".into(),
+            size: 10,
+            local_only: false,
+        },
+    }]);
+    let rig = support::rig_with(daw, true, |_| {});
+    let mut c = Mcp::connect(&rig);
+    c.init();
+    let before = rig.daw.lock().unwrap().project();
+    let r = c.ok("audio_clip_add", json!({"sample": hash, "start": 2}));
+    let p = rig.daw.lock().unwrap().project();
+    let row = p
+        .channels
+        .iter()
+        .find(|ch| matches!(ch.instrument, Instrument::Audio))
+        .expect("an audio row");
+    assert_eq!(row.name, "Final Countdown");
+    let new: Vec<_> = p.clips.iter().filter(|x| x.audio.is_some()).collect();
+    assert_eq!(new.len(), 1);
+    // Two seconds at 120 beats a minute: four beats, one bar, from bar 3.
+    assert_eq!(
+        (new[0].start, new[0].len, new[0].offset),
+        (2 * 3840, 3840, 0)
+    );
+    assert_eq!(p.clips.len(), before.clips.len() + 1, "no note clip made");
+    assert_eq!(r["instrument"], json!(row.id.0), "{r}");
+    assert_eq!(r["clip"], json!(new[0].id.0), "{r}");
+    c.ok("undo", json!({}));
+    let p = rig.daw.lock().unwrap().project();
+    assert_eq!(p.channels.len(), before.channels.len());
+    assert_eq!(p.clips.len(), before.clips.len());
+    // A sound with a length asks for a trim afterwards instead.
+    let e = c.err(
+        "audio_clip_add",
+        json!({"sound": "k1", "start": 0, "seconds": 3}),
+    );
+    assert!(e.to_string().contains("full length"), "{e}");
+}
+
 #[test]
 fn audio_clips_patterns_shapes_and_effect_switch_through_the_tools() {
     use protocol::ids::TrackId;

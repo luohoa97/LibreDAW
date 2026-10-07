@@ -17,6 +17,7 @@ use protocol::model::{Clip, SampleHash, SampleRef};
 
 use crate::app::App;
 use crate::timeline_logic as tl;
+use doc::history::Author;
 
 /// Frames summarised by one min/max pair (SPEC 23).
 pub const FRAMES_PER_PEAK: usize = 256;
@@ -290,10 +291,30 @@ pub fn room(clips: &[Clip], channel: ChannelId, start: u32, len: u32) -> bool {
         .any(|c| c.instrument == channel && c.start < start + len && start < c.end())
 }
 
+/// What a drop made.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Dropped {
+    pub clip: ClipId,
+    pub channel: ChannelId,
+    /// Every id the edits made, in order (track, row, clip).
+    pub created: Vec<u32>,
+}
+
 /// Applies a drop as one undo step: registers the sample, makes the row
 /// when needed (own mixer track, named after the file) and adds one clip
 /// at the drop point as long as the whole sound. Returns the clip.
 pub fn add_dropped(app: &Rc<App>, at: DropAt, sample: &SampleRef, secs: f64) -> Option<ClipId> {
+    add_dropped_as(app, None, at, sample, secs).map(|d| d.clip)
+}
+
+/// As `add_dropped`, by an agent when `author` is given.
+pub fn add_dropped_as(
+    app: &Rc<App>,
+    author: Option<Author>,
+    at: DropAt,
+    sample: &SampleRef,
+    secs: f64,
+) -> Option<Dropped> {
     let (bpm, taken, tracks, existing) = {
         let s = app.session.borrow();
         let p = &s.document().project;
@@ -318,24 +339,37 @@ pub fn add_dropped(app: &Rc<App>, at: DropAt, sample: &SampleRef, secs: f64) -> 
         app.toast("There is no room for the sound there; drop it on an empty spot");
         return None;
     }
-    let grouped = app.gesture_begin("Add audio");
+    let grouped = match author {
+        Some(a) => app.gesture_begin_as(a, "Add audio"),
+        None => app.gesture_begin("Add audio"),
+    };
     let in_gesture = grouped || app.session.borrow().editor.gesture_open();
-    let run = |e: Vec<Edit>| {
-        if in_gesture {
+    let mut created: Vec<u32> = Vec::new();
+    let mut run = |e: Vec<Edit>| {
+        let r = if in_gesture {
             app.gesture_edit(e)
         } else {
             app.edit(e)
+        };
+        if let Some(a) = &r {
+            created.extend(a.created.iter().copied());
         }
+        r
     };
-    let finish = |id: Option<ClipId>| {
+    let finish = |ok: bool| {
         if grouped {
             app.gesture_end();
         }
-        id
+        ok
     };
-    run(vec![Edit::AddSample {
+    if run(vec![Edit::AddSample {
         sample: sample.clone(),
-    }])?;
+    }])
+    .is_none()
+    {
+        finish(false);
+        return None;
+    }
     let channel = match at {
         DropAt::Row { channel, .. } => channel,
         DropAt::NewRow { .. } => {
@@ -357,7 +391,10 @@ pub fn add_dropped(app: &Rc<App>, at: DropAt, sample: &SampleRef, secs: f64) -> 
             }]);
             match made {
                 Some(a) => ChannelId(a.created[0]),
-                None => return finish(None),
+                None => {
+                    finish(false);
+                    return None;
+                }
             }
         }
     };
@@ -368,10 +405,14 @@ pub fn add_dropped(app: &Rc<App>, at: DropAt, sample: &SampleRef, secs: f64) -> 
         len,
         offset: 0,
     }]);
-    let id = made.and_then(|a| a.created.last().copied()).map(ClipId);
-    let id = finish(id);
+    let clip = made.and_then(|a| a.created.last().copied()).map(ClipId);
+    finish(clip.is_some());
     app.select_channel(channel);
-    id
+    clip.map(|clip| Dropped {
+        clip,
+        channel,
+        created,
+    })
 }
 
 #[cfg(test)]
@@ -384,6 +425,7 @@ mod tests {
     use doc::persist::Dirs;
     use protocol::ids::PatternId;
     use protocol::model::Instrument;
+    use std::cell::RefCell;
 
     fn app() -> Rc<App> {
         let dir = std::env::temp_dir().join(format!("ldaw-audioclips-{}", std::process::id()));
@@ -555,6 +597,67 @@ mod tests {
             p.ticks(120.0),
             (1024.0f64 / 48000.0 * 2.0 * 960.0).round() as u32
         );
+    }
+
+    /// A mono 16-bit WAV of `secs` seconds of a low tone at 8 kHz.
+    fn wav(secs: u32) -> Vec<u8> {
+        let frames = 8000 * secs;
+        let mut b = Vec::new();
+        b.extend(b"RIFF");
+        b.extend((36 + frames * 2).to_le_bytes());
+        b.extend(b"WAVEfmt ");
+        b.extend(16u32.to_le_bytes());
+        b.extend(1u16.to_le_bytes());
+        b.extend(1u16.to_le_bytes());
+        b.extend(8000u32.to_le_bytes());
+        b.extend(16000u32.to_le_bytes());
+        b.extend(2u16.to_le_bytes());
+        b.extend(16u16.to_le_bytes());
+        b.extend(b"data");
+        b.extend((frames * 2).to_le_bytes());
+        for f in 0..frames {
+            let v = ((f as f32 * 0.05).sin() * 8000.0) as i16;
+            b.extend(v.to_le_bytes());
+        }
+        b
+    }
+
+    #[test]
+    fn a_dropped_file_is_imported_measured_and_placed_whole() {
+        let dir = std::env::temp_dir().join(format!("ldaw-drop-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("Final Countdown.wav");
+        std::fs::write(&file, wav(3)).unwrap();
+        let a = app();
+        a.session
+            .borrow_mut()
+            .set_sample_home(Some(dir.join("bundle")));
+        let got: Rc<RefCell<Option<Vec<Result<Probed, String>>>>> = Rc::default();
+        let g = got.clone();
+        import_and_probe(
+            &a,
+            vec![crate::samples_ui::ImportItem::file(file)],
+            move |r| *g.borrow_mut() = Some(r),
+        );
+        for _ in 0..500 {
+            a.tasks.poll();
+            if got.borrow().is_some() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        let results = got.borrow_mut().take().expect("imported");
+        let probed = results.into_iter().next().unwrap().expect("a good file");
+        assert!((probed.secs - 3.0).abs() < 1e-6, "{}", probed.secs);
+        add_dropped(&a, DropAt::NewRow { tick: 0 }, &probed.sample, probed.secs).unwrap();
+        let s = a.session.borrow();
+        let p = &s.document().project;
+        // Three seconds at 120 beats a minute: six beats.
+        assert_eq!(p.clips.len(), 1);
+        assert_eq!(p.clips[0].len, 6 * PPQ);
+        assert_eq!(p.channels[0].name, "Final Countdown");
+        drop(s);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

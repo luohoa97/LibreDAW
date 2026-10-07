@@ -366,3 +366,130 @@ impl SamplerPage {
         self.app.current_channel()
     }
 }
+
+/// The Sound page of an Audio row (SPEC 21.1): the row's Volume, and the
+/// Gain of the selected sound.
+pub struct AudioPage {
+    pub widget: gtk::Widget,
+    app: Rc<App>,
+    head: Header,
+    volume: adw::SpinRow,
+    gain: adw::SpinRow,
+    updating: Cell<bool>,
+}
+
+impl AudioPage {
+    pub fn new(app: &Rc<App>) -> Rc<AudioPage> {
+        let head = header("Audio row");
+        let col = page_column();
+        col.append(&head.widget);
+        let list = gtk::ListBox::new();
+        list.add_css_class("boxed-list");
+        list.set_selection_mode(gtk::SelectionMode::None);
+        let volume = adw::SpinRow::with_range(-60.0, 6.0, 0.5);
+        volume.set_title("Volume");
+        volume.set_subtitle("How loud this row is, in dB (0 is unchanged)");
+        volume.set_digits(1);
+        list.append(&volume);
+        let gain = adw::SpinRow::with_range(-24.0, 24.0, 0.5);
+        gain.set_title("Gain");
+        gain.set_subtitle("Makes the selected sound louder or softer, in dB");
+        gain.set_digits(1);
+        list.append(&gain);
+        col.append(&list);
+        let page = Rc::new(AudioPage {
+            widget: scrolled(&col),
+            app: app.clone(),
+            head,
+            volume,
+            gain,
+            updating: Cell::new(false),
+        });
+        let p = page.clone();
+        page.volume.connect_value_notify(move |r| {
+            if p.updating.get() {
+                return;
+            }
+            let (Some(ch), v) = (p.app.current_channel(), r.value()) else {
+                return;
+            };
+            let track = {
+                let s = p.app.session.borrow();
+                s.document().project.channel(ch).map(|c| c.track)
+            };
+            if let Some(track) = track {
+                p.app.edit_resting(
+                    "Change volume",
+                    vec![Edit::SetTrackMix {
+                        track,
+                        value: protocol::edit::MixValue::VolumeDb(v),
+                    }],
+                );
+            }
+        });
+        let p = page.clone();
+        page.gain.connect_value_notify(move |r| {
+            if p.updating.get() {
+                return;
+            }
+            let Some(clip) = p.selected_audio_clip() else {
+                return;
+            };
+            if let Some(a) = clip.audio {
+                let mdb = crate::audio_clips::gain_mdb(r.value());
+                if mdb != a.gain_mdb {
+                    p.app.edit_resting(
+                        "Change gain",
+                        vec![Edit::SetClipAudio {
+                            clip: clip.id,
+                            gain_mdb: mdb,
+                            fade_in: a.fade_in,
+                            fade_out: a.fade_out,
+                        }],
+                    );
+                }
+            }
+        });
+        page
+    }
+
+    /// The selected clip, when it plays audio.
+    fn selected_audio_clip(&self) -> Option<protocol::model::Clip> {
+        let id = self.app.current_clip()?;
+        let s = self.app.session.borrow();
+        s.document()
+            .project
+            .clips
+            .iter()
+            .find(|c| c.id == id && c.audio.is_some())
+            .copied()
+    }
+
+    pub fn sync(&self, c: &Channel, slot: u32) {
+        if !matches!(c.instrument, Instrument::Audio) {
+            return;
+        }
+        self.updating.set(true);
+        self.head.name.set_text(&c.name);
+        self.head.bar.set_id(slot);
+        let vol = {
+            let s = self.app.session.borrow();
+            s.document()
+                .project
+                .track(c.track)
+                .map_or(0.0, |t| t.mix.volume_db)
+        };
+        if (self.volume.value() - vol).abs() > 1e-9 {
+            self.volume.set_value(vol);
+        }
+        let clip = self.selected_audio_clip();
+        self.gain.set_sensitive(clip.is_some());
+        let g = clip
+            .and_then(|c| c.audio)
+            .map_or(0.0, |a| a.gain_mdb as f64 / 1000.0);
+        if (self.gain.value() - g).abs() > 1e-9 {
+            self.gain.set_value(g);
+        }
+        self.updating.set(false);
+    }
+}

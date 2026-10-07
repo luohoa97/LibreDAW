@@ -447,6 +447,16 @@ impl RefDaw {
                 total: 99,
                 notes: vec![],
             }),
+            RequestBody::AudioClipAdd {
+                sound,
+                instrument,
+                start,
+            } => {
+                if let Some(s) = self.stale(base) {
+                    return s;
+                }
+                self.drop_sound(author, sound, *instrument, *start)
+            }
             RequestBody::KitAdd { kit, track, .. } | RequestBody::SoundAdd { id: kit, track } => {
                 if let Some(s) = self.stale(base) {
                     return s;
@@ -487,6 +497,69 @@ impl RefDaw {
                     }),
                 }
             }
+        }
+    }
+}
+
+impl RefDaw {
+    /// What the window does when a sound is dropped on the timeline: a new
+    /// audio row (or the given one), one clip as long as the whole sound.
+    /// The reference knows no durations, so every sound lasts two seconds.
+    fn drop_sound(
+        &mut self,
+        author: Author,
+        sound: &str,
+        instrument: Option<ChannelId>,
+        start: u32,
+    ) -> Outcome {
+        let p = self.editor.document().project.clone();
+        let Some(sample) = p.samples.iter().find(|s| s.hash == sound) else {
+            return err(ControlError::NotFound {
+                what: "sound (the reference knows only samples of the project)".into(),
+            });
+        };
+        let hash = protocol::model::SampleHash::parse(&sample.hash).expect("hash");
+        let len = (2.0 * p.tempo_bpm / 60.0 * protocol::consts::PPQ as f64).round() as u32;
+        let mut edits = Vec::new();
+        let row = match instrument {
+            Some(i) => i,
+            None => {
+                let name = sample
+                    .orig_name
+                    .rsplit_once('.')
+                    .map_or(sample.orig_name.clone(), |(a, _)| a.to_string());
+                let next = self.editor.document().next_id;
+                edits.push(Edit::AddTrack { name: name.clone() });
+                edits.push(Edit::AddChannel {
+                    name,
+                    instrument: NewInstrument::Audio,
+                    root_key: 60,
+                    track: TrackId(next),
+                });
+                ChannelId(next + 1)
+            }
+        };
+        edits.push(Edit::AddAudioClip {
+            instrument: row,
+            sample: hash,
+            start,
+            len,
+            offset: 0,
+        });
+        self.token += 1;
+        match self
+            .editor
+            .submit(author, Some("Add audio"), edits, self.token)
+        {
+            Ok(Submitted::Applied(a)) => ok(ReplyBody::Applied(Applied {
+                revision: a.revision,
+                created: a.created,
+            })),
+            Ok(Submitted::Queued) => err(ControlError::Busy),
+            Err(f) => err(ControlError::Edit {
+                index: f.index,
+                error: f.error,
+            }),
         }
     }
 }

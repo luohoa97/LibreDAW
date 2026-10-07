@@ -384,7 +384,19 @@ impl App {
                 if let Some(ch) = channel {
                     self.select_channel(ch);
                 }
-                self.toast("This instrument has no clips yet: click its row on the timeline");
+                let audio = channel.is_some_and(|ch| {
+                    self.session
+                        .borrow()
+                        .document()
+                        .project
+                        .channel(ch)
+                        .is_some_and(|c| matches!(c.instrument, protocol::model::Instrument::Audio))
+                });
+                self.toast(if audio {
+                    "A sound row has no notes: drop a sound on it to add one"
+                } else {
+                    "This instrument has no clips yet: click its row on the timeline"
+                });
             }
         }
     }

@@ -43,6 +43,7 @@ pub fn default_mode(p: &Project, instrument: ChannelId) -> Mode {
             Some(i) if presets::presets()[i].role == "Drum" => Mode::Steps,
             _ => Mode::Notes,
         },
+        // An audio row has no editor (SPEC 21.1): sounds show a waveform on the timeline.
         Instrument::Bass808(_) | Instrument::Clap(_) | Instrument::Audio => Mode::Notes,
     }
 }

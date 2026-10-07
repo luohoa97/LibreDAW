@@ -113,7 +113,7 @@ Tools named `edit` take raw `protocol::edit::Edit` values (ticks, not bars).
 
 | User action | MCP tool | Gap |
 |---|---|---|
-| Drop a sound file on the timeline (new Audio row, full-length clip) | `audio_clip_add {sample, start, length or seconds}` | the file must already be in the project (a hash from `inspect`); import by sound id or path and "full length by default" need a bridge request (see report) |
+| Drop a sound on the timeline (new Audio row, full-length clip, one undo step) | `audio_clip_add {sound or sample, start}` | the window imports and measures the sound (`RequestBody::AudioClipAdd`), so the clip is the whole sound; `length` or `seconds` with a `sample` builds the edits directly |
 | Drop on an existing Audio row | `audio_clip_add {instrument}` | |
 | Trim the edges, set gain, fades | `audio_clip_set {trim_start, trim_end, gain_db, fade_in, fade_out}` | |
 | Move, copy, split, mute, delete an audio clip | `clips_change`, `clips_copy`, `clips_split`, `clips_remove` | |

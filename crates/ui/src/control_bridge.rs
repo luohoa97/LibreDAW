@@ -990,6 +990,151 @@ fn sound_add(
     }
 }
 
+/// `AudioClipAdd`: the same drop as dragging the sound onto the timeline
+/// (Amendment 31). `sound` is a catalogue id or the hash of a sample that
+/// is already in the project.
+fn audio_clip_add(
+    app: &Rc<App>,
+    ticket: Ticket,
+    author: &Author,
+    sound: &str,
+    instrument: Option<protocol::ids::ChannelId>,
+    start: u32,
+) -> Option<Outcome> {
+    use crate::samples_ui::ImportItem;
+    use crate::sound_catalog::{self as cat, Target};
+    if let Some(i) = instrument {
+        let is_audio = app
+            .session
+            .borrow()
+            .document()
+            .project
+            .channel(i)
+            .map(|c| matches!(c.instrument, protocol::model::Instrument::Audio));
+        match is_audio {
+            None => {
+                return Some(err(ControlError::NotFound {
+                    what: "instrument".into(),
+                }));
+            }
+            Some(false) => return Some(bad("that instrument is not an audio row")),
+            Some(true) => {}
+        }
+    }
+    let at = match instrument {
+        Some(channel) => crate::audio_clips::DropAt::Row {
+            channel,
+            tick: start,
+        },
+        None => crate::audio_clips::DropAt::NewRow { tick: start },
+    };
+    let server = app.bridge.borrow().as_ref()?.server.clone();
+    let finish = {
+        let (a, author, server) = (app.clone(), author.clone(), server.clone());
+        move |sample: protocol::model::SampleRef, secs: f64| {
+            if a.session.borrow().editor.gesture_open() {
+                server.reply(ticket, err(ControlError::Busy));
+                return;
+            }
+            let o = match crate::audio_clips::add_dropped_as(
+                &a,
+                Some(author.clone()),
+                at,
+                &sample,
+                secs,
+            ) {
+                Some(d) => {
+                    push_activity(&a, &author, agent_string("Added a sound"), Vec::new());
+                    presence::on_applied(&a, &author, &d.created, "Adding a sound");
+                    ok(ReplyBody::Applied(protocol::edit::Applied {
+                        revision: revision(&a),
+                        created: d.created,
+                    }))
+                }
+                None => err(ControlError::Internal {
+                    reason: "the sound could not be placed there; it may overlap another clip"
+                        .into(),
+                }),
+            };
+            server.reply(ticket, o);
+            changed(&a);
+        }
+    };
+    let known = protocol::model::SampleHash::parse(sound).and_then(|h| {
+        let s = app.session.borrow();
+        let hex = h.to_hex();
+        let sample = s
+            .document()
+            .project
+            .samples
+            .iter()
+            .find(|x| x.hash == hex)
+            .cloned()?;
+        Some((sample, s.sample_path(&hex)))
+    });
+    if let Some((sample, path)) = known {
+        let Some(path) = path else {
+            return Some(err(ControlError::NotFound {
+                what: "the sound's file (it is missing from this computer)".into(),
+            }));
+        };
+        app.tasks.spawn(
+            "probe-sound",
+            move || crate::audio_clips::probe_secs(&path),
+            move |r| match r {
+                Ok(secs) => finish(sample, secs),
+                Err(reason) => {
+                    server.reply(ticket, err(ControlError::Internal { reason }));
+                }
+            },
+        );
+        return None;
+    }
+    let kits = library(app);
+    let state = fl_state(app);
+    let loaded = loaded_of(&state);
+    let item = match cat::resolve(sound, &kits, loaded.as_deref()) {
+        Some(Target::Piece(k, p)) => ImportItem::piece(p, k.source),
+        Some(Target::FlSound(e)) => ImportItem {
+            path: e.path.clone(),
+            local_only: true,
+            expect_sha256: None,
+        },
+        Some(_) => {
+            return Some(bad(
+                "that is a kit or an instrument, not one sound; pick a single sound from sound_search",
+            ));
+        }
+        None => {
+            let why = if sound.starts_with("fl:") {
+                cat::fl_note(&state.status, state.remembered)
+            } else {
+                None
+            };
+            return Some(err(ControlError::NotFound {
+                what: why.map(str::to_string).unwrap_or_else(|| {
+                    "sound (use an id from sound_search, or a sample hash from inspect)".into()
+                }),
+            }));
+        }
+    };
+    crate::audio_clips::import_and_probe(app, vec![item], move |mut results| match results.pop() {
+        Some(Ok(p)) => finish(p.sample, p.secs),
+        Some(Err(reason)) => {
+            server.reply(ticket, err(ControlError::Internal { reason }));
+        }
+        None => {
+            server.reply(
+                ticket,
+                err(ControlError::Internal {
+                    reason: "nothing was imported".into(),
+                }),
+            );
+        }
+    });
+    None
+}
+
 /// Runs one request. Returns the outcome now, or `None` when the answer
 /// comes later (a queued batch, a job step, a save).
 fn execute(app: &Rc<App>, ticket: Ticket, author: &Author, req: Request) -> Option<Outcome> {
@@ -1300,6 +1445,17 @@ fn execute(app: &Rc<App>, ticket: Ticket, author: &Author, req: Request) -> Opti
                 return Some(err(ControlError::Stale { current }));
             }
             return sound_add(app, ticket, author, &id, track);
+        }
+        RequestBody::AudioClipAdd {
+            sound,
+            instrument,
+            start,
+        } => {
+            let current = revision(app);
+            if is_stale(base_revision, current) {
+                return Some(err(ControlError::Stale { current }));
+            }
+            return audio_clip_add(app, ticket, author, &sound, instrument, start);
         }
         RequestBody::Seek { tick } => {
             app.seek(tick);

@@ -39,6 +39,7 @@ pub mod native_logic;
 pub mod native_panel;
 pub mod palette;
 pub mod pattern_logic;
+pub mod patterns_ui;
 pub mod perf;
 pub mod plugin_adapter;
 pub mod prefs;

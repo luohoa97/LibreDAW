@@ -55,7 +55,7 @@ pub fn fix_with(sel: Selection, p: &Project, user_cleared: bool) -> Selection {
     };
     Selection {
         clip: clip.map(|c| c.id),
-        pattern: clip.map(|c| c.pattern),
+        pattern: clip.filter(|c| c.audio.is_none()).map(|c| c.pattern),
         channel,
         track,
     }
@@ -77,7 +77,7 @@ pub fn select_channel(sel: Selection, p: &Project, id: ChannelId) -> Selection {
         .filter(|cl| cl.instrument == id);
     Selection {
         clip: clip.map(|c| c.id),
-        pattern: clip.map(|c| c.pattern),
+        pattern: clip.filter(|c| c.audio.is_none()).map(|c| c.pattern),
         channel: Some(id),
         track: c.track,
     }
@@ -94,7 +94,8 @@ pub fn select_clip(sel: Selection, p: &Project, id: ClipId) -> Selection {
         .unwrap_or(sel.track);
     Selection {
         clip: Some(id),
-        pattern: Some(clip.pattern),
+        // An audio clip has no notes, so no content to edit.
+        pattern: clip.audio.is_none().then_some(clip.pattern),
         channel: Some(clip.instrument),
         track,
     }
@@ -105,7 +106,10 @@ pub fn select_clip(sel: Selection, p: &Project, id: ClipId) -> Selection {
 /// first clip. `None` when the row has no clip.
 pub fn clip_to_edit(p: &Project, sel: &Selection, channel: Option<ChannelId>) -> Option<ClipId> {
     let row = channel.or(sel.channel);
-    if let Some(c) = sel.clip.and_then(|id| clip_of(p, id))
+    if let Some(c) = sel
+        .clip
+        .and_then(|id| clip_of(p, id))
+        .filter(|c| c.audio.is_none())
         && (row.is_none() || Some(c.instrument) == row)
     {
         return Some(c.id);
@@ -113,7 +117,7 @@ pub fn clip_to_edit(p: &Project, sel: &Selection, channel: Option<ChannelId>) ->
     let row = row?;
     p.clips
         .iter()
-        .filter(|c| c.instrument == row)
+        .filter(|c| c.instrument == row && c.audio.is_none())
         .min_by_key(|c| c.start)
         .map(|c| c.id)
 }

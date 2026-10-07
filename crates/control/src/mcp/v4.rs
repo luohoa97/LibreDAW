@@ -5,6 +5,7 @@
 //! history match.
 
 use protocol::consts::PPQ;
+use protocol::control::RequestBody;
 use protocol::edit::{Edit, NewInstrument};
 use protocol::ids::{ChannelId, ClipId, GroupId, InstanceId, ShapeId, TrackId};
 use protocol::model::{Curve, Insert, Instrument, Project, SampleHash, ShapePoint, ShapeTarget};
@@ -34,7 +35,9 @@ fn ticks_of_seconds(project: &Project, seconds: f64) -> u32 {
 #[serde(deny_unknown_fields)]
 pub struct AudioClipAddArgs {
     /// A sample hash already in the project.
-    pub sample: String,
+    pub sample: Option<String>,
+    /// Or a sound id from sound_search: it is imported, then placed.
+    pub sound: Option<String>,
     /// An audio row; none: a new audio row with its own mixer track.
     pub instrument: Option<ChannelId>,
     pub start: Value,
@@ -62,14 +65,53 @@ fn sample_name(project: &Project, hash: &str) -> String {
         .unwrap_or_else(|| "Audio".into())
 }
 
+impl AudioClipAddArgs {
+    /// Whether the DAW places it (a sound id, or no length given, so the
+    /// whole sound, whose length only the DAW knows) rather than this crate
+    /// building the edits from a given length.
+    pub fn is_drop(&self) -> bool {
+        self.sound.is_some() || (self.length.is_none() && self.seconds.is_none())
+    }
+}
+
+/// The request for a drop: what the window sends when a sound is dragged
+/// onto the timeline (a whole-length clip, in one undo step).
+pub fn drop_request(project: &Project, a: &AudioClipAddArgs) -> Result<RequestBody, String> {
+    if a.length.is_some() || a.seconds.is_some() || a.offset.is_some() || a.name.is_some() {
+        return Err(
+            "a sound is placed at its full length; leave out length, seconds, offset and name, then trim it with audio_clip_set"
+                .into(),
+        );
+    }
+    let sound = match (&a.sound, &a.sample) {
+        (Some(_), Some(_)) => return Err("give sound or sample, not both".into()),
+        (Some(s), None) | (None, Some(s)) => s.clone(),
+        (None, None) => {
+            return Err(
+                "give sound (an id from sound_search) or sample (a hash from inspect)".into(),
+            );
+        }
+    };
+    let start = ticks_of(&a.start, tpb(project), "start")?;
+    Ok(RequestBody::AudioClipAdd {
+        sound,
+        instrument: a.instrument,
+        start,
+    })
+}
+
 pub fn audio_clip_add(project: &Project, ids: &mut IdGen, a: &AudioClipAddArgs) -> BuildResult {
-    if !project.samples.iter().any(|s| s.hash == a.sample) {
+    let sample = a
+        .sample
+        .as_deref()
+        .ok_or("give sample (a hash from inspect), or sound (an id from sound_search)")?;
+    if !project.samples.iter().any(|s| s.hash == sample) {
         return Err(format!(
             "sample {} is not in the project; use a hash from inspect, or import it first",
-            a.sample.chars().take(70).collect::<String>()
+            sample.chars().take(70).collect::<String>()
         ));
     }
-    let hash = SampleHash::parse(&a.sample).ok_or("sample must be a 64-digit hash")?;
+    let hash = SampleHash::parse(sample).ok_or("sample must be a 64-digit hash")?;
     let t = tpb(project);
     let start = ticks_of(&a.start, t, "start")?;
     let len = match (&a.length, a.seconds) {
@@ -91,7 +133,7 @@ pub fn audio_clip_add(project: &Project, ids: &mut IdGen, a: &AudioClipAddArgs) 
     let name = a
         .name
         .clone()
-        .unwrap_or_else(|| sample_name(project, &a.sample));
+        .unwrap_or_else(|| sample_name(project, sample));
     let (row, own_row) = match a.instrument {
         Some(i) => {
             let ch = project
@@ -680,7 +722,8 @@ mod tests {
         let p = Project::empty();
         let mut ids = IdGen::new(&p, None);
         let a = AudioClipAddArgs {
-            sample: "0".repeat(64),
+            sample: Some("0".repeat(64)),
+            sound: None,
             instrument: None,
             start: json!(0),
             length: Some(json!(2)),

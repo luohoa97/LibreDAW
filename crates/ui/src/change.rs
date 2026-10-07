@@ -57,6 +57,7 @@ fn norm_channel(c: &Channel) -> Channel {
             // Mono is structural; the knobs are not.
             b.params = Default::default();
         }
+        // An audio row has no sound settings; its clips are not compared here.
         Instrument::Audio => {}
     }
     c

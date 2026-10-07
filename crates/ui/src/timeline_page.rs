@@ -126,7 +126,8 @@ pub fn build(app: &Rc<App>) -> TimelinePage {
                 let s = a.session.borrow();
                 (
                     !s.document().project.channels.is_empty(),
-                    a.current_clip().is_some(),
+                    // Only note clips open the editor; a sound has no notes.
+                    a.current_clip().is_some() && a.selection().pattern.is_some(),
                 )
             };
             let entering = !instruments && st.visible_child_name().as_deref() != Some("empty");
