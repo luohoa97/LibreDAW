@@ -109,6 +109,32 @@ pub enum RequestBody {
     },
     /// Analyzes the whole playlist (job).
     AnalyzeSong,
+
+    // Agents in the workstation (18.2)
+    /// Declares what the agent is doing; `text: None` ends the activity.
+    /// Untrusted text (17.1): the DAW caps and cleans it.
+    SetActivity {
+        text: Option<String>,
+        focus: Option<Focus>,
+    },
+
+    // Sounds (15.3, 18.4)
+    /// Searches installed sound packs and user libraries. The DAW caps
+    /// `limit` at 50.
+    SoundSearch {
+        role: Option<String>,
+        genre: Option<String>,
+        tags: Vec<String>,
+        limit: u32,
+    },
+    /// Adds one sampler channel per kit piece in one undo group. `track:
+    /// None` creates one new mixer track named after the kit. Needs
+    /// `base_revision`; replies `Applied`.
+    KitAdd {
+        pack: String,
+        kit: String,
+        track: Option<crate::ids::TrackId>,
+    },
 }
 
 /// Which client kinds may send a request (17.1).
@@ -150,6 +176,34 @@ impl RequestBody {
         matches!(self, ProjectNew { .. } | ProjectOpen { .. } if dirty)
     }
 }
+
+/// A sound from a pack or user library. All strings are untrusted
+/// (`agent_string`).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SoundInfo {
+    pub id: String,
+    pub name: String,
+    pub role: String,
+    pub genres: Vec<String>,
+    pub tags: Vec<String>,
+    pub pack: String,
+    pub kit: Option<String>,
+}
+
+/// What an agent is working on (18.1, 18.2); the DAW outlines it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "id", rename_all = "snake_case")]
+pub enum Focus {
+    Channel(crate::ids::ChannelId),
+    Pattern(PatternId),
+    Track(crate::ids::TrackId),
+    Insert(crate::ids::InstanceId),
+    PlaylistTrack(crate::ids::PlaylistTrackId),
+    Clip(crate::ids::ClipId),
+}
+
+/// Longest activity text shown in the DAW (18.2).
+pub const MAX_ACTIVITY_CHARS: usize = 80;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -261,6 +315,9 @@ pub enum ReplyBody {
     Settings(Settings),
     Plugins {
         plugins: Vec<PluginInfo>,
+    },
+    Sounds {
+        sounds: Vec<SoundInfo>,
     },
     Done,
 }
