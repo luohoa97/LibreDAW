@@ -805,14 +805,17 @@ selection, keyboard editing path.
    house), synth and 808 presets, drum kits.
 4. Drag and drop from a sound browser onto channels and steps.
 
+### 13.3a Milestone D: instrument suite (section 15.9 to 15.10)
+
+Hybrid: libre CLAP instruments plus native drum pad, loop slicer, acid
+bass, and kick synth, all behind one preset browser and macro layer.
+
 ### 13.4 Not in scope (cut, stated plainly)
 
-- "Every single instrument." No DAW ships every instrument. We ship the
-  instrument set in 15.2 and 15.3. Anything else comes from CLAP plugins
-  (for example Surge XT, which is GPL and free). Sampled acoustic
-  instruments (real piano, strings, guitar) need large recorded sample sets
-  with compatible licenses; they are post-Milestone C and each needs a
-  license review.
+- Copies of a commercial DAW's instruments. Milestone D covers every
+  instrument family with libre or native equivalents (15.9), under our own
+  names, not clones. Sampled acoustic instruments need recorded sample sets
+  with compatible licenses and a license review each.
 - Parity with commercial DAWs. They have more than 20 years of features.
   We target the beat-making workflow, not feature parity.
 - Audio recording, MIDI input, automation lanes, tempo automation, time
@@ -852,7 +855,7 @@ and C are planned after Milestone A is approved, with their own review.
 
 ---
 
-## 15. Beat-making features (Milestones B and C)
+## 15. Beat-making features (Milestones B, C, and D)
 
 Status: approved scope, design not yet adversarially reviewed. These
 sections get the same review process as sections 3 to 12 before
@@ -983,6 +986,61 @@ These are acceptance criteria, tested by the validator:
 The layout and look are our own. We do not copy another product's layout,
 icons, names, or color scheme.
 
+
+### 15.9 Instrument suite (Milestone D, hybrid)
+
+Goal: an instrument for every synthesis family a commercial pattern DAW
+ships, at comparable quality, all libre. Approach (owner decision): use
+existing libre instruments that are already professional quality, and
+build natively only where nothing good exists.
+
+| Family | Source | Status |
+|---|---|---|
+| Subtractive, wavetable, FM | Surge XT (GPL-3.0-or-later, has CLAP) | candidate |
+| Other libre synths (FM, additive, physical modeling, kick synth) | each one checked for license, CLAP on Linux, and quality before listing | to research |
+| Sampler / multisample | native (15.1) | Milestone B |
+| 808 | native (15.2) | Milestone B |
+| Drum pad (16 pads, layers, velocity) | native, built on the sampler | Milestone D |
+| Loop slicer (slice a loop to steps) | native, built on the sampler | Milestone D |
+| Acid bass (303-style, slide and accent) | native | Milestone D |
+| Kick synth | native or libre plugin, after research | Milestone D |
+| Piano and other acoustic | libre sample sets (for example CC-BY) in `libredaw-sounds` | after license review |
+
+- Third-party libre instruments are separate CLAP plugins, not linked into
+  our binary. They are installed as a companion package (or from distro
+  packages), never vendored into this repository.
+- "Just as good" is judged by the owner by ear on a fixed set of reference
+  presets per family, not claimed by us.
+
+### 15.10 Presets: why ours are easier
+
+An instrument is an engine. Beginners struggle with engines that each have
+their own GUI and hundreds of controls. LibreDAW puts one consistent layer
+on top of every instrument, native or plugin:
+
+1. **Sound-first browser.** Presets are tagged by role and genre ("808",
+   "phonk cowbell", "dark bell", "trap hat", "pad"), not by which synth
+   makes them. Search and filter by role. The engine name is secondary.
+2. **Audition in context.** Clicking a preset plays a short phrase in the
+   project's key and tempo, through the channel's mixer track.
+3. **Eight macro knobs.** Every preset maps up to eight plainly named knobs
+   (for example Tone, Punch, Grit, Length, Space, Wobble, Width, Brightness)
+   onto the engine's parameters, with safe ranges. They appear in our own
+   UI, the same place for every instrument. The plugin's own GUI is behind
+   an "Advanced" button.
+4. **Level-matched.** Presets are normalized to a common loudness, so
+   switching presets never jumps in volume or clips the master.
+5. **Key and scale lock.** The project has a key. The piano roll and step
+   pitch lanes highlight or snap to it.
+6. **Preset chains.** A preset can carry its mixer effects (for example an
+   808 with its saturator and EQ), applied when the preset is loaded.
+7. **Variations.** "Similar sounds" and "vary" (random changes within the
+   macro ranges) for fast exploration; always undoable.
+
+A preset is a small TOML file: engine id, plugin state or native
+parameters, macro mappings, tags, loudness. User libraries from other
+installed DAWs (15.3) appear as local-only packs in the same browser.
+
 ---
 
 ## Owner decisions (approved 2026-10-07)
@@ -996,6 +1054,12 @@ icons, names, or color scheme.
 ---
 
 ## Changelog
+
+### Amendment 5 (2026-10-07, owner)
+
+Goal: every instrument family of a commercial pattern DAW, libre. Hybrid
+approach chosen: existing libre CLAP instruments plus native gaps
+(Milestone D, 15.9). Preset and macro layer defined (15.10).
 
 ### Amendment 4 (2026-10-07, owner)
 
