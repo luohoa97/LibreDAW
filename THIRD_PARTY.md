@@ -10,15 +10,19 @@ CI fails if this file is out of date.
 |---|---|---|---|
 | clap-sys | 0.5.0 | MIT/Apache-2.0 | raw CLAP C ABI bindings for plugin hosting, SPEC 9.1 (plugin-host) |
 | cpal | 0.18.2 | Apache-2.0 | audio I/O (fixed stack); its `pipewire` feature adds the native PipeWire host (pipewire, libspa, and bindgen at build time), its `realtime-dbus` feature promotes the PipeWire callback thread to SCHED_RR through rtkit (audio_thread_priority, dbus), and its `jack` feature the JACK backend |
+| dbus | 0.6.5 | Apache-2.0/MIT | Flatpak realtime portal call that gives the audio thread real-time priority (engine); already pulled in by cpal realtime-dbus |
 | glib | 0.22.10 | MIT | timer, fd, and X11 event sources on the GTK main context for plugins (plugin-host; also ui through gtk4) |
 | gtk4 | 0.11.5 | MIT | GTK4 bindings, the app toolkit (ui); feature v4_10 |
 | libadwaita | 0.9.2 | MIT | AdwApplicationWindow, toasts, dialogs (ui); feature v1_5 |
+| libc | 0.2.190 | MIT OR Apache-2.0 | RLIMIT_RTTIME and thread id for the realtime portal (engine); already pulled in by cpal |
 | libloading | 0.7.4 | ISC | dlopen of .clap plugin files (plugin-host) |
 | libloading | 0.8.9 | ISC | dlopen of .clap plugin files (plugin-host) |
 | rtrb | 0.4.0 | MIT OR Apache-2.0 | wait-free SPSC rings for the state, retire, command, plugin-event and event rings, SPEC 4.2 and 4.4 (engine) |
 | serde | 1.0.229 | MIT OR Apache-2.0 | derive (de)serialization for the project file and the control API (protocol); typed MCP tool arguments (mcp) |
 | serde_json | 1.0.151 | MIT OR Apache-2.0 | JSON for the control API used by scripts and agents (protocol tests now; ui, script, mcp later) |
+| symphonia | 0.6.1 | MPL-2.0 | decode FLAC, Ogg Vorbis (also inside FL Studio WAV files), MP3 and PCM WAV samples, SPEC 15.3 (audiofile); MPL-2.0; features wav, pcm, flac, vorbis, ogg, mp3 only |
 | toml | 1.1.6+spec-1.1.0 | MIT OR Apache-2.0 | parse the project file, SPEC 7.2 (protocol); saving uses our own emitter |
+| wavicle | 0.1.0 | MIT OR Apache-2.0 | pure-Rust lossless WavPack decoder for FL Studio sample packs, SPEC 15.3 (audiofile); MIT OR Apache-2.0, no unsafe, no dependencies |
 | x11rb | 0.13.2 | MIT OR Apache-2.0 | X11 top-level window for plugin GUIs that need a parent, SPEC 9.2 (plugin-host) |
 
 ## All crates in the dependency graph (x86_64-unknown-linux-gnu)
@@ -35,6 +39,7 @@ CI fails if this file is out of date.
 | bindgen | 0.72.1 | BSD-3-Clause |
 | bitflags | 1.3.2 | MIT/Apache-2.0 |
 | bitflags | 2.13.2 | MIT OR Apache-2.0 |
+| bytemuck | 1.25.2 | Zlib OR Apache-2.0 OR MIT |
 | cairo-rs | 0.22.9 | MIT |
 | cairo-sys-rs | 0.22.9 | MIT |
 | cc | 1.6.0 | MIT OR Apache-2.0 |
@@ -50,6 +55,7 @@ CI fails if this file is out of date.
 | either | 1.19.0 | MIT OR Apache-2.0 |
 | equivalent | 1.0.2 | Apache-2.0 OR MIT |
 | errno | 0.3.14 | MIT OR Apache-2.0 |
+| extended | 0.1.0 | MIT |
 | field-offset | 0.3.6 | MIT OR Apache-2.0 |
 | find-msvc-tools | 0.1.14 | MIT OR Apache-2.0 |
 | futures-channel | 0.3.34 | MIT OR Apache-2.0 |
@@ -101,6 +107,8 @@ CI fails if this file is out of date.
 | minimal-lexical | 0.2.1 | MIT/Apache-2.0 |
 | nom | 7.1.3 | MIT |
 | nom | 8.0.0 | MIT |
+| num-complex | 0.4.6 | MIT OR Apache-2.0 |
+| num-traits | 0.2.19 | MIT OR Apache-2.0 |
 | pango | 0.22.9 | MIT |
 | pango-sys | 0.22.9 | MIT |
 | pin-project-lite | 0.2.17 | Apache-2.0 OR MIT |
@@ -112,6 +120,7 @@ CI fails if this file is out of date.
 | quote | 1.0.47 | MIT OR Apache-2.0 |
 | regex | 1.13.1 | MIT OR Apache-2.0 |
 | regex-automata | 0.4.18 | MIT OR Apache-2.0 |
+| regex-lite | 0.1.9 | MIT OR Apache-2.0 |
 | regex-syntax | 0.8.11 | MIT OR Apache-2.0 |
 | rtrb | 0.4.0 | MIT OR Apache-2.0 |
 | rustc-hash | 2.1.3 | Apache-2.0 OR MIT |
@@ -127,6 +136,16 @@ CI fails if this file is out of date.
 | shlex | 2.0.1 | MIT OR Apache-2.0 |
 | slab | 0.4.12 | MIT |
 | smallvec | 1.16.2 | MIT OR Apache-2.0 |
+| symphonia | 0.6.1 | MPL-2.0 |
+| symphonia-bundle-flac | 0.6.1 | MPL-2.0 |
+| symphonia-bundle-mp3 | 0.6.1 | MPL-2.0 |
+| symphonia-codec-pcm | 0.6.1 | MPL-2.0 |
+| symphonia-codec-vorbis | 0.6.1 | MPL-2.0 |
+| symphonia-common | 0.6.1 | MPL-2.0 |
+| symphonia-core | 0.6.1 | MPL-2.0 |
+| symphonia-format-ogg | 0.6.1 | MPL-2.0 |
+| symphonia-format-riff | 0.6.1 | MPL-2.0 |
+| symphonia-metadata | 0.6.1 | MPL-2.0 |
 | syn | 2.0.119 | MIT OR Apache-2.0 |
 | syn | 3.0.6 | MIT OR Apache-2.0 |
 | system-deps | 7.0.8 | MIT OR Apache-2.0 |
@@ -140,6 +159,7 @@ CI fails if this file is out of date.
 | unicode-ident | 1.0.26 | (MIT OR Apache-2.0) AND Unicode-3.0 |
 | unicode-width | 0.2.2 | MIT OR Apache-2.0 |
 | version-compare | 0.2.1 | MIT |
+| wavicle | 0.1.0 | MIT OR Apache-2.0 |
 | winnow | 1.0.4 | MIT |
 | x11rb | 0.13.2 | MIT OR Apache-2.0 |
 | x11rb-protocol | 0.13.2 | MIT OR Apache-2.0 |
