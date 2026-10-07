@@ -449,8 +449,12 @@ fn install_toggles(ui: &Rc<Ui>) {
         let update = {
             let (t, name, action) = (toggle.clone(), name, action);
             move || {
-                let verb = if t.is_active() { "Hide" } else { "Show" };
-                t.set_tooltip_text(Some(&shortcuts::tooltip(&format!("{verb} {name}"), action)));
+                let text = match (t.is_active(), name) {
+                    (true, n) => format!("Hide {n}"),
+                    (false, "Sounds") => "Show Sounds – pick a sound to add an instrument".into(),
+                    (false, n) => format!("Show {n}"),
+                };
+                t.set_tooltip_text(Some(&shortcuts::tooltip(&text, action)));
             }
         };
         update();
