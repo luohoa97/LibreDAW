@@ -20,20 +20,21 @@ use protocol::model::Instrument;
 use crate::app::App;
 use crate::channels::{self, NewChannel};
 use crate::samples_ui;
+use crate::sound_picker;
 use crate::soundlib::{self, Kit, Piece, Source};
 use doc::presets::{self, Preset};
+use plugin_host::sounds::{self, Sound};
 
 /// The label of a role in the filter row and the subtitle.
 pub fn role_label(role: &str) -> &str {
     match role {
         "Drum" => "Drums",
-        "Blank" => "Empty",
-        other => other,
+        other => sound_picker::role_text(other).0,
     }
 }
 
 /// Whether a sound passes the search text and the role filter. The search
-/// is a case-insensitive substring over name, role, and "Built-in".
+/// is a case-insensitive substring over name and role.
 pub fn matches(p: &Preset, search: &str, role: Option<&str>) -> bool {
     if let Some(r) = role
         && p.role != r
@@ -44,7 +45,7 @@ pub fn matches(p: &Preset, search: &str, role: Option<&str>) -> bool {
     if q.is_empty() {
         return true;
     }
-    [p.name, role_label(p.role), "built-in"]
+    [p.name, role_label(p.role)]
         .iter()
         .any(|f| f.to_lowercase().contains(&q))
 }
@@ -75,12 +76,37 @@ pub fn matches_piece(kit: &Kit, piece: &Piece, search: &str, role: Option<&str>)
     .any(|f| f.to_lowercase().contains(&q))
 }
 
+/// The same test for a factory sound of a plugin: name, role and plugin name.
+pub fn matches_sound(s: &Sound, search: &str, role: Option<&str>) -> bool {
+    if let Some(r) = role
+        && s.role != r
+    {
+        return false;
+    }
+    let q = search.trim().to_lowercase();
+    if q.is_empty() {
+        return true;
+    }
+    [
+        s.label(),
+        role_label(&s.role).to_string(),
+        sound_picker::plugin_name(s),
+    ]
+    .iter()
+    .any(|f| f.to_lowercase().contains(&q))
+}
+
 /// The roles that have a sound, in list order.
 pub fn roles(all: &[Preset]) -> Vec<&'static str> {
     let mut out: Vec<&'static str> = Vec::new();
     for p in all {
         if !out.contains(&p.role) {
             out.push(p.role);
+        }
+    }
+    for r in sounds::roles() {
+        if !out.contains(&r) {
+            out.push(r);
         }
     }
     out
@@ -97,6 +123,10 @@ enum Entry {
         row: adw::ActionRow,
         index: usize,
     },
+    Sound {
+        row: adw::ActionRow,
+        index: usize,
+    },
     Kit {
         expander: adw::ExpanderRow,
         kit: Kit,
@@ -107,7 +137,7 @@ enum Entry {
 type Entries = Rc<RefCell<Vec<Entry>>>;
 
 pub fn build(app: &Rc<App>) -> gtk::Widget {
-    let all = presets::presets();
+    let all = drum_presets();
     let state = Rc::new(RefCell::new(State {
         search: String::new(),
         role: None,
@@ -118,6 +148,7 @@ pub fn build(app: &Rc<App>) -> gtk::Widget {
     search.set_placeholder_text(Some("Search sounds"));
     search.update_property(&[gtk::accessible::Property::Label("Search sounds")]);
     search.set_hexpand(true);
+    search.set_widget_name("sound-search");
     let search_box = gtk::Box::new(gtk::Orientation::Horizontal, 6);
     search_box.add_css_class("toolbar");
     search_box.append(&search);
@@ -173,7 +204,7 @@ pub fn build(app: &Rc<App>) -> gtk::Widget {
         move || {
             let s = state.borrow();
             let searching = !s.search.trim().is_empty();
-            let all = presets::presets();
+            let all = drum_presets();
             let mut shown = 0;
             for e in entries.borrow().iter() {
                 match e {
@@ -182,6 +213,13 @@ pub fn build(app: &Rc<App>) -> gtk::Widget {
                             .get(*index)
                             .map(|p| matches(p, &s.search, s.role))
                             .unwrap_or(false);
+                        row.set_visible(ok);
+                        shown += ok as usize;
+                    }
+                    Entry::Sound { row, index } => {
+                        let ok = sounds::sounds()
+                            .get(*index)
+                            .is_some_and(|x| matches_sound(x, &s.search, s.role));
                         row.set_visible(ok);
                         shown += ok as usize;
                     }
@@ -217,10 +255,19 @@ pub fn build(app: &Rc<App>) -> gtk::Widget {
                 list.remove(&c);
             }
             let mut es = Vec::new();
-            for (i, p) in presets::presets().iter().enumerate() {
+            for (i, p) in drum_presets().iter().enumerate() {
                 let row = preset_row(&app, p);
                 list.append(&row);
                 es.push(Entry::Preset { row, index: i });
+            }
+            if !sound_picker::installed(&app) {
+                list.append(&install_row());
+            }
+            let have = sound_picker::installed(&app);
+            for (i, s) in sounds::sounds().iter().enumerate() {
+                let row = sound_row(&app, s, have);
+                list.append(&row);
+                es.push(Entry::Sound { row, index: i });
             }
             for kit in samples_ui::library(&app) {
                 let (expander, rows) = kit_rows(&app, &kit);
@@ -231,11 +278,14 @@ pub fn build(app: &Rc<App>) -> gtk::Widget {
                     rows,
                 });
             }
+            // Advanced: any other instrument on this computer.
+            list.append(&more_row());
             *entries.borrow_mut() = es;
             apply();
         }
     });
     rebuild();
+    sound_picker::set_refresh(rebuild.clone());
 
     {
         let (st, ap) = (state.clone(), apply.clone());
@@ -292,10 +342,95 @@ pub fn build(app: &Rc<App>) -> gtk::Widget {
     view.upcast()
 }
 
+/// The drums made by Oto itself. The built-in synth and 808 are not offered any
+/// more (Amendment 23); projects that hold them still play.
+fn drum_presets() -> Vec<Preset> {
+    presets::presets()
+        .into_iter()
+        .filter(|p| p.role == "Drum")
+        .collect()
+}
+
+/// Focuses the search box of the Sounds pane under `root`.
+pub fn focus_search(root: &gtk::Widget) {
+    fn find(w: &gtk::Widget) -> Option<gtk::Widget> {
+        if w.widget_name() == "sound-search" {
+            return Some(w.clone());
+        }
+        let mut c = w.first_child();
+        while let Some(child) = c {
+            if let Some(f) = find(&child) {
+                return Some(f);
+            }
+            c = child.next_sibling();
+        }
+        None
+    }
+    if let Some(s) = find(root) {
+        s.grab_focus();
+    }
+}
+
+/// Shown while the sounds are not installed.
+fn install_row() -> adw::ActionRow {
+    let row = adw::ActionRow::builder()
+        .title("Install Sounds…")
+        .subtitle("Get free sounds for bass, keys, pads and more")
+        .activatable(true)
+        .build();
+    row.add_prefix(&gtk::Image::from_icon_name("folder-download-symbolic"));
+    row.set_tooltip_text(Some("Opens the software store to get the free sounds"));
+    row.connect_activated(|r| sound_picker::open_store(r.upcast_ref()));
+    row
+}
+
+/// A factory sound of a plugin. Greyed out until the plugin is installed.
+fn sound_row(app: &Rc<App>, s: &Sound, have: bool) -> adw::ActionRow {
+    let label = sound_picker::sound_label(s);
+    let row = adw::ActionRow::new();
+    row.set_title(&gtk::glib::markup_escape_text(&label));
+    row.set_subtitle(&format!(
+        "{} · {}",
+        role_label(&s.role),
+        sound_picker::plugin_name(s)
+    ));
+    let tip = sound_picker::role_text(&s.role).1;
+    row.set_tooltip_text(Some(tip));
+    row.set_sensitive(have);
+    row.set_activatable(have);
+    let add_btn = gtk::Button::from_icon_name("list-add-symbolic");
+    add_btn.add_css_class("flat");
+    add_btn.set_valign(gtk::Align::Center);
+    add_btn.set_tooltip_text(Some("Add to Project"));
+    add_btn.update_property(&[gtk::accessible::Property::Label(&format!(
+        "Add {label} to the project"
+    ))]);
+    row.add_suffix(&add_btn);
+    let (a, s2) = (app.clone(), s.clone());
+    add_btn.connect_clicked(move |_| sound_picker::add_sound(&a, &s2));
+    let (a, s2) = (app.clone(), s.clone());
+    row.connect_activated(move |_| sound_picker::add_sound(&a, &s2));
+    row
+}
+
+/// The last row: the full list of instruments on this computer.
+fn more_row() -> adw::ActionRow {
+    let row = adw::ActionRow::builder()
+        .title("More Instruments…")
+        .subtitle("Choose from other instruments installed on this computer")
+        .activatable(true)
+        .build();
+    row.set_tooltip_text(Some("Shows every instrument installed on this computer"));
+    row.connect_activated(|r| {
+        let _ = r.activate_action("win.add-instrument", None);
+    });
+    row
+}
+
 fn preset_row(app: &Rc<App>, p: &Preset) -> adw::ActionRow {
     let row = adw::ActionRow::new();
     row.set_title(p.name);
-    row.set_subtitle(&format!("{} - Built-in", role_label(p.role)));
+    row.set_subtitle(&format!("{} · Oto", role_label(p.role)));
     row.set_activatable(true);
     row.set_tooltip_text(Some("Add to Project"));
     let add_btn = gtk::Button::from_icon_name("list-add-symbolic");
@@ -465,7 +600,6 @@ mod tests {
         assert!(matches(kick, "kic", None));
         assert!(matches(kick, "  KICK ", None));
         assert!(matches(kick, "drums", None), "role is searchable");
-        assert!(matches(kick, "built-in", None));
         assert!(!matches(kick, "bass", None));
         assert!(matches(kick, "", Some("Drum")));
         assert!(!matches(kick, "", Some("Bass")));
@@ -474,7 +608,7 @@ mod tests {
 
     #[test]
     fn roles_are_listed_once_in_order() {
-        let r = roles(&presets::presets());
+        let r = roles(&drum_presets());
         assert_eq!(r.first(), Some(&"Drum"));
         let mut d = r.clone();
         d.sort();
@@ -486,9 +620,15 @@ mod tests {
 
     #[test]
     fn some_sound_matches_every_role_filter() {
-        let all = presets::presets();
+        let all = drum_presets();
         for role in roles(&all) {
-            assert!(all.iter().any(|p| matches(p, "", Some(role))), "{role}");
+            assert!(
+                all.iter().any(|p| matches(p, "", Some(role)))
+                    || sounds::sounds()
+                        .iter()
+                        .any(|s| matches_sound(s, "", Some(role))),
+                "{role}"
+            );
         }
     }
 
@@ -498,8 +638,8 @@ mod tests {
         let kit = parse_kit(text, Path::new("/x/phonk"), Source::Pack, &HashMap::new()).unwrap();
         let (kick, bass) = (&kit.pieces[0], &kit.pieces[1]);
         assert!(matches_piece(&kit, kick, "", Some("Drum")));
-        assert!(!matches_piece(&kit, kick, "", Some("Bass")));
-        assert!(matches_piece(&kit, bass, "", Some("Bass")));
+        assert!(!matches_piece(&kit, kick, "", Some("808")));
+        assert!(matches_piece(&kit, bass, "", Some("808")));
         assert!(matches_piece(&kit, kick, "phonk", None), "kit name");
         assert!(matches_piece(&kit, kick, "KICK", None), "role tag");
         assert!(matches_piece(&kit, kick, "deep", None), "name");

@@ -839,10 +839,13 @@ fn install_actions(gapp: &adw::Application, ui: &Rc<Ui>, app: &Rc<App>) {
             channels::add(&a, NewChannel::Bass808);
         }),
     );
-    let (a, w) = (app.clone(), window.clone());
+    let u = ui.clone();
     add(
         "add-sound",
-        Box::new(move || crate::sound_picker::show(&w, &a)),
+        Box::new(move || {
+            u.browser_split.set_show_sidebar(true);
+            crate::browser::focus_search(u.browser_split.upcast_ref());
+        }),
     );
     let (a, w) = (app.clone(), window.clone());
     add(

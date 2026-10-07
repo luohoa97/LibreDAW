@@ -136,10 +136,10 @@ pub fn role_title(role: &str) -> String {
     }
 }
 
-/// "Drum" for every drum role, "Bass" for 808s: the filter groups of the
+/// "Drum" for every drum role, "808" for 808s: the filter groups of the
 /// browser.
 pub fn role_group(role: &str) -> &'static str {
-    if role == "808" { "Bass" } else { "Drum" }
+    if role == "808" { "808" } else { "Drum" }
 }
 
 /// "kick_distorted" to "Kick Distorted".
@@ -501,7 +501,7 @@ role = "kick"
         assert_eq!(k.pieces[2].root_key, Some(24));
         assert_eq!(k.pieces[2].path, Path::new("/x/phonk/808_sub.wav"));
         assert_eq!(role_title("hat_closed"), "Closed Hat");
-        assert_eq!(role_group("808"), "Bass");
+        assert_eq!(role_group("808"), "808");
         assert_eq!(role_group("kick"), "Drum");
     }
 

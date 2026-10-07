@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//! The instrument picker (SPEC 20.6, Amendment 23): sounds by role, each a
-//! factory sound of a free CLAP plugin. Choosing one adds an instrument that
-//! already plays it. When the plugin is not installed the sounds are greyed
-//! out and "Install Sounds…" opens the software store.
+//! Sounds for the Sounds pane (SPEC 20.6, Amendment 23): factory sounds of a
+//! free CLAP plugin, by role. Adding one makes an instrument that already
+//! plays it. When the plugin is missing the pane greys them out and
+//! "Install Sounds…" opens the software store.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -60,7 +60,7 @@ pub fn new_channel(s: &Sound) -> Option<NewChannel> {
 }
 
 /// Does the first plugin of the list exist on this machine?
-fn installed(app: &App) -> bool {
+pub fn installed(app: &App) -> bool {
     sounds::plugins().first().is_some_and(|p| {
         app.session
             .borrow()
@@ -71,12 +71,17 @@ fn installed(app: &App) -> bool {
 }
 
 thread_local! {
-    /// Redraws the open picker after a rescan, if one is open.
+    /// Redraws the Sounds pane after a rescan.
     static REFRESH: RefCell<Option<Rc<dyn Fn()>>> = const { RefCell::new(None) };
 }
 
+/// Lets the Sounds pane be redrawn when the plugin scan finds something new.
+pub fn set_refresh(f: Rc<dyn Fn()>) {
+    REFRESH.with(|r| *r.borrow_mut() = Some(f));
+}
+
 /// Opens the software store on the sounds' page.
-fn open_store(parent: &gtk::Widget) {
+pub fn open_store(parent: &gtk::Widget) {
     let Some(ext) = sounds::plugins().first().map(|p| p.extension.clone()) else {
         return;
     };
@@ -112,93 +117,21 @@ pub fn rescan_on_focus(window: &adw::ApplicationWindow, app: &Rc<App>) {
     });
 }
 
-/// Shows the picker over `parent`.
-pub fn show(parent: &impl IsA<gtk::Widget>, app: &Rc<App>) {
-    let dialog = adw::Dialog::builder()
-        .title("Add Instrument")
-        .content_width(420)
-        .content_height(560)
-        .build();
-    let page = gtk::Box::new(gtk::Orientation::Vertical, 18);
-    page.set_margin_top(12);
-    page.set_margin_bottom(18);
-    page.set_margin_start(12);
-    page.set_margin_end(12);
-    let scroller = gtk::ScrolledWindow::builder()
-        .child(&page)
-        .vexpand(true)
-        .hscrollbar_policy(gtk::PolicyType::Never)
-        .build();
-    let toolbar = adw::ToolbarView::new();
-    toolbar.add_top_bar(&adw::HeaderBar::new());
-    toolbar.set_content(Some(&scroller));
-    dialog.set_child(Some(&toolbar));
-
-    let fill: Rc<dyn Fn()> = {
-        let (app, page, dialog) = (app.clone(), page.clone(), dialog.clone());
-        Rc::new(move || {
-            while let Some(c) = page.first_child() {
-                page.remove(&c);
-            }
-            let have = installed(&app);
-            if !have {
-                page.append(&install_group(&dialog));
-            }
-            for role in sounds::roles() {
-                page.append(&role_group(&app, &dialog, role, have));
-            }
-        })
-    };
-    fill();
-    REFRESH.with(|r| *r.borrow_mut() = Some(fill));
-    dialog.connect_closed(|_| REFRESH.with(|r| *r.borrow_mut() = None));
-    dialog.present(Some(parent));
+/// The plugin a sound plays through, as the user knows it ("Surge XT").
+pub fn plugin_name(s: &Sound) -> String {
+    sounds::plugin_of(s)
+        .map(|p| p.name.clone())
+        .unwrap_or_default()
 }
 
-fn install_group(dialog: &adw::Dialog) -> adw::PreferencesGroup {
-    let group = adw::PreferencesGroup::new();
-    let row = adw::ActionRow::builder()
-        .title("Install Sounds…")
-        .subtitle("Get free sounds for bass, keys, pads and more")
-        .activatable(true)
-        .build();
-    row.add_prefix(&gtk::Image::from_icon_name("folder-download-symbolic"));
-    row.set_tooltip_text(Some("Opens the software store to get the free sounds"));
-    let d = dialog.clone();
-    row.connect_activated(move |_| open_store(d.upcast_ref()));
-    group.add(&row);
-    group
-}
-
-fn role_group(
-    app: &Rc<App>,
-    dialog: &adw::Dialog,
-    role: &str,
-    have: bool,
-) -> adw::PreferencesGroup {
-    let (title, blurb) = role_text(role);
-    let group = adw::PreferencesGroup::builder().title(title).build();
-    group.set_sensitive(have);
-    for s in sounds::sounds().iter().filter(|s| s.role == role) {
-        let label = sound_label(s);
-        let row = adw::ActionRow::builder()
-            .title(gtk::glib::markup_escape_text(&label))
-            .activatable(have)
-            .build();
-        row.set_tooltip_text(Some(blurb));
-        let (app, dialog, s) = (app.clone(), dialog.clone(), s.clone());
-        row.connect_activated(move |_| {
-            dialog.close();
-            if let Some(what) = new_channel(&s)
-                && channels::add(&app, what).is_some()
-            {
-                let a2 = app.clone();
-                app.toast_action(&format!("Added {}", sound_label(&s)), "Undo", move || {
-                    a2.undo()
-                });
-            }
+/// Adds `s` as a new instrument, with Undo in the toast.
+pub fn add_sound(app: &Rc<App>, s: &Sound) {
+    if let Some(what) = new_channel(s)
+        && channels::add(app, what).is_some()
+    {
+        let a2 = app.clone();
+        app.toast_action(&format!("Added {}", sound_label(s)), "Undo", move || {
+            a2.undo()
         });
-        group.add(&row);
     }
-    group
 }

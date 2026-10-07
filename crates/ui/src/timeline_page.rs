@@ -30,10 +30,11 @@ fn flat_button(icon: &str, tip: &str) -> gtk::Button {
     b
 }
 
-fn add_instrument_button(pill: bool) -> gtk::MenuButton {
-    let b = gtk::MenuButton::new();
-    b.set_menu_model(Some(&crate::menus::add_channel_menu()));
-    b.set_tooltip_text(Some("Add an Instrument Row"));
+/// Opens the Sounds pane, the one place to choose a sound.
+fn add_instrument_button(pill: bool) -> gtk::Button {
+    let b = gtk::Button::new();
+    b.set_action_name(Some("win.add-sound"));
+    b.set_tooltip_text(Some("Pick a Sound for a New Instrument"));
     if pill {
         b.set_label("Add Instrument");
         b.add_css_class("suggested-action");

@@ -20,7 +20,6 @@ use protocol::ids::ChannelId;
 
 use crate::app::{App, UiCommand};
 use crate::channels;
-use doc::presets;
 
 /// Actions of a channel row (`row.*`), registered for each row.
 pub const ROW_ACTIONS: &[&str] = &["sound", "rename", "remove", "choke"];
@@ -70,28 +69,6 @@ pub fn main_menu() -> gio::Menu {
     end.append(Some("_Keyboard Shortcuts"), Some("win.show-help-overlay"));
     end.append(Some("_About Oto"), Some("app.about"));
     menu.append_section(None, &end);
-    menu
-}
-
-/// The "Add Instrument" menu: the drums, then the sounds picker (Amendment 23),
-/// the sampler and a plugin. The built-in synth and 808 are not offered; old
-/// projects that hold them still play.
-pub fn add_channel_menu() -> gio::Menu {
-    let menu = gio::Menu::new();
-    let drums = gio::Menu::new();
-    for p in presets::presets().iter().filter(|p| p.role == "Drum") {
-        let item = gio::MenuItem::new(Some(p.name), None);
-        item.set_action_and_target_value(Some("win.add-preset"), Some(&p.name.to_variant()));
-        drums.append_item(&item);
-    }
-    menu.append_section(Some("Drums"), &drums);
-    let more = gio::Menu::new();
-    more.append(Some("_Sounds…"), Some("win.add-sound"));
-    more.append(Some("_Sampler…"), Some("win.add-sampler"));
-    menu.append_section(None, &more);
-    let plugin = gio::Menu::new();
-    plugin.append(Some("_Plugin…"), Some("win.add-instrument"));
-    menu.append_section(None, &plugin);
     menu
 }
 
@@ -315,7 +292,7 @@ mod tests {
         walk(&clip_menu(), "clip", CLIP_ACTIONS);
         walk(&effects_menu(), "fx", FX_ACTIONS);
         // The primary and Add Channel menus mix window and app actions.
-        for menu in [main_menu(), add_channel_menu()] {
+        for menu in [main_menu()] {
             for (action, _) in items_of(menu.upcast_ref()) {
                 let (prefix, name) = action.split_once('.').unwrap();
                 match prefix {
