@@ -2046,6 +2046,62 @@ made every edit, so this section turns that record into a report.
 
 ---
 
+## 23. Memory budget (Amendment 25)
+
+Owner: "Make our DAW lightweight on RAM." Numbers are measured, not
+guessed.
+
+### 23.1 Baseline (2026-10-07)
+
+The Oto timeline preview (0a0f9dd, release build) was measured idle with
+the starter project open, on GNOME 50, Wayland, with PipeWire:
+
+| Measure | Value |
+|---|---|
+| RSS | 172 MB |
+| PSS | 133 MB |
+| Anonymous (heap) | 84 MB |
+| File-backed (shared libraries) | 50 MB PSS |
+| Threads | 19 |
+
+### 23.2 Budgets (release build, PSS)
+
+| State | Budget |
+|---|---|
+| Idle, starter project | 120 MB or less |
+| 16 instruments, 64 clips (`loadproject`) | 160 MB or less, not counting plugins |
+| Each Surge XT instance | Measured and reported. Oto adds 1 MB or less beyond the plugin's own use. |
+| Change tree in memory | Capped by the existing history memory limit, default 64 MB, with older states on disk (15.11) |
+
+### 23.3 Rules
+
+- **Samples:**
+  - Decoded audio is stored once per content hash and shared by every
+    instrument that uses it.
+  - Only samples a project uses are loaded.
+  - The sound library index (FL Studio, packs) keeps metadata only, never
+    audio.
+  - Auditions decode into one bounded cache of 32 MB or less, with LRU
+    eviction.
+- **Waveforms:** the UI keeps peak summaries (at most one min/max pair
+  per 256 frames), never a second copy of the audio.
+- **Rendering:** clips and grids use cached GSK render nodes (no
+  per-clip textures). Off-screen rows are not drawn.
+- **Plugins:**
+  - A plugin is loaded only while an instrument or effect uses it.
+  - Scanning reads descriptors and unloads them.
+  - Sandboxed runners (section 9) share one process per plugin binary
+    where the plugin allows it.
+- **Threads:** one loader thread pool, sized to min(cores, 4), shared by
+  decoding, scanning and saving. No thread is started per job.
+- **Gate:** `tools/mem.fish` launches the release build headless.
+  - It loads each state in 23.2 and records PSS in `docs/perf.md`.
+  - It fails when a budget is exceeded, or when a value grows by more
+    than 10% over the last recorded value.
+  - It runs before each release.
+
+---
+
 ## Owner decisions (approved 2026-10-07)
 
 1. Approved: the futex syscall exception for sandboxed plugins (risk 3, 9.4).
@@ -2057,6 +2113,12 @@ made every edit, so this section turns that record into a report.
 ---
 
 ## Changelog
+
+### Amendment 25 (2026-10-07, owner)
+
+- Added section 23: memory budget. The measured baseline is 133 MB PSS
+  idle. It sets PSS budgets per state, rules for samples, waveforms,
+  render nodes, plugins and threads, and a tools/mem.fish release gate.
 
 ### Amendment 24 (2026-10-07, owner)
 
