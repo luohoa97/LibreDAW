@@ -205,6 +205,7 @@ struct Notes {
 }
 
 impl Notes {
+    #[allow(clippy::too_many_arguments)]
     fn push(
         &mut self,
         ids: &mut Ids,
