@@ -1504,6 +1504,20 @@ Status: approved scope, not yet adversarially reviewed.
   already applied stays and is undoable as usual (author-scoped history).
 - The Agent page in the inspector lists the activity log: time, activity
   text, and each undo group the agent made, with an Undo button per group.
+- Amendment 18 (owner): the glow is soft and clean, and it marks the
+  work itself. The instrument row, clip, or mixer track the agent is
+  changing glows (soft orange outer glow, no hard outline), tied to the
+  change tree: every agent activity is a group of commits in the tree;
+  the glowing objects are exactly those touched by the open activity, and
+  the History page shows that group glowing as "in progress".
+- Hard stop with one key: Escape stops the agent whenever an agent is
+  working (a focused text field or open popover takes the first Escape;
+  the next one stops the agent). The stop is immediate: the control
+  server rejects the agent's in-flight and further requests, disconnects
+  it, and keeps agents off for the rest of the run; the glow disappears
+  at once. A toast says "Agent stopped" with an "Undo Its Changes"
+  button, which restores the commit before the open activity as one
+  undoable step. The pill's Stop button does the same.
 
 ### 18.2 Activity reporting
 
@@ -1754,6 +1768,12 @@ mixer; none adds a parallel concept.
 ---
 
 ## Changelog
+
+### Amendment 18 (2026-10-07, owner)
+
+Agent glow sits on the objects being changed and is tied to the change
+tree (one commit group per activity); Escape is a hard stop that cancels
+the agent and removes the glow, with "Undo Its Changes" (18.1).
 
 ### Amendment 17 (2026-10-07, owner)
 
