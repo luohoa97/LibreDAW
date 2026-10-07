@@ -28,7 +28,7 @@ function justification
         case x11rb
             echo "X11 top-level window for plugin GUIs that need a parent, SPEC 9.2 (plugin-host)"
         case serde
-            echo "derive (de)serialization for the project file and the control API (protocol)"
+            echo "derive (de)serialization for the project file and the control API (protocol); typed MCP tool arguments (mcp)"
         case toml
             echo "parse the project file, SPEC 7.2 (protocol); saving uses our own emitter"
         case serde_json

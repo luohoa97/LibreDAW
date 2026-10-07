@@ -13,7 +13,7 @@ CI fails if this file is out of date.
 | glib | 0.22.10 | MIT | timer, fd, and X11 event sources on the GTK main context for plugins (plugin-host; also ui through gtk4) |
 | libloading | 0.7.4 | ISC | dlopen of .clap plugin files (plugin-host) |
 | libloading | 0.8.9 | ISC | dlopen of .clap plugin files (plugin-host) |
-| serde | 1.0.229 | MIT OR Apache-2.0 | derive (de)serialization for the project file and the control API (protocol) |
+| serde | 1.0.229 | MIT OR Apache-2.0 | derive (de)serialization for the project file and the control API (protocol); typed MCP tool arguments (mcp) |
 | serde_json | 1.0.151 | MIT OR Apache-2.0 | JSON for the control API used by scripts and agents (protocol tests now; ui, script, mcp later) |
 | toml | 1.1.6+spec-1.1.0 | MIT OR Apache-2.0 | parse the project file, SPEC 7.2 (protocol); saving uses our own emitter |
 | x11rb | 0.13.2 | MIT OR Apache-2.0 | X11 top-level window for plugin GUIs that need a parent, SPEC 9.2 (plugin-host) |
