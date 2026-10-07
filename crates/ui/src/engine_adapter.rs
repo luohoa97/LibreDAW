@@ -49,24 +49,29 @@ pub fn devices(host: Host) -> Vec<String> {
     engine::Engine::devices(host)
 }
 
+/// What to render: a pinned project, a pattern, loops, and a rate.
+pub struct RenderJob {
+    pub project: Arc<Project>,
+    pub pattern: PatternId,
+    pub loops: u32,
+    pub sample_rate: u32,
+}
+
 /// Offline render on the calling thread (8). `plugins` are export instances
 /// created on the GTK thread and attached by handle.
 pub fn render(
-    project: std::sync::Arc<Project>,
-    pattern: PatternId,
-    loops: u32,
-    sample_rate: u32,
+    job: RenderJob,
     slots: &SlotAllocator,
     plugins: &[(PluginSlot, PluginHandle)],
     progress: &AtomicU32,
     cancel: &AtomicBool,
 ) -> Result<Vec<[f32; 2]>, EngineError> {
     let req = engine::RenderRequest {
-        project,
-        pattern,
-        loops,
+        project: job.project,
+        pattern: job.pattern,
+        loops: job.loops,
         tail_seconds: 2.0,
-        sample_rate,
+        sample_rate: job.sample_rate,
     };
     engine::render_offline(&req, &slots.inner, plugins, progress, cancel)
 }

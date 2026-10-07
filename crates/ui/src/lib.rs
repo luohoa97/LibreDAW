@@ -11,3 +11,5 @@ pub mod plugin_adapter;
 pub mod registry;
 pub mod session;
 pub mod slots;
+pub mod roll_logic;
+pub mod view_math;
