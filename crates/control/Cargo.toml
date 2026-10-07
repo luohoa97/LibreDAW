@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+[package]
+name = "libredaw-control"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+name = "control"
+
+[dependencies]
+libredaw-protocol = { path = "../protocol" }
+# JSON lines on the control socket (SPEC 16.2, 17.1).
+serde_json = "1"
+
+[dev-dependencies]
+# The existing control socket client, used to drive the server in tests.
+libredaw-script = { path = "../script" }

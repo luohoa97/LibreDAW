@@ -8,6 +8,7 @@
 pub mod conn;
 pub mod sanitize;
 pub mod server;
+pub mod setup;
 pub mod tools;
 
 /// The one MCP protocol revision this server speaks. A client that asks for

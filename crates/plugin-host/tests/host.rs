@@ -8,7 +8,7 @@ use protocol::consts::MAX_BLOCK;
 use protocol::engine::{PluginEvent, PluginHandle, PluginSlot};
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
@@ -71,11 +71,7 @@ fn fixture_dir() -> &'static PathBuf {
             so.exists(),
             "build the fixture first: cargo build --examples ({so:?})"
         );
-        let dir =
-            PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("clap-{}", std::process::id()));
-        std::fs::create_dir_all(dir.join("nested")).unwrap();
-        std::fs::copy(&so, dir.join("nested/test_plugins.clap")).unwrap();
-        dir
+        plugin_host::testing::install_fixture(&so, Path::new(env!("CARGO_TARGET_TMPDIR")), "clap")
     })
 }
 

@@ -8,3 +8,5 @@ pub mod host;
 mod inst;
 pub mod rt;
 mod sources;
+#[doc(hidden)]
+pub mod testing;

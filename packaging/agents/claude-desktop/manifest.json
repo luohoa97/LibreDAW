@@ -1,0 +1,23 @@
+{
+  "manifest_version": "0.3",
+  "name": "libredaw",
+  "display_name": "LibreDAW",
+  "version": "0.0.0",
+  "description": "Control a running LibreDAW (beats, mixer, export, loudness analysis) from Claude Desktop.",
+  "long_description": "Lets Claude edit patterns, notes and the mixer in LibreDAW, play, export WAV and read loudness, peak and balance numbers. LibreDAW asks you before anything risky, and agent control must be switched on in LibreDAW for each session.",
+  "author": { "name": "LibreDAW contributors" },
+  "license": "GPL-3.0-or-later",
+  "keywords": ["daw", "music", "audio"],
+  "server": {
+    "type": "binary",
+    "entry_point": "server/libredaw-mcp",
+    "mcp_config": {
+      "command": "${__dirname}/server/libredaw-mcp",
+      "args": []
+    }
+  },
+  "tools_generated": true,
+  "compatibility": {
+    "platforms": ["linux"]
+  }
+}
