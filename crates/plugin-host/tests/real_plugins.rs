@@ -4,7 +4,7 @@
 //! are ignored by default: `cargo test -p libredaw-plugin-host --test
 //! real_plugins -- --ignored --nocapture --test-threads=1`.
 
-use plugin_host::host::{Instance, PluginDesc, clap_paths, scan_paths};
+use plugin_host::host::{Instance, PluginDesc, clap_paths, extension_root, scan_paths};
 use plugin_host::rt::*;
 use protocol::engine::PluginHandle;
 use std::time::Instant;
@@ -31,6 +31,10 @@ struct Render {
 /// Render one second after a C3 note-on, on a fresh thread like the engine's
 /// audio thread.
 fn render(h: PluginHandle) -> Render {
+    render_note(h, C3)
+}
+
+fn render_note(h: PluginHandle, key: u8) -> Render {
     struct S(PluginHandle);
     // SAFETY: one thread uses the handle, as the engine does.
     unsafe impl Send for S {}
@@ -51,7 +55,7 @@ fn render(h: PluginHandle) -> Render {
             for b in 0..BLOCKS {
                 let on = [RtNote {
                     frame: 0,
-                    key: C3,
+                    key,
                     vel: 100,
                     on: true,
                     note_id: 1,
@@ -155,4 +159,63 @@ fn odin2() {
 #[ignore = "needs the Dexed Flatpak extension"]
 fn dexed() {
     smoke("Dexed");
+}
+
+/// Every entry of presets/instruments.toml loads through preset-load and
+/// sounds. Prints peak, and the RMS of the last quarter second (does it
+/// sustain), per entry.
+#[test]
+#[ignore = "needs the Surge XT Flatpak extension"]
+fn instrument_list_loads_and_sounds() {
+    let text = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/presets/instruments.toml"
+    ))
+    .unwrap();
+    let doc: toml::Table = text.parse().unwrap();
+    let plugins = doc["plugin"].as_array().unwrap();
+    let all = scan_paths(&clap_paths());
+    let mut bad = Vec::new();
+    for e in doc["instrument"].as_array().unwrap() {
+        let key = e["plugin"].as_str().unwrap();
+        let p = plugins
+            .iter()
+            .find(|p| p["key"].as_str() == Some(key))
+            .unwrap();
+        let id = p["clap_id"].as_str().unwrap();
+        let d = all
+            .iter()
+            .find(|d| d.id == id)
+            .unwrap_or_else(|| panic!("{id} not installed"));
+        let file = extension_root(d)
+            .unwrap()
+            .join(p["preset_root"].as_str().unwrap())
+            .join(e["preset"].as_str().unwrap());
+        let label = format!(
+            "{} / {}",
+            e["role"].as_str().unwrap(),
+            e["name"].as_str().unwrap()
+        );
+        if !file.is_file() {
+            bad.push(format!("{label}: no file {}", file.display()));
+            continue;
+        }
+        let mut inst = Instance::create(d).unwrap();
+        inst.set_offline(true);
+        inst.activate(RATE, BLOCK as u32).unwrap();
+        if let Err(err) = inst.load_preset(&file) {
+            bad.push(format!("{label}: {err}"));
+            continue;
+        }
+        let r = render_note(inst.handle(), e["note"].as_integer().unwrap() as u8);
+        let pk = peak(&r.left).max(peak(&r.right));
+        let tail = &r.left[r.left.len() - 12_000..];
+        let rms = (tail.iter().map(|v| v * v).sum::<f32>() / tail.len() as f32).sqrt();
+        let nan = r.left.iter().chain(&r.right).any(|v| !v.is_finite());
+        println!("{label:<28} peak {pk:.3}  tail rms {rms:.4}  nan {nan}");
+        if pk <= 0.01 || nan {
+            bad.push(format!("{label}: peak {pk}, nan {nan}"));
+        }
+    }
+    assert!(bad.is_empty(), "{}", bad.join("\n"));
 }

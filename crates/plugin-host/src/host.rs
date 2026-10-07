@@ -13,10 +13,12 @@ use clap_sys::ext::latency::CLAP_EXT_LATENCY;
 use clap_sys::ext::note_ports::CLAP_EXT_NOTE_PORTS;
 use clap_sys::ext::params::*;
 use clap_sys::ext::posix_fd_support::CLAP_EXT_POSIX_FD_SUPPORT;
+use clap_sys::ext::preset_load::*;
 use clap_sys::ext::render::*;
 use clap_sys::ext::state::CLAP_EXT_STATE;
 use clap_sys::ext::timer_support::CLAP_EXT_TIMER_SUPPORT;
 use clap_sys::factory::plugin_factory::*;
+use clap_sys::factory::preset_discovery::CLAP_PRESET_DISCOVERY_LOCATION_FILE;
 use clap_sys::plugin::clap_plugin;
 use clap_sys::stream::{clap_istream, clap_ostream};
 use clap_sys::version::clap_version_is_compatible;
@@ -486,6 +488,14 @@ impl Instance {
             render: get_ext(plugin, CLAP_EXT_RENDER),
             timer: get_ext(plugin, CLAP_EXT_TIMER_SUPPORT),
             fd: get_ext(plugin, CLAP_EXT_POSIX_FD_SUPPORT),
+            preset_load: {
+                let p: *const clap_plugin_preset_load = get_ext(plugin, CLAP_EXT_PRESET_LOAD);
+                if p.is_null() {
+                    get_ext(plugin, CLAP_EXT_PRESET_LOAD_COMPAT)
+                } else {
+                    p
+                }
+            },
         });
         let (has_input, extra) = check_ports(plugin, me.inner.exts.get().audio_ports)?;
         me.inner.set_ports(has_input, &extra);
@@ -577,6 +587,39 @@ impl Instance {
         }
         // SAFETY: valid ext and plugin; main thread.
         unsafe { (*e.latency).get.map_or(0, |g| g(self.inner.plugin())) }
+    }
+
+    /// Load a preset file through the `preset-load` extension (a Surge XT
+    /// `.fxp`, a Dexed `.syx`). Errors if the plugin does not support it or
+    /// rejects the file. Main thread; the plugin may be active.
+    pub fn load_preset(&mut self, path: &Path) -> Result<(), HostError> {
+        let e = self.inner.exts.get();
+        if e.preset_load.is_null() {
+            return Err(HostError::State(
+                "plugin has no preset-load extension".into(),
+            ));
+        }
+        let loc = CString::new(path.as_os_str().as_encoded_bytes())
+            .map_err(|_| HostError::State("bad preset path".into()))?;
+        // SAFETY: valid ext and plugin; main thread; `loc` outlives the call.
+        let ok = unsafe {
+            (*e.preset_load).from_location.is_some_and(|f| {
+                f(
+                    self.inner.plugin(),
+                    CLAP_PRESET_DISCOVERY_LOCATION_FILE,
+                    loc.as_ptr(),
+                    std::ptr::null(),
+                )
+            })
+        };
+        if ok {
+            Ok(())
+        } else {
+            Err(HostError::State(format!(
+                "cannot load preset {}",
+                path.display()
+            )))
+        }
     }
 
     pub fn save_state(&mut self) -> Result<Vec<u8>, HostError> {
@@ -848,4 +891,11 @@ impl RtOutEvent {
     pub fn is_gesture(&self) -> bool {
         self.kind != RtOutKind::ParamValue
     }
+}
+
+/// The root of the Flatpak extension (or install prefix) a plugin lives in:
+/// the parent of its `clap` directory. Factory presets sit under
+/// `<root>/share/...`.
+pub fn extension_root(desc: &PluginDesc) -> Option<PathBuf> {
+    Some(desc.path.parent()?.parent()?.to_path_buf())
 }

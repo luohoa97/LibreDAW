@@ -18,6 +18,7 @@ use clap_sys::ext::log::*;
 use clap_sys::ext::note_ports::*;
 use clap_sys::ext::params::*;
 use clap_sys::ext::posix_fd_support::*;
+use clap_sys::ext::preset_load::*;
 use clap_sys::ext::render::*;
 use clap_sys::ext::state::*;
 use clap_sys::ext::thread_check::*;
@@ -105,6 +106,7 @@ pub(crate) struct Exts {
     pub render: *const clap_plugin_render,
     pub timer: *const clap_plugin_timer_support,
     pub fd: *const clap_plugin_posix_fd_support,
+    pub preset_load: *const clap_plugin_preset_load,
 }
 
 impl Exts {
@@ -118,6 +120,7 @@ impl Exts {
         render: std::ptr::null(),
         timer: std::ptr::null(),
         fd: std::ptr::null(),
+        preset_load: std::ptr::null(),
     };
 }
 
@@ -501,6 +504,40 @@ unsafe extern "C" fn lat_changed(h: *const clap_host) {
     // SAFETY: see `inner`.
     unsafe { inner(h) }.flags.latency.store(true, Release);
 }
+unsafe extern "C" fn preset_error(
+    _h: *const clap_host,
+    _kind: u32,
+    location: *const c_char,
+    _key: *const c_char,
+    os_error: i32,
+    msg: *const c_char,
+) {
+    // SAFETY: both strings are NUL-terminated or null.
+    let s = |p: *const c_char| {
+        if p.is_null() {
+            String::new()
+        } else {
+            unsafe { CStr::from_ptr(p) }.to_string_lossy().into_owned()
+        }
+    };
+    eprintln!(
+        "libredaw: preset {} failed ({os_error}): {}",
+        s(location),
+        s(msg)
+    );
+}
+unsafe extern "C" fn preset_loaded(
+    _h: *const clap_host,
+    _kind: u32,
+    _location: *const c_char,
+    _key: *const c_char,
+) {
+}
+static HOST_PRESET_LOAD: clap_host_preset_load = clap_host_preset_load {
+    on_error: Some(preset_error),
+    loaded: Some(preset_loaded),
+};
+
 static HOST_LATENCY: clap_host_latency = clap_host_latency {
     changed: Some(lat_changed),
 };
@@ -722,6 +759,8 @@ unsafe extern "C" fn host_get_extension(_h: *const clap_host, id: *const c_char)
     ext!(CLAP_EXT_TIMER_SUPPORT, HOST_TIMER);
     ext!(CLAP_EXT_POSIX_FD_SUPPORT, HOST_FD);
     ext!(CLAP_EXT_GUI, HOST_GUI);
+    ext!(CLAP_EXT_PRESET_LOAD, HOST_PRESET_LOAD);
+    ext!(CLAP_EXT_PRESET_LOAD_COMPAT, HOST_PRESET_LOAD);
     std::ptr::null()
 }
 
