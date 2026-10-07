@@ -171,6 +171,40 @@ pub fn presets() -> Vec<Preset> {
     ]
 }
 
+/// Which built-in sound these parameters are, if any.
+pub fn index_of(params: &SynthParams) -> Option<usize> {
+    presets().iter().position(|p| p.params == *params)
+}
+
+/// The edits that make a channel play `p`: every continuous parameter and
+/// both waveforms. One batch is one undo step.
+pub fn apply_edits(
+    channel: protocol::ids::ChannelId,
+    p: &SynthParams,
+) -> Vec<protocol::edit::Edit> {
+    use protocol::edit::Edit;
+    use protocol::model::SynthParam;
+    let mut e: Vec<Edit> = SynthParam::ALL
+        .iter()
+        .map(|sp| Edit::SetSynthParam {
+            channel,
+            param: *sp,
+            value: p.get(*sp),
+        })
+        .collect();
+    e.push(Edit::SetSynthWave {
+        channel,
+        osc: 1,
+        wave: p.osc1.wave,
+    });
+    e.push(Edit::SetSynthWave {
+        channel,
+        osc: 2,
+        wave: p.osc2.wave,
+    });
+    e
+}
+
 /// A name for a new channel that is not already taken: "Kick", "Kick 2", ...
 pub fn unique_name(base: &str, taken: &[&str]) -> String {
     if !taken.contains(&base) {
@@ -210,6 +244,44 @@ mod tests {
         assert_eq!(names.len(), n);
         for need in ["Kick", "Snare", "Closed hat", "Sub bass"] {
             assert!(names.contains(&need), "{need}");
+        }
+    }
+
+    #[test]
+    fn presets_are_found_by_their_parameters() {
+        for (i, p) in presets().iter().enumerate() {
+            assert_eq!(index_of(&p.params), Some(i), "{}", p.name);
+        }
+        let mut odd = SynthParams::default();
+        odd.cutoff_hz += 1.0;
+        assert_eq!(index_of(&odd), None);
+    }
+
+    #[test]
+    fn applying_a_preset_makes_the_channel_match_it() {
+        use crate::document::{Document, apply_batch};
+        use protocol::edit::{Edit, NewInstrument};
+        use protocol::ids::{ChannelId, TrackId};
+        use protocol::model::Instrument;
+        let (d, ids) = apply_batch(
+            &Document::new(),
+            &[Edit::AddChannel {
+                name: "c".into(),
+                instrument: NewInstrument::Synth {
+                    params: SynthParams::default(),
+                },
+                root_key: 60,
+                track: TrackId::MASTER,
+            }],
+        )
+        .unwrap();
+        let ch = ChannelId(ids[0]);
+        for p in presets() {
+            let (d2, _) = apply_batch(&d, &apply_edits(ch, &p.params)).unwrap();
+            let Instrument::Synth(got) = &d2.project.channel(ch).unwrap().instrument else {
+                panic!("synth");
+            };
+            assert_eq!(*got, p.params, "{}", p.name);
         }
     }
 
