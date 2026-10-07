@@ -9,6 +9,7 @@ use crate::mixer::{Fader, MuteSolo, SMOOTH_SECONDS, resolve_solo};
 use crate::plugins::{
     OUT_EVENT_CAP, OutEvents, PluginApi, PluginNote, ProcessArgs, note, out_event_to_engine,
 };
+use crate::preview::{PREVIEW_CAP, PreviewNote, Previews, TAIL_SECONDS, insert_sorted};
 use crate::rt::{RtGuard, enter_rt_fp_mode, restore_fp_mode};
 use crate::sequencer::{BEAT_CAP, Beat, EVENT_CAP, SeqEvent, Sequencer, TraceEvent};
 use crate::synth::{Synth, SynthCtl};
@@ -18,8 +19,8 @@ use protocol::consts::{
 };
 use protocol::engine::{
     CTL_METRONOME_ENABLED, CTL_METRONOME_GAIN_DB, ChannelSlot, ControlTable, EngineCommand,
-    EngineEvent, EngineStatus, MixControl, PLUGIN_SLOTS, ParamTable, PluginEvent, PluginHandle,
-    PluginSlot, SlotGen, TrackSlot, channel_control, track_control,
+    EngineEvent, EngineStatus, MixControl, PLUGIN_SLOTS, PREVIEW_MAX_SECONDS, ParamTable,
+    PluginEvent, PluginHandle, PluginSlot, SlotGen, TrackSlot, channel_control, track_control,
 };
 use rtrb::{Consumer, Producer, RingBuffer};
 use std::sync::Arc;
@@ -319,6 +320,10 @@ pub struct Runtime {
     tr_ms: Vec<MuteSolo>,
     ch_audible: Vec<bool>,
     tr_audible: Vec<bool>,
+    previews: Previews,
+    previews_allowed: bool,
+    /// Frames left in which a previewed channel stays solo-exempt.
+    preview_tail: [u32; MAX_CHANNELS],
 }
 
 impl Runtime {
@@ -357,6 +362,99 @@ impl Runtime {
             tr_ms: vec![MuteSolo::default(); TRACK_SLOTS],
             ch_audible: vec![false; MAX_CHANNELS],
             tr_audible: vec![false; TRACK_SLOTS],
+            previews: Previews::new(),
+            previews_allowed: true,
+            preview_tail: [0; MAX_CHANNELS],
+        }
+    }
+
+    /// Offline render turns previews off (they are an audition feature).
+    pub fn set_previews_allowed(&mut self, allowed: bool) {
+        self.previews_allowed = allowed;
+    }
+
+    fn preview_event(&mut self, offset: u32, slot: u16, key: u8, vel: u8, on: bool, id: u32) {
+        insert_sorted(
+            &mut self.events,
+            SeqEvent {
+                offset,
+                slot,
+                key,
+                vel,
+                on,
+                id,
+            },
+        );
+    }
+
+    fn tail_frames(&self) -> u32 {
+        (TAIL_SECONDS * self.sample_rate) as u32
+    }
+
+    fn preview_command(&mut self, channel: ChannelSlot, key: u8, vel: u8, on: bool) {
+        let slot = channel.0;
+        if !self.previews_allowed || slot as usize >= MAX_CHANNELS || key > 127 {
+            return;
+        }
+        let existing = self.previews.find(slot, key);
+        if !on {
+            if let Some(i) = existing {
+                let id = self.previews.notes[i].id;
+                self.previews.notes[i].active = false;
+                self.preview_event(0, slot, key, 0, false, id);
+                self.preview_tail[slot as usize] = self.tail_frames();
+            }
+            return;
+        }
+        let i = match existing {
+            Some(i) => {
+                // Retrigger: release the old note first.
+                let id = self.previews.notes[i].id;
+                self.preview_event(0, slot, key, 0, false, id);
+                i
+            }
+            None => match self.previews.free_index() {
+                Some(i) => i,
+                None => return,
+            },
+        };
+        let id = self.previews.fresh_id();
+        let left = (PREVIEW_MAX_SECONDS * self.sample_rate).round() as u32;
+        self.previews.notes[i] = PreviewNote {
+            active: true,
+            slot,
+            key,
+            id,
+            left,
+        };
+        self.preview_event(0, slot, key, vel.clamp(1, 127), true, id);
+        self.preview_tail[slot as usize] = self.tail_frames();
+    }
+
+    /// Releases every preview note on `slot` (or all slots with `None`).
+    fn release_previews(&mut self, only: Option<u16>) {
+        for i in 0..PREVIEW_CAP {
+            let n = self.previews.notes[i];
+            if n.active && only.is_none_or(|s| s == n.slot) {
+                self.previews.notes[i].active = false;
+                self.preview_event(0, n.slot, n.key, 0, false, n.id);
+            }
+        }
+    }
+
+    /// Auto-release for a sub-block of `n` frames; call after the events are final.
+    fn preview_timers(&mut self, n: usize) {
+        for i in 0..PREVIEW_CAP {
+            let p = self.previews.notes[i];
+            if !p.active {
+                continue;
+            }
+            if (p.left as usize) < n {
+                self.previews.notes[i].active = false;
+                self.preview_event(p.left, p.slot, p.key, 0, false, p.id);
+            } else {
+                self.previews.notes[i].left -= n as u32;
+            }
         }
     }
 
@@ -423,6 +521,8 @@ impl Runtime {
             if new.channel_gen[s] != self.chan_gen[s] {
                 // Note-offs for the slot's active notes first (SPEC 4.1).
                 self.seq.release_slot(s as u16, 0, &mut self.events);
+                self.release_previews(Some(s as u16));
+                self.preview_tail[s] = 0;
                 self.synths[s].reset();
                 self.chan_fader[s].reset();
                 self.chan_gen[s] = new.channel_gen[s];
@@ -469,6 +569,7 @@ impl Runtime {
                 }
             }
             EngineCommand::Stop => {
+                self.release_previews(None);
                 if self.seq.playing {
                     let tick = self.seq.stop(&mut self.events);
                     push_engine_event(
@@ -490,6 +591,12 @@ impl Runtime {
                     self.seq.set_pattern_id(pattern);
                 }
             }
+            EngineCommand::Preview {
+                channel,
+                key,
+                vel,
+                on,
+            } => self.preview_command(channel, key, vel, on),
             EngineCommand::AttachPlugin { slot, handle } => self.plug.attach(slot, handle),
             EngineCommand::DetachPlugin { slot } => {
                 self.plug.detach(slot);
@@ -576,6 +683,9 @@ impl Runtime {
             .set_tempo(ctl.tempo().clamp(MIN_TEMPO_BPM, MAX_TEMPO_BPM));
 
         let Some(c) = self.compiled.take() else {
+            for p in &mut self.previews.notes {
+                p.active = false;
+            }
             out_l.fill(0.0);
             out_r.fill(0.0);
             self.events.clear();
@@ -585,6 +695,8 @@ impl Runtime {
         let metronome_on = self.metronome_allowed && ctl.get(CTL_METRONOME_ENABLED) >= 0.5;
         self.seq
             .schedule(&c, n, metronome_on, &mut self.events, &mut self.beats);
+        // Previews: auto-release, once the sequencer's events are final.
+        self.preview_timers(n);
         let pos = self.seq.pos;
         for e in &self.events {
             if self.trace.len() < self.trace.capacity() {
@@ -766,6 +878,9 @@ impl Runtime {
         out_l.copy_from_slice(ml);
         out_r.copy_from_slice(mr);
 
+        for t in &mut self.preview_tail {
+            *t = t.saturating_sub(n as u32);
+        }
         self.compiled = Some(c);
         self.events.clear();
         self.seq.pos += n as u64;
@@ -810,6 +925,22 @@ impl Runtime {
             &mut self.ch_audible,
             &mut self.tr_audible,
         );
+        // A previewed channel is exempt from solo elsewhere (mute still wins).
+        let active = self.previews.active_slots();
+        for s in 0..MAX_CHANNELS {
+            if self.preview_tail[s] == 0 && active & (1u64 << s) == 0 {
+                continue;
+            }
+            let ms = self.ch_ms[s];
+            if !ms.present || ms.mute {
+                continue;
+            }
+            self.ch_audible[s] = true;
+            let t = self.ch_track[s] as usize;
+            if self.tr_ms[t].present && !self.tr_ms[t].mute {
+                self.tr_audible[t] = true;
+            }
+        }
     }
 }
 

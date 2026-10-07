@@ -171,3 +171,53 @@ fn gain_insert_scales_the_track_and_follows_host_parameter_events() {
     });
     gain.deactivate();
 }
+
+fn preview(on: bool) -> EngineCommand {
+    EngineCommand::Preview {
+        channel: ChannelSlot(0),
+        key: 69,
+        vel: if on { 100 } else { 0 },
+        on,
+    }
+}
+
+#[test]
+fn preview_plays_and_releases_the_real_sine_instrument() {
+    let Some(dir) = fixture() else { return };
+    let mut inst = Instance::create(&desc(&dir, "test.sine")).unwrap();
+    inst.activate(48000.0, 512).unwrap();
+
+    let mut ch = synth_channel(1, 0, tone_params());
+    ch.instrument = Instrument::Clap(clap_ref("test.sine"));
+    let p = project(120.0, vec![], vec![ch], vec![pattern(1, 16, &[])]);
+    let mut r = rig(&p, 48000.0, false);
+    let slot = PluginSlot::Instrument(ChannelSlot(0));
+    let attach = EngineCommand::AttachPlugin {
+        slot,
+        handle: inst.handle(),
+    };
+    assert!(r.ui.commands.push(attach).is_ok());
+    // The fixture checks thread-check: the audio side must be another thread.
+    std::thread::scope(|s| {
+        s.spawn(|| {
+            let (l, _) = r.run(2048, 256);
+            assert_eq!(peak(&l), 0.0, "silent before the preview");
+            assert!(r.ui.commands.push(preview(true)).is_ok());
+            let (l, _) = r.run(2048, 256);
+            assert!(peak(&l) > 0.05, "sounds while stopped: {}", peak(&l));
+            assert!(r.ui.commands.push(preview(false)).is_ok());
+            r.run(1024, 256);
+            let (l, _) = r.run(1024, 256);
+            assert_eq!(peak(&l), 0.0, "silent after the note-off");
+            assert!(
+                r.ui.commands
+                    .push(EngineCommand::DetachPlugin { slot })
+                    .is_ok()
+            );
+            r.run(256, 256);
+        })
+        .join()
+        .unwrap();
+    });
+    inst.deactivate();
+}
