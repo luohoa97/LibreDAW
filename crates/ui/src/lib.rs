@@ -14,6 +14,7 @@ pub mod history;
 pub mod mixer;
 pub mod persist;
 pub mod plugin_adapter;
+pub mod presets;
 pub mod registry;
 pub mod roll_logic;
 pub mod run;
