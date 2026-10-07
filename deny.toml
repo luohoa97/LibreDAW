@@ -34,6 +34,8 @@ ignore = true
 [bans]
 multiple-versions = "warn"
 wildcards = "deny"
+# Workspace crates use path dependencies between each other (all publish = false).
+allow-wildcard-paths = true
 highlight = "all"
 
 [sources]

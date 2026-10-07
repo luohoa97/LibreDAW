@@ -42,7 +42,7 @@ set -l all (echo $meta | jq -r '
 
 # names of third-party crates that a workspace crate depends on directly
 set -l direct (echo $meta | jq -r '
-    [.packages[] | select(.source == null) | .dependencies[].name] | unique | .[]')
+    [.packages[] | select(.source == null) | .dependencies[] | select(.path == null) | .name] | unique | .[]')
 
 begin
     echo '<!-- SPDX-License-Identifier: GPL-3.0-or-later -->'
