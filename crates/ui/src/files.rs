@@ -128,30 +128,7 @@ pub fn save_current(app: &Rc<App>, then: impl FnOnce(Result<PathBuf, String>) + 
     let a = app.clone();
     app.tasks.spawn(
         "save",
-        move || {
-            let r = (|| {
-                if let Some(home) = &home {
-                    let mut hashes: std::collections::BTreeSet<String> =
-                        keep.samples.iter().cloned().collect();
-                    hashes.extend(
-                        doc.project
-                            .samples
-                            .iter()
-                            .filter(|s| !s.local_only)
-                            .map(|s| s.hash.clone()),
-                    );
-                    copy_samples(home, &t2, hashes).map_err(|e| e.to_string())?;
-                }
-                bundle::save_keeping(&t2, &doc, &keep).map_err(|e| e.to_string())?;
-                bundle::clear_autosave(&t2).map_err(|e| e.to_string())
-            })();
-            if r.is_ok()
-                && let Some(v) = view
-            {
-                let _ = v.write(&t2);
-            }
-            r
-        },
+        move || write_project(&t2, &doc, &keep, home.as_deref(), view),
         move |r| match r {
             Ok(_) => {
                 after_saved(&a, &target, !existing);
@@ -164,6 +141,34 @@ pub fn save_current(app: &Rc<App>, then: impl FnOnce(Result<PathBuf, String>) + 
             }
         },
     );
+}
+
+/// The disk half of a save: samples, bundle, autosave cleanup, view state.
+/// Runs on a worker thread.
+pub fn write_project(
+    target: &Path,
+    doc: &Document,
+    keep: &bundle::Keep,
+    home: Option<&Path>,
+    view: Option<ViewState>,
+) -> Result<(), String> {
+    if let Some(home) = home {
+        let mut hashes: std::collections::BTreeSet<String> = keep.samples.iter().cloned().collect();
+        hashes.extend(
+            doc.project
+                .samples
+                .iter()
+                .filter(|s| !s.local_only)
+                .map(|s| s.hash.clone()),
+        );
+        copy_samples(home, target, hashes).map_err(|e| e.to_string())?;
+    }
+    bundle::save_keeping(target, doc, keep).map_err(|e| e.to_string())?;
+    bundle::clear_autosave(target).map_err(|e| e.to_string())?;
+    if let Some(v) = view {
+        let _ = v.write(target);
+    }
+    Ok(())
 }
 
 fn after_saved(app: &Rc<App>, path: &Path, was_untitled: bool) {
@@ -224,16 +229,23 @@ pub fn save_as(parent: &impl IsA<gtk::Widget>, app: &Rc<App>) {
 
 /// Saves unsaved work first, then runs `go`. A failed save stops here: the
 /// error is already shown and the current project stays open.
-fn save_then(app: &Rc<App>, go: impl FnOnce() + 'static) {
-    if !app.is_dirty() {
-        go();
-        return;
-    }
-    save_current(app, move |r| {
+pub fn save_then(app: &Rc<App>, go: impl FnOnce() + 'static) {
+    save_before_switch(app, move |r| {
         if r.is_ok() {
             go();
         }
     });
+}
+
+/// Saves unsaved work (when there is any), then tells `done` how that went.
+/// The agent path (`ProjectNew`, `ProjectOpen`, `ProjectClose`) answers from
+/// `done`, so a reply always follows the switch and a failed save is an error.
+pub fn save_before_switch(app: &Rc<App>, done: impl FnOnce(Result<(), String>) + 'static) {
+    if !app.is_dirty() {
+        done(Ok(()));
+        return;
+    }
+    save_current(app, move |r| done(r.map(|_| ())));
 }
 
 pub fn open(parent: &impl IsA<gtk::Widget>, app: &Rc<App>) {
@@ -283,6 +295,15 @@ pub fn fresh_project(a: &Rc<App>) {
 /// Loads a bundle on a worker thread. Autosaved work newer than the saved
 /// project is applied as one undoable step with a toast (Amendment 10).
 pub fn open_path(app: &Rc<App>, path: PathBuf) {
+    open_path_then(app, path, |_| {});
+}
+
+/// As `open_path`; `done` runs once the project is open (or failed).
+pub fn open_path_then(
+    app: &Rc<App>,
+    path: PathBuf,
+    done: impl FnOnce(Result<(), String>) + 'static,
+) {
     let p = path.clone();
     let a = app.clone();
     app.tasks.spawn(
@@ -319,8 +340,13 @@ pub fn open_path(app: &Rc<App>, path: PathBuf) {
                     note: None,
                 }
                 .write(&a.dirs);
+                done(Ok(()));
             }
-            Err(e) => a.toast(&format!("Cannot open the project: {e}")),
+            Err(e) => {
+                let msg = format!("Cannot open the project: {e}");
+                a.toast(&msg);
+                done(Err(msg));
+            }
         },
     );
 }

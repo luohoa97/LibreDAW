@@ -735,9 +735,21 @@ fn execute(app: &Rc<App>, ticket: Ticket, author: &Author, req: Request) -> Opti
         RequestBody::ProjectList => ok(ReplyBody::Projects {
             projects: list_projects(app),
         }),
+        // A switch saves the open project first, exactly like the UI, and
+        // answers only after the switch (18.6).
         RequestBody::ProjectNew { .. } => {
-            files::fresh_project(app);
-            ok(ReplyBody::Done)
+            let (a2, server) = (app.clone(), app.bridge.borrow().as_ref()?.server.clone());
+            files::save_before_switch(app, move |r| {
+                let o = match r {
+                    Ok(()) => {
+                        files::fresh_project(&a2);
+                        ok(ReplyBody::Done)
+                    }
+                    Err(e) => err(ControlError::Internal { reason: e }),
+                };
+                server.reply(ticket, o);
+            });
+            return None;
         }
         RequestBody::ProjectOpen { path } => {
             let p = PathBuf::from(&path);
@@ -746,8 +758,23 @@ fn execute(app: &Rc<App>, ticket: Ticket, author: &Author, req: Request) -> Opti
                     what: "project in the projects folder".into(),
                 }));
             }
-            files::open_path(app, p);
-            ok(ReplyBody::Done)
+            let (a2, server) = (app.clone(), app.bridge.borrow().as_ref()?.server.clone());
+            files::save_before_switch(app, move |r| match r {
+                Ok(()) => {
+                    let server = server.clone();
+                    files::open_path_then(&a2, p, move |r| {
+                        let o = match r {
+                            Ok(()) => ok(ReplyBody::Done),
+                            Err(e) => err(ControlError::Internal { reason: e }),
+                        };
+                        server.reply(ticket, o);
+                    });
+                }
+                Err(e) => {
+                    server.reply(ticket, err(ControlError::Internal { reason: e }));
+                }
+            });
+            return None;
         }
         RequestBody::ProjectSave => {
             let (a2, server) = (app.clone(), app.bridge.borrow().as_ref()?.server.clone());

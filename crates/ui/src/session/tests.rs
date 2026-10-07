@@ -437,3 +437,35 @@ fn a_new_plugin_instrument_with_a_chosen_sound_is_kept_even_when_it_cannot_load(
     };
     assert_eq!(r.plugin_id, "not.installed");
 }
+
+#[test]
+fn switching_projects_saves_the_edit_first() {
+    // What the New path does for a dirty project: snapshot, write, then
+    // replace the document. The old project on disk has the edit.
+    let dir = std::env::temp_dir().join(format!("oto-switch-{}.oto", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let mut s = session();
+    let (_, p) = with_channel(&mut s);
+    user(
+        &mut s,
+        vec![Edit::AddNotes {
+            pattern: p,
+            notes: vec![NewNote {
+                start: 0,
+                len: 10,
+                key: 40,
+                vel: 90,
+            }],
+        }],
+    );
+    assert!(s.editor.is_dirty());
+    let doc = s.snapshot_for_save();
+    let keep = s.editor.history().keep();
+    crate::files::write_project(&dir, &doc, &keep, None, None).expect("save");
+    s.editor.mark_saved();
+    s.replace_document(Document::new(), false);
+    assert_eq!(s.document().project.note_count(), 0);
+    let loaded = doc::bundle::load(&dir).expect("load");
+    assert_eq!(loaded.doc.project.note_count(), 1);
+    let _ = std::fs::remove_dir_all(&dir);
+}
