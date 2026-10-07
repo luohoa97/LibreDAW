@@ -1,0 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+[env]
+# See tools/pkgconfig/jack.pc. Cargo does not override a PKG_CONFIG_PATH that
+# is already set in the environment.
+PKG_CONFIG_PATH = { value = "tools/pkgconfig", relative = true }

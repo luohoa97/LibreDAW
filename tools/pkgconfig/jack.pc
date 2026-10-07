@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Stub so that the jack-sys build script succeeds on machines without the
+# libjack development package. jack-sys 0.5 runs pkg-config for "jack" even
+# when its dynamic_loading feature is on, but with dynamic_loading it never
+# links libjack: it dlopens libjack.so.0 at run time. Libs and Cflags are
+# empty on purpose. Used through .cargo/config.toml.
+Name: jack
+Description: stub for jack-sys (libjack is loaded at run time)
+Version: 1.9.22
