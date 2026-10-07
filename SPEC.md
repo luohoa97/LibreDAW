@@ -1642,6 +1642,12 @@ Flatpak with a full release.
 
 ## Changelog
 
+### Amendment 15 (2026-10-07, owner)
+
+User-visible "Pattern" is renamed "Loop" (views: Loops, Song, Mixer).
+Internal names (protocol, files, code) keep "pattern". The loop selector
+and its actions (new, duplicate, rename, delete) are one menu button.
+
 ### Amendment 14 (2026-10-07, owner)
 
 Home page on launch with unsaved and saved work (replaces reopen-last from
