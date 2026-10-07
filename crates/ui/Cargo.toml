@@ -11,3 +11,4 @@ name = "ui"
 
 [dependencies]
 libredaw-protocol = { path = "../protocol" }
+libredaw-plugin-host = { path = "../plugin-host" }
