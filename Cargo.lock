@@ -652,6 +652,9 @@ dependencies = [
 [[package]]
 name = "libredaw-ui"
 version = "0.0.0"
+dependencies = [
+ "libredaw-protocol",
+]
 
 [[package]]
 name = "libspa"
