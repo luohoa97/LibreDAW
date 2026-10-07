@@ -1,18 +1,18 @@
 {
   "manifest_version": "0.3",
-  "name": "libredaw",
-  "display_name": "LibreDAW",
+  "name": "oto",
+  "display_name": "Oto",
   "version": "0.0.0",
-  "description": "Control a running LibreDAW (beats, mixer, export, loudness analysis) from Claude Desktop.",
-  "long_description": "Lets Claude edit patterns, notes and the mixer in LibreDAW, play, export WAV and read loudness, peak and balance numbers. LibreDAW asks you before anything risky, and agent control must be switched on in LibreDAW for each session.",
-  "author": { "name": "LibreDAW contributors" },
+  "description": "Control a running Oto (beats, mixer, export, loudness analysis) from Claude Desktop.",
+  "long_description": "Lets Claude edit patterns, notes and the mixer in Oto, play, export WAV and read loudness, peak and balance numbers. Oto asks you before anything risky, and agent control must be switched on in Oto for each session.",
+  "author": { "name": "Oto contributors" },
   "license": "GPL-3.0-or-later",
   "keywords": ["daw", "music", "audio"],
   "server": {
     "type": "binary",
-    "entry_point": "server/libredaw-mcp",
+    "entry_point": "server/oto-mcp",
     "mcp_config": {
-      "command": "${__dirname}/server/libredaw-mcp",
+      "command": "${__dirname}/server/oto-mcp",
       "args": []
     }
   },

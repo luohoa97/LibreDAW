@@ -34,15 +34,21 @@ pub enum RequestBody {
     ProjectGet,
     ProjectInfo,
     ProjectList,
-    /// PRIVILEGED if the open document has unsaved changes.
+    /// Saves the current project first, then opens a new one (18.6). A
+    /// global action: the window glows.
     ProjectNew {
         template: Option<String>,
+        name: Option<String>,
     },
-    /// PRIVILEGED if the open document has unsaved changes. `path` must be
-    /// inside the projects folder.
+    /// Saves the current project first (18.6). `path` inside the projects
+    /// folder needs no approval; any other path is PRIVILEGED, decided by
+    /// the DAW, which knows the folder. A global action.
     ProjectOpen {
         path: String,
     },
+    /// Saves and closes the current project and shows Home (18.6). A
+    /// global action.
+    ProjectClose,
     ProjectSave,
 
     // Editing: one undo group per request.
@@ -195,13 +201,21 @@ impl RequestBody {
     }
 
     /// Whether a human must approve this request in the UI (17.1).
-    /// `dirty` is true when the open document has unsaved changes.
+    /// Project switches save first (18.6), so `dirty` no longer makes them
+    /// privileged; `ProjectOpen` outside the projects folder is checked by
+    /// the DAW. `dirty` is kept for requests that may need it later.
     /// Plugin first load by an agent is decided by the DAW, which knows
     /// which plugins were approved; `Edit` batches that add plugins are
     /// checked there.
-    pub fn privileged(&self, dirty: bool) -> bool {
+    pub fn privileged(&self, _dirty: bool) -> bool {
+        false
+    }
+
+    /// Whether this request changes which project is open (18.6): the
+    /// window glows as a whole and a Go Back toast follows.
+    pub fn global(&self) -> bool {
         use RequestBody::*;
-        matches!(self, ProjectNew { .. } | ProjectOpen { .. } if dirty)
+        matches!(self, ProjectNew { .. } | ProjectOpen { .. } | ProjectClose)
     }
 }
 
@@ -228,6 +242,8 @@ pub enum Focus {
     Track(crate::ids::TrackId),
     Insert(crate::ids::InstanceId),
     Clip(crate::ids::ClipId),
+    /// A global action (18.6): the whole window glows.
+    Window,
 }
 
 /// Longest activity text shown in the DAW (18.2).
@@ -578,11 +594,12 @@ mod tests {
     }
 
     #[test]
-    fn opening_over_unsaved_work_is_privileged() {
+    fn project_switches_save_first_and_are_global() {
         let open = RequestBody::ProjectOpen { path: "x".into() };
-        assert!(open.privileged(true));
-        assert!(!open.privileged(false));
-        assert!(!RequestBody::Play.privileged(true));
+        assert!(!open.privileged(true));
+        assert!(open.global());
+        assert!(RequestBody::ProjectClose.global());
+        assert!(!RequestBody::Play.global());
     }
 
     #[test]

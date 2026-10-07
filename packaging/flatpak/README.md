@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
-# LibreDAW Flatpak
+# Oto Flatpak
 
-App id: `io.github.luohoa97.LibreDAW` (owner decision, 2026-10-07).
+App id: `io.github.luohoa97.Oto` (owner decision, 2026-10-07).
 
 ## Runtime choice
 
@@ -15,8 +15,8 @@ the `org.freedesktop.LinuxAudio.Plugins` extension point use branch `25.08`.
     fish packaging/flatpak/cargo-sources.fish        # Cargo.lock -> cargo-sources.json
     flatpak-builder --user --install-deps-from=flathub --force-clean \
         --repo=packaging/flatpak/repo packaging/flatpak/build-dir \
-        packaging/flatpak/io.github.luohoa97.LibreDAW.yml
-    flatpak build-bundle packaging/flatpak/repo LibreDAW-0.1.0.flatpak io.github.luohoa97.LibreDAW
+        packaging/flatpak/io.github.luohoa97.Oto.yml
+    flatpak build-bundle packaging/flatpak/repo Oto-0.1.0.flatpak io.github.luohoa97.Oto
 
 `cargo-sources.fish` replaces the Python `flatpak-cargo-generator`: it reads
 `Cargo.lock` and writes archive sources (crates.io URL + SHA-256 from the
@@ -36,7 +36,7 @@ lockfile) under `cargo/vendor/`, with `.cargo-checksum.json` files and a
 - Findings from the first test build (Flatpak 1.18, GNOME 50):
   - Flatpak 1.18 rejects `--socket=pipewire`; the manifest uses
     `--filesystem=xdg-run/pipewire-0` for now.
-  - `APP_ID` in `crates/ui/src/run.rs` must be `io.github.luohoa97.LibreDAW`
+  - `APP_ID` in `crates/ui/src/run.rs` must be `io.github.luohoa97.Oto`
     (the app cannot own another D-Bus name in the sandbox).
   - Real-time priority is not granted inside the sandbox: audio runs through
     PipeWire but `pw_out` stays SCHED_OTHER (the host build gets SCHED_RR).
@@ -45,4 +45,4 @@ lockfile) under `cargo/vendor/`, with `.cargo-checksum.json` files and a
     translates them. The engine needs a portal path when `/.flatpak-info` exists.
   - `flatpak-builder` needs the system `appstreamcli` (with compose) first on
     `PATH`; the Homebrew build lacks `appstreamcli-compose`.
-- Agents: `flatpak run --command=libredaw-mcp io.github.luohoa97.LibreDAW`.
+- Agents: `flatpak run --command=oto-mcp io.github.luohoa97.Oto`.

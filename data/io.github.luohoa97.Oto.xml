@@ -1,27 +1,27 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 <!--
-  A LibreDAW project is a directory bundle named *.ldaw that contains
+  A Oto project is a directory bundle named *.oto that contains
   project.toml (SPEC 7). Limits of MIME detection for directories:
-  - The glob *.ldaw matches by name only. Applications that guess a type
+  - The glob *.oto matches by name only. Applications that guess a type
     from a file name (g_content_type_guess, drag and drop of a path) get
-    application/x-libredaw-project.
+    application/x-oto-project.
   - File managers such as GNOME Files ask for the content type of the
     directory itself, and for directories GIO reports inode/directory
     without consulting globs. Files therefore shows a bundle as an
     ordinary folder (with the folder icon), and double-click enters it
-    instead of launching LibreDAW. The treemagic rule below lets
+    instead of launching Oto. The treemagic rule below lets
     xdgmime-based tools that do inspect directory contents identify it,
     but it is a best effort that Files does not rely on.
   - Open projects from Home, from "Open Project...", or by passing the path:
-    libredaw /path/MyBeat.ldaw
+    oto /path/MyBeat.oto
 -->
 <mime-info xmlns="http://www.freedesktop.org/standards/shared-mime-info">
-  <mime-type type="application/x-libredaw-project">
-    <comment>LibreDAW project</comment>
+  <mime-type type="application/x-oto-project">
+    <comment>Oto project</comment>
     <sub-class-of type="inode/directory"/>
-    <icon name="io.github.luohoa97.LibreDAW"/>
-    <glob pattern="*.ldaw"/>
+    <icon name="io.github.luohoa97.Oto"/>
+    <glob pattern="*.oto"/>
     <treemagic>
       <treematch path="project.toml" type="file"/>
     </treemagic>
