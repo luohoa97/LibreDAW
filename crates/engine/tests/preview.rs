@@ -259,7 +259,7 @@ fn clap_rig() -> Rig {
         &mut r,
         EngineCommand::AttachPlugin {
             slot: PluginSlot::Instrument(C0),
-            handle: PluginHandle(1 as *mut core::ffi::c_void),
+            handle: PluginHandle(std::ptr::dangling_mut::<core::ffi::c_void>()),
         },
     );
     r
