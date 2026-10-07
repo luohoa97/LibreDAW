@@ -855,6 +855,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "libredaw-control"
+version = "0.0.0"
+dependencies = [
+ "libredaw-protocol",
+]
+
+[[package]]
 name = "libredaw-engine"
 version = "0.0.0"
 dependencies = [
