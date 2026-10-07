@@ -208,7 +208,8 @@ Disposal thread: drops
 same kind.)
 
 Continuously changing values do not live in `Compiled`:
-volume, pan, mute, solo (per channel and track), metronome gain, tempo.
+volume, pan, mute, solo (per channel and track), metronome gain, tempo
+(tempo as `f64` bits in an `AtomicU64`; `f32` moves the grid at 133.33 BPM).
 They live in a `ControlTable`: a fixed array of `AtomicU32` (f32 bits),
 indexed by slot, shared by the GTK thread (only writer) and the audio thread
 (reader, once per sub-block).
@@ -252,7 +253,7 @@ plugin keeps its own values.
 
 - Musical time: ticks, `PPQ = 960`, `u64` on the audio thread. Document
   positions are `u32` (validated `<= 2^31`), about 300 hours at 120 BPM.
-- The transport is an anchor: `(anchor_sample: u64, anchor_tick: u64,
+- The transport is an anchor: `(anchor_sample: u64, anchor_tick: i64,
   samples_per_tick: f64)`. The absolute sample of tick `T` is
   `anchor_sample + round((T - anchor_tick) * samples_per_tick)`.
   Positions are computed from the anchor, never accumulated block by block.
