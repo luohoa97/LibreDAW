@@ -1,16 +1,16 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! `loadbench --host pipewire|alsa|jack --buffer N --seconds S --rate R`
-//! plays the heavy load project (16 channels, effects, song mode) through
+//! plays the heavy load project (16 channels, effects, looping timeline) through
 //! `Engine::start` on a real device and reports the DSP load per callback.
-//! `loadbench --offline` renders 60 s of the same project with `render_song`.
+//! `loadbench --offline` renders 60 s of the same project with `render_range`.
 
 use engine::loadproject::{LOAD_BPM, load_project, load_project_clips, load_store};
 use engine::report::{percentile, sched_name};
 use engine::{
-    CallbackProbe, Engine, EngineConfig, Host, Slots, SongRequest, compile_with, render_song,
+    CallbackProbe, Engine, EngineConfig, Host, RangeRequest, Slots, compile_with, render_range,
     write_controls,
 };
-use protocol::engine::{EngineCommand, TransportMode};
+use protocol::engine::EngineCommand;
 use std::process::ExitCode;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering::Relaxed};
 use std::time::{Duration, Instant};
@@ -84,8 +84,9 @@ fn offline(a: &Args) -> Result<(), String> {
     let store = load_store(a.rate);
     let mut slots = Slots::new();
     slots.sync(&project).map_err(|e| format!("slots: {e:?}"))?;
-    let req = SongRequest {
+    let req = RangeRequest {
         project,
+        range: None,
         tail_seconds: 0.0,
         sample_rate: a.rate,
         store: Some(store),
@@ -93,7 +94,7 @@ fn offline(a: &Args) -> Result<(), String> {
     let progress = AtomicU32::new(0);
     let cancel = AtomicBool::new(false);
     let t = Instant::now();
-    let r = render_song(&req, &slots, &[], &progress, &cancel).map_err(|e| e.to_string())?;
+    let r = render_range(&req, &slots, &[], &progress, &cancel).map_err(|e| e.to_string())?;
     let wall = t.elapsed().as_secs_f64();
     let audio = r.audio.len() as f64 / a.rate as f64;
     let peak = r
@@ -145,13 +146,6 @@ fn live(a: &Args) -> Result<(), String> {
             }
         }
     };
-    send(
-        &mut e,
-        EngineCommand::SetTransportMode {
-            mode: TransportMode::Song,
-            loop_song: true,
-        },
-    );
     send(&mut e, EngineCommand::Seek { tick: 0 });
     send(&mut e, EngineCommand::Play);
 

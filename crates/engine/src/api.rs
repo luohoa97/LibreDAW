@@ -384,6 +384,10 @@ impl Engine {
         self.ui.state.push(c).map_err(|PushError::Full(c)| c)
     }
 
+    /// `Err` returns the command when the ring is full. The command is big
+    /// since `Audition` carries synth parameters by value (no allocation
+    /// on the audio thread).
+    #[allow(clippy::result_large_err)]
     pub fn command(&mut self, c: EngineCommand) -> Result<(), EngineCommand> {
         self.ui.commands.push(c).map_err(|PushError::Full(c)| c)
     }

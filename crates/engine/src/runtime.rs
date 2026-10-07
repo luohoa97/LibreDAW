@@ -639,23 +639,13 @@ impl Runtime {
                     self.seq.seek(c, tick, &mut self.events);
                 }
             }
-            EngineCommand::SetPlayingPattern { pattern } => {
-                if let Some(c) = self.compiled.as_deref() {
-                    self.seq.set_pattern(c, pattern, &mut self.events);
-                } else {
-                    self.seq.set_pattern_id(pattern);
-                }
-            }
-            EngineCommand::SetTransportMode { mode, loop_song } => {
-                self.seq
-                    .set_mode(self.compiled.as_deref(), mode, loop_song, &mut self.events);
-            }
             EngineCommand::Preview {
                 channel,
                 key,
                 vel,
                 on,
             } => self.preview_command(channel, key, vel, on),
+            EngineCommand::Audition { .. } => {}
             EngineCommand::AttachPlugin { slot, handle } => self.plug.attach(slot, handle),
             EngineCommand::DetachPlugin { slot } => {
                 self.plug.detach(slot);
@@ -755,13 +745,13 @@ impl Runtime {
         self.seq
             .schedule(&c, n, metronome_on, &mut self.events, &mut self.beats);
         if self.seq.finished {
-            // A song that does not loop ran out: the same event as a stop.
+            // The arrangement ran out: the same event as a stop.
             self.seq.finished = false;
             push_engine_event(
                 &mut self.ends.events,
                 &self.shared.status,
                 EngineEvent::Stopped {
-                    tick: c.song.len_ticks as u64,
+                    tick: c.song_len_ticks as u64,
                 },
             );
         }

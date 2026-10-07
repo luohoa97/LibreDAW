@@ -7,7 +7,7 @@ mod common;
 use common::*;
 use engine::groove::{ratchet_part, swing_delay_ticks, swung_start};
 use protocol::ids::{ChannelId, NoteId, PatternId};
-use protocol::model::{ChannelNotes, Note, Pattern};
+use protocol::model::{Note, Pattern};
 
 const STEP: u32 = 240;
 
@@ -24,13 +24,10 @@ fn step_note(id: u32, step: u32, repeat: u8, off: i8) -> Note {
 }
 
 fn pat(swing: u16, notes: Vec<Note>) -> Pattern {
-    let mut p = Pattern::new(PatternId(1), "p".into());
+    let mut p = Pattern::new(PatternId(1), "p".into(), ChannelId(1));
     p.length_steps = 16;
     p.swing = swing;
-    p.notes.push(ChannelNotes {
-        channel: ChannelId(1),
-        notes,
-    });
+    p.notes = notes;
     p
 }
 

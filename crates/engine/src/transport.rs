@@ -53,9 +53,15 @@ impl Transport {
     }
 
     pub fn sample_of_tick(&self, tick: i64) -> u64 {
+        self.signed_sample_of_tick(tick).max(0) as u64
+    }
+
+    /// As `sample_of_tick` but without clamping at sample 0: a tick before
+    /// the transport started (a seek past it) maps to a negative sample.
+    pub fn signed_sample_of_tick(&self, tick: i64) -> i64 {
         let ticks = (tick - self.anchor_tick) as f64 - self.anchor_frac;
         let offset = (ticks * self.samples_per_tick).round() as i64;
-        (self.anchor_sample as i64 + offset).max(0) as u64
+        self.anchor_sample as i64 + offset
     }
 
     /// Tempo change at `sample`: the anchor moves to the exact position

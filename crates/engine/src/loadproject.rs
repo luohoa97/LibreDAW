@@ -1,17 +1,18 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! A heavy but realistic beat for load measurements (`loadbench` and the
 //! load test): 16 channels, 8 mixer tracks with EQ, compressor and
-//! saturator, two return tracks, a sidechain, a limited master, and a song
-//! of 8 clips. Everything is generated in memory.
+//! saturator, two return tracks, a sidechain, a limited master, and a looping
+//! timeline of 8 bars (one clip per instrument and bar). Everything is
+//! generated in memory.
 
 use crate::samples::{SampleData, SampleStore};
 use protocol::beats::{
     Bass808, BuiltinFx, BuiltinFxKind, SampleMode, Sampler, SamplerParams, SaturatorCurve,
 };
-use protocol::ids::{ChannelId, ClipId, InstanceId, NoteId, PatternId, PlaylistTrackId, TrackId};
+use protocol::ids::{ChannelId, ClipId, InstanceId, NoteId, PatternId, TrackId};
 use protocol::model::{
-    Adsr, Channel, ChannelNotes, Clip, Insert, Instrument, Mix, Note, Osc, Pattern, PlaylistTrack,
-    Project, SampleRef, Send, SynthParams, Track, Wave,
+    Adsr, Channel, Clip, Insert, Instrument, LoopRegion, Mix, Note, Osc, Pattern, Project,
+    SampleRef, Send, SynthParams, Track, Wave,
 };
 use std::sync::Arc;
 
@@ -261,7 +262,7 @@ const B808: [u32; 4] = [7, 8, 9, 10];
 const CHORD: [u32; 4] = [11, 12, 13, 14];
 const LEAD: [u32; 2] = [15, 16];
 
-fn pattern(ids: &mut Ids, variant: bool) -> Pattern {
+fn patterns(ids: &mut Ids, variant: bool) -> Vec<Pattern> {
     let mut n = Notes {
         per_channel: Vec::new(),
     };
@@ -335,21 +336,22 @@ fn pattern(ids: &mut Ids, variant: bool) -> Pattern {
             }
         }
     }
-    let mut p = Pattern::new(
-        PatternId(ids.next()),
-        if variant { "B" } else { "A" }.into(),
-    );
-    p.swing = 300; // 30 percent of a step
+    // One content per instrument (20.2).
     n.per_channel.sort_by_key(|c| c.0);
-    p.notes = n
-        .per_channel
+    n.per_channel
         .into_iter()
         .map(|(channel, mut notes)| {
+            let mut p = Pattern::new(
+                PatternId(ids.next()),
+                if variant { "B" } else { "A" }.into(),
+                channel,
+            );
+            p.swing = 300; // 30 percent of a step
             notes.sort_by_key(|n| (n.start, n.key, n.id));
-            ChannelNotes { channel, notes }
+            p.notes = notes;
+            p
         })
-        .collect();
-    p
+        .collect()
 }
 
 /// The load project: see the module comment. Needs the samples of
@@ -358,7 +360,7 @@ pub fn load_project() -> Project {
     load_project_clips(8)
 }
 
-/// The same with `clips` one-bar clips on the playlist, patterns A and B
+/// The same with `clips` one-bar clips per instrument, contents A and B
 /// alternating (every fourth is B).
 pub fn load_project_clips(clips: u32) -> Project {
     let mut ids = Ids(100);
@@ -504,23 +506,38 @@ pub fn load_project_clips(clips: u32) -> Project {
         });
     }
     p.samples.sort_by(|a, b| a.hash.cmp(&b.hash));
-    let a = Arc::new(pattern(&mut ids, false));
-    let b = Arc::new(pattern(&mut ids, true));
-    let (pa, pb) = (a.id, b.id);
-    let bar = a.length_ticks();
-    p.patterns = vec![a, b];
-    let clips = (0..clips)
-        .map(|i| Clip {
-            id: ClipId(ids.next()),
-            pattern: if i % 4 == 3 { pb } else { pa },
-            start: i * bar,
-            len: bar,
-        })
-        .collect();
-    p.playlist.push(Arc::new(PlaylistTrack {
-        id: PlaylistTrackId(ids.next()),
-        name: "Song".into(),
-        clips,
-    }));
+    let a = patterns(&mut ids, false);
+    let b = patterns(&mut ids, true);
+    let bar = a[0].length_ticks();
+    // Every instrument gets one clip per bar, content A with every fourth
+    // bar B (linked copies share the content).
+    let mut all = Vec::new();
+    for pa in &a {
+        let pb = b.iter().find(|x| x.instrument == pa.instrument);
+        for i in 0..clips {
+            let content = match pb {
+                Some(pb) if i % 4 == 3 => pb.id,
+                _ => pa.id,
+            };
+            all.push(Clip {
+                id: ClipId(ids.next()),
+                instrument: pa.instrument,
+                pattern: content,
+                start: i * bar,
+                len: bar,
+                offset: 0,
+                muted: false,
+            });
+        }
+    }
+    all.sort_by_key(|c| (c.instrument, c.start, c.id));
+    p.clips = all;
+    p.loop_region = LoopRegion {
+        start: 0,
+        end: clips * bar,
+        enabled: true,
+    };
+    p.patterns = a.into_iter().chain(b).map(Arc::new).collect();
+    p.patterns.sort_by_key(|x| x.id);
     p
 }

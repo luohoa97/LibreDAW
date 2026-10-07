@@ -5,13 +5,13 @@
 mod common;
 
 use common::*;
-use engine::render::{RenderRequest, SongRequest, render_song_with_block, render_with_block};
+use engine::render::{RangeRequest, render_range_with_block};
 use engine::runtime::{Runtime, Shared, rings};
 use engine::{SampleData, SampleStore, Slots, compile_with, write_controls};
 use protocol::beats::{SampleMode, Sampler, SamplerParams};
-use protocol::engine::{EngineCommand, TransportMode};
-use protocol::ids::{ChannelId, ClipId, PatternId, PlaylistTrackId, TrackId};
-use protocol::model::{Channel, Clip, Instrument, Mix, PlaylistTrack, Project};
+use protocol::engine::EngineCommand;
+use protocol::ids::{ChannelId, TrackId};
+use protocol::model::{Channel, Instrument, Mix, Project};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32};
@@ -59,14 +59,13 @@ fn sampler_project(hash: &str) -> Project {
     )
 }
 
-fn request(p: Project, rate: u32, store: Option<Arc<SampleStore>>) -> (RenderRequest, Slots) {
+fn request(p: Project, rate: u32, store: Option<Arc<SampleStore>>) -> (RangeRequest, Slots) {
     let mut slots = Slots::new();
     slots.sync(&p).unwrap();
     (
-        RenderRequest {
+        RangeRequest {
             project: Arc::new(p),
-            pattern: PatternId(1),
-            loops: 1,
+            range: Some((0, 3840)),
             tail_seconds: 0.0,
             sample_rate: rate,
             store,
@@ -85,8 +84,8 @@ fn zero_crossings(v: &[[f32; 2]]) -> usize {
         .count()
 }
 
-fn render(req: &RenderRequest, slots: &Slots, cb: usize) -> engine::render::Rendered {
-    render_with_block(
+fn render(req: &RangeRequest, slots: &Slots, cb: usize) -> engine::render::Rendered {
+    render_range_with_block(
         req,
         slots,
         &[],
@@ -118,9 +117,6 @@ fn sampler_render_equals_a_live_run_for_any_callback_size() {
     let mut rt = Runtime::new(SR as f64, shared, ends);
     rt.set_metronome_allowed(false);
     rt.install(compile_with(&p, &slots, SR as f64, Some(&store)));
-    rt.command(EngineCommand::SetPlayingPattern {
-        pattern: PatternId(1),
-    });
     rt.command(EngineCommand::Seek { tick: 0 });
     rt.command(EngineCommand::Play);
     let n = reference.audio.len();
@@ -166,16 +162,10 @@ fn render_rate_differing_from_the_store_rate_keeps_pitch() {
 
 fn song_with_sampler(hash: &str) -> Project {
     let mut p = sampler_project(hash);
-    p.playlist.push(Arc::new(PlaylistTrack {
-        id: PlaylistTrackId(50),
-        name: "A".into(),
-        clips: vec![Clip {
-            id: ClipId(51),
-            pattern: PatternId(1),
-            start: 960,
-            len: 1920,
-        }],
-    }));
+    // One clip at ticks 960..2880 and no loop: the arrangement end is 2880.
+    p.clips[0].start = 960;
+    p.clips[0].len = 1920;
+    p.loop_region.enabled = false;
     p
 }
 
@@ -185,14 +175,15 @@ fn render_song_plays_samplers() {
     let store = store_with(SR, "sine", sine(SR));
     let mut slots = Slots::new();
     slots.sync(&p).unwrap();
-    let req = SongRequest {
+    let req = RangeRequest {
         project: Arc::new(p.clone()),
+        range: None,
         tail_seconds: 0.0,
         sample_rate: SR,
         store: Some(store.clone()),
     };
     let run = |cb| {
-        render_song_with_block(
+        render_range_with_block(
             &req,
             &slots,
             &[],
@@ -216,10 +207,6 @@ fn render_song_plays_samplers() {
     let mut rt = Runtime::new(SR as f64, shared, ends);
     rt.set_metronome_allowed(false);
     rt.install(compile_with(&p, &slots, SR as f64, Some(&store)));
-    rt.command(EngineCommand::SetTransportMode {
-        mode: TransportMode::Song,
-        loop_song: false,
-    });
     rt.command(EngineCommand::Seek { tick: 0 });
     rt.command(EngineCommand::Play);
     let n = a.audio.len();

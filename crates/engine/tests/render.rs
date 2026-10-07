@@ -4,11 +4,10 @@
 mod common;
 
 use common::*;
-use engine::render::{RenderRequest, render_with_block};
+use engine::render::{RangeRequest, render_range_with_block};
 use engine::wav::write_wav_to;
-use engine::{EngineError, Slots, render_offline};
+use engine::{EngineError, Slots, render_range};
 use protocol::control::WavFormat;
-use protocol::ids::PatternId;
 use protocol::model::SynthParams;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering::Relaxed};
@@ -31,7 +30,7 @@ fn song() -> protocol::model::Project {
                         (1, 0, 960, 48, 100),
                         (2, 480, 960, 48, 90), // overlapping same key
                         (3, 960, 480, 55, 80),
-                        (4, 2000, 3000, 60, 127), // crosses the loop end
+                        (4, 2000, 3000, 60, 127), // crosses the clip end
                         (5, 3600, 120, 72, 60),
                     ],
                 ),
@@ -47,14 +46,13 @@ fn song() -> protocol::model::Project {
     p
 }
 
-fn request(p: protocol::model::Project) -> (RenderRequest, Slots) {
+fn request(p: protocol::model::Project) -> (RangeRequest, Slots) {
     let mut slots = Slots::new();
     slots.sync(&p).unwrap();
     (
-        RenderRequest {
+        RangeRequest {
             project: Arc::new(p),
-            pattern: PatternId(1),
-            loops: 2,
+            range: Some((0, 3840)),
             tail_seconds: 0.5,
             sample_rate: 44100,
             store: None,
@@ -67,16 +65,22 @@ fn bits(v: &[[f32; 2]]) -> Vec<[u32; 2]> {
     v.iter().map(|f| [f[0].to_bits(), f[1].to_bits()]).collect()
 }
 
+fn render(req: &RangeRequest, slots: &Slots) -> Vec<[f32; 2]> {
+    render_range(req, slots, &[], &AtomicU32::new(0), &AtomicBool::new(false))
+        .unwrap()
+        .audio
+}
+
 #[test]
 fn offline_render_is_bit_identical_for_any_callback_size() {
     let (req, slots) = request(song());
     let progress = AtomicU32::new(0);
     let cancel = AtomicBool::new(false);
-    let reference = render_with_block(&req, &slots, &[], &progress, &cancel, 512)
+    let reference = render_range_with_block(&req, &slots, &[], &progress, &cancel, 512)
         .unwrap()
         .audio;
-    // 2 loops of 3840 ticks at 133.33 BPM and 44.1 kHz, plus 0.5 s of tail
-    let main = ideal_sample(2 * 3840, 44100, 13333, 100) as usize;
+    // 3840 ticks at 133.33 BPM and 44.1 kHz, plus 0.5 s of tail
+    let main = ideal_sample(3840, 44100, 13333, 100) as usize;
     assert_eq!(reference.len(), main + 22050);
     assert_eq!(progress.load(Relaxed), 100);
     let peak = reference
@@ -92,72 +96,115 @@ fn offline_render_is_bit_identical_for_any_callback_size() {
         .fold(0.0f32, |m, v| m.max(v.abs()));
     assert!(end < 1e-3, "{end}");
     for cb in [7usize, 64, 255, 256, 257, 1000, 4096] {
-        let out = render_with_block(&req, &slots, &[], &progress, &cancel, cb)
+        let out = render_range_with_block(&req, &slots, &[], &progress, &cancel, cb)
             .unwrap()
             .audio;
         assert!(bits(&out) == bits(&reference), "callback size {cb} differs");
     }
     // the public entry point renders the same thing
-    let out = render_offline(&req, &slots, &[], &progress, &cancel)
-        .unwrap()
-        .audio;
-    assert!(bits(&out) == bits(&reference));
+    assert!(bits(&render(&req, &slots)) == bits(&reference));
 }
 
 #[test]
 fn offline_render_leaves_the_metronome_out_and_validates_requests() {
     let (req, slots) = request(song());
-    let a = render_offline(
-        &req,
-        &slots,
-        &[],
-        &AtomicU32::new(0),
-        &AtomicBool::new(false),
-    )
-    .unwrap()
-    .audio;
+    let a = render(&req, &slots);
     let mut quiet = song();
     quiet.metronome.enabled = false;
     let (req2, slots2) = request(quiet);
-    let b = render_offline(
-        &req2,
-        &slots2,
-        &[],
-        &AtomicU32::new(0),
-        &AtomicBool::new(false),
-    )
-    .unwrap()
-    .audio;
+    let b = render(&req2, &slots2);
     assert!(bits(&a) == bits(&b), "export has no click");
 
-    let (mut bad, slots) = request(song());
-    bad.loops = 0;
     let err = |r: Result<_, EngineError>| r.err().unwrap();
     let p = AtomicU32::new(0);
     let c = AtomicBool::new(false);
+    let (mut bad, slots) = request(song());
+    bad.range = Some((960, 960));
     assert!(matches!(
-        err(render_offline(&bad, &slots, &[], &p, &c)),
+        err(render_range(&bad, &slots, &[], &p, &c)),
         EngineError::Invalid(_)
     ));
-    bad.loops = 1;
-    bad.pattern = PatternId(77);
+    bad.range = Some((1000, 10));
     assert!(matches!(
-        err(render_offline(&bad, &slots, &[], &p, &c)),
+        err(render_range(&bad, &slots, &[], &p, &c)),
         EngineError::Invalid(_)
     ));
+    bad.range = Some((0, 960));
+    bad.sample_rate = 0;
+    assert!(matches!(
+        err(render_range(&bad, &slots, &[], &p, &c)),
+        EngineError::Invalid(_)
+    ));
+    // nothing to render: no clips and no range
+    let empty = project(120.0, vec![], vec![], Vec::<Beat>::new());
+    let (mut e, slots) = request(empty);
+    e.range = None;
+    assert!(matches!(
+        err(render_range(&e, &slots, &[], &p, &c)),
+        EngineError::Invalid(_)
+    ));
+}
+
+#[test]
+fn the_default_range_is_the_loop_region_or_the_whole_arrangement() {
+    // `song()` has clips 0..3840 and the loop region over the same.
+    let (mut req, slots) = request(song());
+    let whole = render(&req, &slots);
+    req.range = None;
+    // Loop region enabled: the loop region, 0..3840.
+    assert!(bits(&render(&req, &slots)) == bits(&whole));
+    // Loop region disabled: 0..arrangement end, the same here.
+    let mut p = song();
+    p.loop_region.enabled = false;
+    let (mut req2, slots2) = request(p);
+    req2.range = None;
+    assert!(bits(&render(&req2, &slots2)) == bits(&whole));
+    // A loop region over the second half renders only that, and never
+    // loops (length is one pass plus the tail).
+    let mut p = song();
+    p.loop_region.start = 1920;
+    p.loop_region.end = 3840;
+    let (mut req3, slots3) = request(p);
+    req3.range = None;
+    let half = render(&req3, &slots3);
+    let main = ideal_sample(1920, 44100, 13333, 100) as usize;
+    assert_eq!(half.len(), main + 22050);
+}
+
+#[test]
+fn a_range_start_inside_the_clip_skips_earlier_notes() {
+    let p = project(
+        120.0,
+        vec![],
+        vec![synth_channel(1, 0, tone_params())],
+        vec![pattern(
+            1,
+            16,
+            &[(1, vec![(1, 960, 480, 69, 127), (2, 2880, 480, 72, 127)])],
+        )],
+    );
+    let (mut req, slots) = request(p);
+    req.sample_rate = 48000;
+    req.tail_seconds = 0.0;
+    req.range = Some((1920, 3840));
+    let out = render(&req, &slots);
+    assert_eq!(out.len(), ideal_sample(1920, 48000, 120, 1) as usize);
+    let on = ideal_sample(2880 - 1920, 48000, 120, 1) as usize;
+    assert!(out[..on].iter().all(|f| f[0] == 0.0 && f[1] == 0.0));
+    assert!(out[on + 1][0].abs() > 0.0 || out[on + 2][0].abs() > 0.0);
 }
 
 #[test]
 fn offline_render_can_be_cancelled() {
     let (req, slots) = request(song());
     let cancel = AtomicBool::new(true);
-    let r = render_offline(&req, &slots, &[], &AtomicU32::new(0), &cancel);
+    let r = render_range(&req, &slots, &[], &AtomicU32::new(0), &cancel);
     assert!(matches!(r, Err(EngineError::Cancelled)));
 }
 
 #[test]
 fn offline_render_notes_land_on_the_closed_form_grid() {
-    // one tone note at tick 960 of a 1-loop render: silence before the
+    // one tone note at tick 960 of a 1-pass render: silence before the
     // exact sample, sound from it
     let p = project(
         120.0,
@@ -166,18 +213,9 @@ fn offline_render_notes_land_on_the_closed_form_grid() {
         vec![pattern(1, 16, &[(1, vec![(1, 960, 480, 69, 127)])])],
     );
     let (mut req, slots) = request(p);
-    req.loops = 1;
     req.tail_seconds = 0.0;
     req.sample_rate = 48000;
-    let out = render_offline(
-        &req,
-        &slots,
-        &[],
-        &AtomicU32::new(0),
-        &AtomicBool::new(false),
-    )
-    .unwrap()
-    .audio;
+    let out = render(&req, &slots);
     let on = ideal_sample(960, 48000, 120, 1) as usize;
     assert!(out[..on].iter().all(|f| f[0] == 0.0 && f[1] == 0.0));
     assert!(out[on + 1][0].abs() > 0.0 || out[on + 2][0].abs() > 0.0);

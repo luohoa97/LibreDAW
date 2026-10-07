@@ -34,7 +34,7 @@ pub use compiled::{Compiled, Slots, SlotsFull, compile, compile_with};
 pub use metronome::{CallbackState, Controls, Metronome};
 pub use plugins::PluginApi;
 pub use recorder::Recorder;
-pub use render::{RenderRequest, Rendered, SongRequest, render_offline, render_song};
+pub use render::{RangeRequest, Rendered, render_range};
 pub use runtime::{RtEnds, Runtime, Shared, UiEnds, rings};
 pub use samples::{SampleData, SampleStore};
 pub use tables::{

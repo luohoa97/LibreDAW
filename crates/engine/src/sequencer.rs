@@ -10,8 +10,6 @@
 use crate::compiled::{Compiled, PatternC};
 use crate::transport::{PPQ, Transport, samples_per_tick};
 use protocol::consts::MAX_CHANNELS;
-use protocol::engine::TransportMode;
-use protocol::ids::PatternId;
 
 /// A note event inside a sub-block. `offset` is in frames from its start.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -107,10 +105,11 @@ pub struct Sequencer {
     pub playing: bool,
     /// Pattern tick where the next `play` starts.
     start_tick: i64,
-    pattern: Option<PatternId>,
-    mode: TransportMode,
-    loop_song: bool,
-    /// Set when a song that does not loop reached its end; the runtime
+    /// Loop region still ahead of the playhead: `(start, end)` ticks.
+    wrap_region: Option<(i64, i64)>,
+    /// The arrangement end is still ahead of the playhead.
+    end_armed: bool,
+    /// Set when playback reached the arrangement end; the runtime
     /// reports it and clears it.
     pub finished: bool,
     cursors: [u32; MAX_CHANNELS],
@@ -134,10 +133,9 @@ impl Sequencer {
             transport: Transport::at(0, 0, spt),
             playing: false,
             start_tick: 0,
-            pattern: None,
-            mode: TransportMode::Pattern,
-            loop_song: false,
             finished: false,
+            wrap_region: None,
+            end_armed: false,
             cursors: [0; MAX_CHANNELS],
             owner: vec![0; MAX_CHANNELS * 128].into_boxed_slice(),
             end_tick: vec![0; MAX_CHANNELS * 128].into_boxed_slice(),
@@ -159,35 +157,26 @@ impl Sequencer {
         }
     }
 
-    pub fn set_pattern_id(&mut self, id: PatternId) {
-        self.pattern = Some(id);
+    /// The loop region when one is set and enabled (20.2): `(start, end)`.
+    fn region(c: &Compiled) -> Option<(i64, i64)> {
+        (c.loop_enabled && c.loop_end > c.loop_start)
+            .then_some((c.loop_start as i64, c.loop_end as i64))
     }
 
-    pub fn pattern_id(&self) -> Option<PatternId> {
-        self.pattern
+    /// Decides, from the playhead, which boundary can still fire: a playhead
+    /// already past the loop end plays on to the arrangement end, and one
+    /// already past the arrangement end plays on without stopping.
+    fn arm(&mut self, c: &Compiled) {
+        let tick = if self.playing {
+            self.transport.tick_at(self.pos)
+        } else {
+            self.start_tick as f64
+        };
+        self.wrap_region = Self::region(c).filter(|&(_, e)| tick < e as f64);
+        self.end_armed = c.song_len_ticks > 0 && tick < c.song_len_ticks as f64;
     }
 
-    /// The notes being played: the playing pattern, or the compiled song.
-    fn source<'a>(&self, c: &'a Compiled) -> Option<&'a PatternC> {
-        match self.mode {
-            TransportMode::Song => Some(&c.song),
-            TransportMode::Pattern => match self.pattern {
-                Some(id) => c.pattern(id),
-                None => c.patterns.first(),
-            },
-        }
-    }
-
-    /// Pattern mode always loops; song mode loops when asked to.
-    fn looping(&self) -> bool {
-        self.mode == TransportMode::Pattern || self.loop_song
-    }
-
-    fn loop_len(&self, c: &Compiled) -> Option<i64> {
-        self.source(c).map(|p| p.len_ticks as i64)
-    }
-
-    /// Tick of the playhead within the pattern pass (floored, never negative).
+    /// Tick of the playhead (floored, never negative).
     pub fn playhead_tick(&self) -> u64 {
         if self.playing {
             self.transport.tick_at(self.pos).max(0.0) as u64
@@ -204,13 +193,13 @@ impl Sequencer {
     /// sample is not before `pos`.
     pub fn sync_cursors(&mut self, c: &Compiled) {
         self.cursors = [0; MAX_CHANNELS];
-        let Some(p) = self.source(c) else { return };
+        let p = &c.song;
         for &s in &p.active_slots {
             let notes = &p.notes[s as usize];
             let t = &self.transport;
-            let pos = self.pos;
+            let pos = self.pos as i64;
             self.cursors[s as usize] =
-                notes.partition_point(|n| t.sample_of_tick(n.start as i64) < pos) as u32;
+                notes.partition_point(|n| t.signed_sample_of_tick(n.start as i64) < pos) as u32;
         }
     }
 
@@ -227,6 +216,7 @@ impl Sequencer {
         self.transport = Transport::at(self.pos, self.start_tick, self.spt);
         self.sync_cursors(c);
         self.sync_beat(self.start_tick);
+        self.arm(c);
     }
 
     /// Returns the tick the playhead was at.
@@ -238,72 +228,17 @@ impl Sequencer {
         tick
     }
 
+    /// Moves the playhead anywhere (20.2).
     pub fn seek(&mut self, c: &Compiled, tick: u64, out: &mut Vec<SeqEvent>) {
-        let t = self.fit_tick(c, tick.min(i64::MAX as u64) as i64);
+        let t = tick.min(i64::MAX as u64) as i64;
         if self.playing {
             self.release_all(0, out);
             self.transport = Transport::at(self.pos, t, self.spt);
             self.sync_cursors(c);
             self.sync_beat(t);
+            self.arm(c);
         } else {
             self.start_tick = t;
-        }
-    }
-
-    /// A tick inside the source: wrapped when looping, else clamped to the
-    /// last tick.
-    fn fit_tick(&self, c: &Compiled, t: i64) -> i64 {
-        match self.loop_len(c) {
-            Some(l) if self.looping() => t.rem_euclid(l),
-            Some(l) => t.clamp(0, l - 1),
-            None => t,
-        }
-    }
-
-    /// Switches between pattern and song playback (15.6). A change of mode
-    /// restarts from tick 0 of the new source; changing only `loop_song`
-    /// keeps the position.
-    pub fn set_mode(
-        &mut self,
-        c: Option<&Compiled>,
-        mode: TransportMode,
-        loop_song: bool,
-        out: &mut Vec<SeqEvent>,
-    ) {
-        self.loop_song = loop_song;
-        if mode == self.mode {
-            return;
-        }
-        self.mode = mode;
-        self.finished = false;
-        if self.playing {
-            self.release_all(0, out);
-            self.transport = Transport::at(self.pos, 0, self.spt);
-            if let Some(c) = c {
-                self.sync_cursors(c);
-            }
-            self.sync_beat(0);
-        } else {
-            self.start_tick = 0;
-        }
-    }
-
-    pub fn set_pattern(&mut self, c: &Compiled, id: PatternId, out: &mut Vec<SeqEvent>) {
-        if self.pattern == Some(id) {
-            return;
-        }
-        self.pattern = Some(id);
-        if self.mode == TransportMode::Song {
-            return; // remembered for when pattern mode comes back
-        }
-        if self.playing {
-            self.release_all(0, out);
-            let t = self.fit_tick(c, self.transport.tick_at(self.pos).max(0.0) as i64);
-            self.transport = Transport::at(self.pos, t, self.spt);
-            self.sync_cursors(c);
-            self.sync_beat(t);
-        } else {
-            self.start_tick = 0;
         }
     }
 
@@ -311,6 +246,7 @@ impl Sequencer {
     pub fn on_install(&mut self, c: &Compiled) {
         if self.playing {
             self.sync_cursors(c);
+            self.arm(c);
         }
     }
 
@@ -395,9 +331,12 @@ impl Sequencer {
         }
         let start = self.pos;
         let end = start + n as u64;
-        let pat = self.source(c);
-        let loop_len = pat.map(|p| p.len_ticks as i64);
-        let looping = self.looping();
+        let pat = &c.song;
+        // The boundary that can still fire: the loop end, else the
+        // arrangement end (20.2).
+        let wrap = self.wrap_region;
+        let stop_at = (wrap.is_none() && self.end_armed).then_some(c.song_len_ticks as i64);
+        let limit = wrap.map(|w| w.1).or(stop_at);
         let beats_per_bar = c.time_sig_num.max(1) as i64;
         let mut ons = 0usize;
 
@@ -412,14 +351,16 @@ impl Sequencer {
             if let Some((t, _, _)) = off {
                 consider(t, Kind::Off);
             }
-            if let Some(l) = loop_len {
-                consider(l, if looping { Kind::Wrap } else { Kind::End });
+            if let Some((_, e)) = wrap {
+                consider(e, Kind::Wrap);
+            } else if let Some(e) = stop_at {
+                consider(e, Kind::End);
             }
-            let on = pat.and_then(|p| self.min_on(p));
+            let on = self.min_on(pat);
             if let Some((t, _)) = on {
                 consider(t, Kind::On);
             }
-            if loop_len.is_none_or(|l| self.next_beat < l) {
+            if limit.is_none_or(|l| self.next_beat < l) {
                 consider(self.next_beat, Kind::Beat);
             }
             let Some((tick, kind)) = best else { break };
@@ -454,9 +395,14 @@ impl Sequencer {
                     }
                     self.live = [0; MAX_CHANNELS];
                     self.live_slots = 0;
-                    self.transport.wrap(loop_len.expect("wrap needs a loop"));
-                    self.cursors = [0; MAX_CHANNELS];
-                    self.next_beat = 0;
+                    let (ls, le) = wrap.expect("wrap needs a loop region");
+                    self.transport.wrap(le - ls);
+                    for &s in &c.song.active_slots {
+                        self.cursors[s as usize] = c.song.notes[s as usize]
+                            .partition_point(|n| (n.start as i64) < ls)
+                            as u32;
+                    }
+                    self.sync_beat(ls);
                     self.loops += 1;
                 }
                 Kind::End => {
@@ -472,8 +418,7 @@ impl Sequencer {
                     }
                     ons += 1;
                     let (_, slot) = on.expect("on candidate");
-                    let p = pat.expect("pattern");
-                    let note = p.notes[slot as usize][self.cursors[slot as usize] as usize];
+                    let note = pat.notes[slot as usize][self.cursors[slot as usize] as usize];
                     self.cursors[slot as usize] += 1;
                     let idx = slot as usize * 128 + note.key as usize;
                     if self.live[slot as usize] & (1u128 << note.key) != 0 {
@@ -482,7 +427,7 @@ impl Sequencer {
                         self.emit(events, offset, slot, note.key, 0, false, old);
                     }
                     self.owner[idx] = note.id;
-                    self.end_tick[idx] = match loop_len {
+                    self.end_tick[idx] = match limit {
                         Some(l) => (note.end as i64).min(l),
                         None => note.end as i64,
                     };

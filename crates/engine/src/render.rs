@@ -9,18 +9,23 @@ use crate::samples::{SampleData, SampleState, SampleStore, resample};
 use crate::tables::write_controls;
 use crate::transport::{Transport, samples_per_tick};
 use protocol::consts::{MAX_TEMPO_BPM, MIN_TEMPO_BPM};
-use protocol::engine::{EngineCommand, PluginHandle, PluginSlot, TransportMode};
-use protocol::ids::PatternId;
+use protocol::engine::{EngineCommand, PluginHandle, PluginSlot};
 use protocol::model::{Instrument, Project};
 use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering::Relaxed};
 use std::time::{Duration, Instant};
 
-pub struct RenderRequest {
+/// What `render_range` renders: ticks `start..end` of the timeline plus a
+/// tail.
+pub struct RangeRequest {
     pub project: Arc<Project>,
-    pub pattern: PatternId,
-    pub loops: u32,
+    /// `(start, end)` in ticks, `start < end`. `None` renders the loop
+    /// region when it is enabled, else `0..arrangement end` (the end of the
+    /// last clip). The render never loops.
+    pub range: Option<(u32, u32)>,
+    /// Seconds rendered after `end` with the transport stopped, so tails
+    /// (releases, reverb, delay) ring out.
     pub tail_seconds: f64,
     pub sample_rate: u32,
     /// The live sample store, for sampler channels. `None` renders them as
@@ -29,36 +34,34 @@ pub struct RenderRequest {
     pub store: Option<Arc<SampleStore>>,
 }
 
-/// Callback size `render_offline` uses.
+/// Callback size `render_range` uses.
 pub const DEFAULT_RENDER_BLOCK: usize = 512;
 
-/// Renders `loops` passes of the pattern plus a tail, stereo. `progress`
+/// Renders a range of the timeline plus a tail, stereo (20.2). `progress`
 /// receives 0 to 100. Export plugin instances are created and attached by
 /// the caller's thread and passed as handles; this thread is their only
-/// audio thread.
-pub fn render_offline(
-    req: &RenderRequest,
+/// audio thread. Errors when the range is empty (no range given, the loop
+/// region is off and no clip has content).
+pub fn render_range(
+    req: &RangeRequest,
     slots: &Slots,
     plugins: &[(PluginSlot, PluginHandle)],
     progress: &AtomicU32,
     cancel: &AtomicBool,
 ) -> Result<Rendered, EngineError> {
-    render_with_block(req, slots, plugins, progress, cancel, DEFAULT_RENDER_BLOCK)
+    render_range_with_block(req, slots, plugins, progress, cancel, DEFAULT_RENDER_BLOCK)
 }
 
-/// As `render_offline` with an explicit callback size. The output does not
+/// As `render_range` with an explicit callback size. The output does not
 /// depend on it (built-in DSP is per sample and control values are constant).
-pub fn render_with_block(
-    req: &RenderRequest,
+pub fn render_range_with_block(
+    req: &RangeRequest,
     slots: &Slots,
     plugins: &[(PluginSlot, PluginHandle)],
     progress: &AtomicU32,
     cancel: &AtomicBool,
     callback_frames: usize,
 ) -> Result<Rendered, EngineError> {
-    if req.loops == 0 {
-        return Err(EngineError::Invalid("loops must be at least 1".into()));
-    }
     if req.sample_rate == 0 || callback_frames == 0 {
         return Err(EngineError::Invalid(
             "sample rate and block must be > 0".into(),
@@ -71,10 +74,20 @@ pub fn render_with_block(
             p.tempo_bpm
         )));
     }
-    let pattern = p
-        .pattern(req.pattern)
-        .ok_or_else(|| EngineError::Invalid(format!("no pattern {}", req.pattern)))?;
     let sr = req.sample_rate as f64;
+    let (store, warnings) = prepare_store(p, req.store.as_deref(), req.sample_rate, cancel)?;
+    let mut compiled = compile_with(p, slots, sr, store.as_deref());
+    let (start, end) = match req.range {
+        Some(r) => r,
+        None if compiled.loop_enabled => (compiled.loop_start, compiled.loop_end),
+        None => (0, compiled.song_len_ticks),
+    };
+    if end <= start {
+        return Err(EngineError::Invalid("nothing to render".into()));
+    }
+    // A render plays the range once: the loop is off, and the sequencer's
+    // end-of-arrangement stop is harmless (the pump keeps pulling frames).
+    compiled.loop_enabled = false;
 
     let shared = Shared::new();
     write_controls(p, slots, &shared.controls, &shared.params);
@@ -82,20 +95,15 @@ pub fn render_with_block(
     let mut rt = Runtime::new(sr, shared, ends);
     rt.set_metronome_allowed(false);
     rt.set_previews_allowed(false);
-    let (store, warnings) = prepare_store(p, req.store.as_deref(), req.sample_rate, cancel)?;
-    let _ = rt.install(compile_with(p, slots, sr, store.as_deref()));
+    let _ = rt.install(compiled);
     for &(slot, handle) in plugins {
         rt.command(EngineCommand::AttachPlugin { slot, handle });
     }
-    rt.command(EngineCommand::SetPlayingPattern {
-        pattern: req.pattern,
-    });
-    rt.command(EngineCommand::Seek { tick: 0 });
+    rt.command(EngineCommand::Seek { tick: start as u64 });
     rt.command(EngineCommand::Play);
 
     let spt = samples_per_tick(sr, p.tempo_bpm);
-    let main_ticks = pattern.length_ticks() as i64 * req.loops as i64;
-    let main = Transport::at(0, 0, spt).sample_of_tick(main_ticks);
+    let main = Transport::at(0, 0, spt).sample_of_tick((end - start) as i64);
     let tail = (req.tail_seconds.max(0.0) * sr).round() as u64;
     let audio = pump(&mut rt, main, tail, callback_frames, progress, cancel)?;
     Ok(Rendered { audio, warnings })
@@ -135,82 +143,6 @@ fn pump(
     }
     progress.store(100, Relaxed);
     Ok(out)
-}
-
-/// What `render_song` renders: the whole playlist once, plus a tail.
-pub struct SongRequest {
-    pub project: Arc<Project>,
-    pub tail_seconds: f64,
-    pub sample_rate: u32,
-    /// As `RenderRequest::store`.
-    pub store: Option<Arc<SampleStore>>,
-}
-
-/// Renders the playlist from tick 0 to the end of its last clip (15.6)
-/// plus a tail, stereo, on the same runtime path as live song playback.
-/// Errors when the playlist has no clip. See `render_offline` for
-/// `plugins`, `progress` and `cancel`.
-pub fn render_song(
-    req: &SongRequest,
-    slots: &Slots,
-    plugins: &[(PluginSlot, PluginHandle)],
-    progress: &AtomicU32,
-    cancel: &AtomicBool,
-) -> Result<Rendered, EngineError> {
-    render_song_with_block(req, slots, plugins, progress, cancel, DEFAULT_RENDER_BLOCK)
-}
-
-/// As `render_song` with an explicit callback size.
-pub fn render_song_with_block(
-    req: &SongRequest,
-    slots: &Slots,
-    plugins: &[(PluginSlot, PluginHandle)],
-    progress: &AtomicU32,
-    cancel: &AtomicBool,
-    callback_frames: usize,
-) -> Result<Rendered, EngineError> {
-    if req.sample_rate == 0 || callback_frames == 0 {
-        return Err(EngineError::Invalid(
-            "sample rate and block must be > 0".into(),
-        ));
-    }
-    let p = &req.project;
-    if !(MIN_TEMPO_BPM..=MAX_TEMPO_BPM).contains(&p.tempo_bpm) {
-        return Err(EngineError::Invalid(format!(
-            "tempo {} out of range",
-            p.tempo_bpm
-        )));
-    }
-    let sr = req.sample_rate as f64;
-    let (store, warnings) = prepare_store(p, req.store.as_deref(), req.sample_rate, cancel)?;
-    let compiled = compile_with(p, slots, sr, store.as_deref());
-    if compiled.song_len_ticks == 0 {
-        return Err(EngineError::Invalid("the playlist is empty".into()));
-    }
-    let song_ticks = compiled.song_len_ticks as i64;
-
-    let shared = Shared::new();
-    write_controls(p, slots, &shared.controls, &shared.params);
-    let (_ui, ends) = rings();
-    let mut rt = Runtime::new(sr, shared, ends);
-    rt.set_metronome_allowed(false);
-    rt.set_previews_allowed(false);
-    let _ = rt.install(compiled);
-    for &(slot, handle) in plugins {
-        rt.command(EngineCommand::AttachPlugin { slot, handle });
-    }
-    rt.command(EngineCommand::SetTransportMode {
-        mode: TransportMode::Song,
-        loop_song: false,
-    });
-    rt.command(EngineCommand::Seek { tick: 0 });
-    rt.command(EngineCommand::Play);
-
-    let spt = samples_per_tick(sr, p.tempo_bpm);
-    let main = Transport::at(0, 0, spt).sample_of_tick(song_ticks);
-    let tail = (req.tail_seconds.max(0.0) * sr).round() as u64;
-    let audio = pump(&mut rt, main, tail, callback_frames, progress, cancel)?;
-    Ok(Rendered { audio, warnings })
 }
 
 /// The result of an offline render.
