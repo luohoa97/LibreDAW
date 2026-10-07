@@ -15,7 +15,7 @@ use crate::slots::SlotAllocator;
 use crate::window;
 use doc::document::Document;
 
-pub const APP_ID: &str = "org.libredaw.LibreDAW";
+pub const APP_ID: &str = "io.github.luohoa97.LibreDAW";
 
 /// Prints start-up stages when `LIBREDAW_DEBUG` is set.
 fn trace(what: &str) {
