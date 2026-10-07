@@ -91,6 +91,8 @@ pub struct Mixer {
     body: gtk::Box,
     master_slot: gtk::Box,
     strips: RefCell<Vec<Strip>>,
+    /// The loudness reading on the Main Output strip.
+    lufs: RefCell<Option<gtk::Label>>,
     sig: RefCell<String>,
     updating: Cell<bool>,
     editing: Cell<u32>,
@@ -138,6 +140,7 @@ impl Mixer {
             body,
             master_slot,
             strips: RefCell::new(Vec::new()),
+            lufs: RefCell::new(None),
             sig: RefCell::new(String::new()),
             updating: Cell::new(false),
             editing: Cell::new(0),
@@ -231,6 +234,7 @@ impl Mixer {
             self.master_slot.remove(&c);
         }
         self.strips.borrow_mut().clear();
+        *self.lufs.borrow_mut() = None;
         let proj = self.app.session.borrow().document().project.clone();
         let mut tracks = 0;
         for t in proj.tracks.iter().filter(|t| t.id != TrackId::MASTER) {
@@ -394,6 +398,23 @@ impl Mixer {
         }
         add.insert_action_group("fx", Some(&fx));
         inner.append(&add);
+
+        // Duck to Kick on a track; Loudness on Main Output.
+        if is_master {
+            let m = self.clone();
+            let (card, reading) = crate::fx_panel::loudness_card(&self.app, proj, move |down| {
+                if down {
+                    m.editing.set(m.editing.get() + 1);
+                } else {
+                    m.editing.set(m.editing.get().saturating_sub(1));
+                    m.sync();
+                }
+            });
+            *self.lufs.borrow_mut() = Some(reading);
+            inner.append(&card);
+        } else if let Some(row) = crate::fx_panel::duck_row(&self.app, proj, id) {
+            inner.append(&row);
+        }
 
         // Pan, with its name.
         let pan_label = gtk::Label::new(Some("Left/Right"));
@@ -702,13 +723,18 @@ impl Mixer {
     ) -> gtk::Widget {
         let (name, what) = menus::effect_name(kind);
         let row = gtk::Box::new(gtk::Orientation::Horizontal, 2);
-        let label = gtk::Label::new(Some(name));
-        label.set_xalign(0.0);
-        label.set_hexpand(true);
-        label.set_ellipsize(gtk::pango::EllipsizeMode::End);
-        label.set_margin_start(6);
-        label.set_tooltip_text(Some(what));
-        row.append(&label);
+        // The name opens the effect's panel: styles first, knobs behind More.
+        let open = gtk::Button::with_label(name);
+        open.add_css_class("flat");
+        open.set_hexpand(true);
+        if let Some(l) = open.child().and_then(|c| c.downcast::<gtk::Label>().ok()) {
+            l.set_ellipsize(gtk::pango::EllipsizeMode::End);
+            l.set_xalign(0.0);
+        }
+        open.set_tooltip_text(Some(&format!("{what}. Click to change how it sounds")));
+        let m = self.clone();
+        open.connect_clicked(move |b| crate::fx_panel::show(&m.app, b.upcast_ref(), track, inst));
+        row.append(&open);
         let del = gtk::Button::from_icon_name("window-close-symbolic");
         del.add_css_class("flat");
         del.add_css_class("circular");
@@ -823,6 +849,12 @@ impl Mixer {
     }
 
     fn feed_meters(&self) {
+        if let Some(l) = self.lufs.borrow().as_ref() {
+            let text = crate::fx_panel::lufs_text(self.app.session.borrow().link.loudness.lufs());
+            if l.text() != text {
+                l.set_text(&text);
+            }
+        }
         for st in self.strips.borrow().iter() {
             let p = self.app.take_peaks(st.track, MeterUser::Mixer);
             st.meter.update([peak_to_db(p[0]), peak_to_db(p[1])]);

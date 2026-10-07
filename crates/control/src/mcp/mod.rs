@@ -15,6 +15,7 @@
 pub mod build;
 pub mod compose;
 pub(crate) mod exec;
+pub mod fxchain;
 pub mod grid;
 pub mod ids;
 pub mod notes;

@@ -44,7 +44,7 @@ pub struct Built {
 }
 
 impl Built {
-    fn push(&mut self, label: impl Into<String>, e: Edit) {
+    pub(crate) fn push(&mut self, label: impl Into<String>, e: Edit) {
         self.labels.push(label.into());
         self.edits.push(e);
     }
@@ -770,9 +770,11 @@ pub struct FxAddArgs {
     pub track: TrackId,
     pub fx: FxChoice,
     pub index: Option<u8>,
+    /// A named setting for the new effect (see fxpresets).
+    pub preset: Option<String>,
 }
 
-pub fn fx_add(project: &Project, a: &FxAddArgs) -> BuildResult {
+pub fn fx_add(project: &Project, ids: &mut IdGen, a: &FxAddArgs) -> BuildResult {
     let t = project
         .track(a.track)
         .ok_or_else(|| format!("mixer track {} does not exist", a.track))?;
@@ -780,6 +782,16 @@ pub fn fx_add(project: &Project, a: &FxAddArgs) -> BuildResult {
     let mut b = Built::default();
     match &a.fx {
         FxChoice::Builtin(kind) => {
+            let preset = match &a.preset {
+                Some(name) => Some(crate::fxpresets::find(*kind, name).ok_or_else(|| {
+                    format!(
+                        "no sound \"{}\" for this effect; it has: {}",
+                        name.chars().take(40).collect::<String>(),
+                        crate::fxpresets::names(*kind)
+                    )
+                })?),
+                None => None,
+            };
             b.diff
                 .push(format!("T{} + {} at {index}", a.track, serde_name(kind)));
             b.push(
@@ -790,8 +802,18 @@ pub fn fx_add(project: &Project, a: &FxAddArgs) -> BuildResult {
                     fx: *kind,
                 },
             );
+            if let Some(p) = preset {
+                let instance = InstanceId(ids.alloc());
+                for e in crate::fxpresets::edits(a.track, instance, &BuiltinFx::new(*kind), p) {
+                    b.push("apply the sound", e);
+                }
+                b.diff.push(format!("insert {instance} sound {}", p.name));
+            }
         }
         FxChoice::Plugin { plugin_id } => {
+            if a.preset.is_some() {
+                return Err("preset applies to a built-in effect only".into());
+            }
             b.diff.push(format!(
                 "T{} + plugin {} at {index}",
                 a.track,
@@ -807,6 +829,7 @@ pub fn fx_add(project: &Project, a: &FxAddArgs) -> BuildResult {
             );
         }
     }
+    b.predicted = ids.predicted.clone();
     Ok(b)
 }
 
@@ -814,6 +837,8 @@ pub fn fx_add(project: &Project, a: &FxAddArgs) -> BuildResult {
 #[serde(deny_unknown_fields)]
 pub struct FxSetArgs {
     pub insert: InstanceId,
+    /// A named setting (see fxpresets); explicit params still win.
+    pub preset: Option<String>,
     pub params: Option<BTreeMap<String, f64>>,
     pub curve: Option<SaturatorCurve>,
     pub ping_pong: Option<bool>,
@@ -855,6 +880,19 @@ pub fn fx_set(project: &Project, a: &FxSetArgs) -> BuildResult {
     }
     match insert {
         Insert::Builtin { fx, .. } => {
+            if let Some(name) = &a.preset {
+                let p = crate::fxpresets::find(fx.kind(), name).ok_or_else(|| {
+                    format!(
+                        "{label}: no sound \"{}\"; this effect has: {}",
+                        name.chars().take(40).collect::<String>(),
+                        crate::fxpresets::names(fx.kind())
+                    )
+                })?;
+                for e in crate::fxpresets::edits(track, instance, fx, p) {
+                    b.push(format!("{label}: sound {}", p.name), e);
+                }
+                b.diff.push(format!("insert {instance} sound {}", p.name));
+            }
             for (name, value) in a.params.iter().flatten() {
                 let i = (0..fx.param_count())
                     .find(|i| fx.param_name(*i) == Some(name.as_str()))

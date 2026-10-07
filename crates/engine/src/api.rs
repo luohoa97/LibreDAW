@@ -184,6 +184,8 @@ pub struct Engine {
     pub controls: Arc<ControlTable>,
     pub params: Arc<ParamTable>,
     pub status: Arc<EngineStatus>,
+    /// Loudness of Main Output over the last 10 s.
+    pub loudness: Arc<crate::loudness::LoudnessRing>,
     ui: UiSide,
     rate: u32,
     stream: Option<cpal::Stream>,
@@ -359,6 +361,7 @@ impl Engine {
             controls: shared.controls,
             params: shared.params,
             status: shared.status,
+            loudness: shared.loudness,
             ui: UiSide {
                 state: ui.state,
                 commands: ui.commands,

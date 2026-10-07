@@ -122,6 +122,9 @@ Tools named `edit` take raw `protocol::edit::Edit` values (ticks, not bars).
 | Sidechain input | `fx_set {sidechain}` | |
 | Reorder effects | `fx_set {index}` | |
 | Remove effect | `fx_set {remove}` | |
+| Pick a ready-made setting for an effect (Drive: Warm, Crunch, Phonk 808, Phonk Cowbell, Hard Clip) | `fx_add {preset}`, `fx_set {preset}` | |
+| Duck to Kick (instrument menu, mixer strip) | `duck_to_kick {row or track, amount}` | |
+| Loudness on Main Output | `loudness {amount or preset}` | the window also shows the LUFS reading; `analyze` gives it for the whole song |
 | Bypass effect | none | model: inserts have no bypass flag |
 | Sends level, pre/post, remove | `send_set` | |
 | Change color | none | model: tracks have no color field |
