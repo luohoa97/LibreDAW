@@ -1587,7 +1587,7 @@ Flatpak with a full release.
 
 ### 19.3 Flatpak
 
-- App id `org.libredaw.LibreDAW` (to be confirmed by the owner; it must
+- App id `io.github.luohoa97.LibreDAW` (owner decision: the project's GitHub account; it must
   be a domain the project controls for Flathub), GNOME runtime matching
   libadwaita >= 1.5, Rust SDK extension, `--socket=pipewire` (fallback
   `--socket=pulseaudio` only if needed), `--device=dri`, Wayland and X11
@@ -1607,7 +1607,7 @@ Flatpak with a full release.
   disabled in the Flatpak build with a clear message, unless a Deno
   extension is added later.
 - Agents: `libredaw-mcp` ships inside the Flatpak and is launched by
-  clients as `flatpak run --command=libredaw-mcp org.libredaw.LibreDAW`;
+  clients as `flatpak run --command=libredaw-mcp io.github.luohoa97.LibreDAW`;
   `libredaw-mcp setup` writes that form when it runs inside the Flatpak.
   The control socket lives in the app's runtime dir.
 - Desktop integration: `.desktop` file, AppStream metainfo with

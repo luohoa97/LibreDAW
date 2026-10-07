@@ -40,7 +40,7 @@ What we borrow from GNOME apps with dense editing UIs (in structure, not in appe
 ### 2.1 Widget tree
 
 ```
-GtkApplication "org.libredaw.LibreDAW" (app id to be confirmed in ASSETS/packaging)
+GtkApplication "io.github.luohoa97.LibreDAW" (app id to be confirmed in ASSETS/packaging)
 AdwApplicationWindow  (default 1360x800, width-request 360, height-request 294)
   breakpoints: bp-regular, bp-compact, bp-narrow, bp-short   (section 2.4)
   content:
