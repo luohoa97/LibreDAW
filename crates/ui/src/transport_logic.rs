@@ -97,6 +97,40 @@ pub fn parse_tempo(text: &str, min: f64, max: f64) -> Option<f64> {
     (v.is_finite() && (min..=max).contains(&v)).then_some(v)
 }
 
+/// Keeps the Play button's state in step with the engine. The engine's flag
+/// lags a command by up to one audio block, so a press must not be undone by
+/// the stale flag: the engine wins when it changes by itself (end of song, a
+/// stop from an agent), or when it still disagrees after a short wait.
+#[derive(Debug, Default)]
+pub struct PlayingSync {
+    last: bool,
+    since: Option<std::time::Instant>,
+}
+
+impl PlayingSync {
+    /// How long a disagreement may last before the engine's state is taken.
+    pub const SETTLE: std::time::Duration = std::time::Duration::from_millis(400);
+
+    /// Returns the state the button should take, if it must change.
+    pub fn step(&mut self, shown: bool, engine: bool, now: std::time::Instant) -> Option<bool> {
+        if engine != self.last {
+            self.last = engine;
+            self.since = None;
+            return (shown != engine).then_some(engine);
+        }
+        if shown == engine {
+            self.since = None;
+            return None;
+        }
+        let since = *self.since.get_or_insert(now);
+        if now.duration_since(since) >= Self::SETTLE {
+            self.since = None;
+            return Some(engine);
+        }
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -175,5 +209,59 @@ mod tests {
         assert_eq!(parse_tempo("301", 20.0, 300.0), None);
         assert_eq!(parse_tempo("fast", 20.0, 300.0), None);
         assert_eq!(parse_tempo("NaN", 20.0, 300.0), None);
+    }
+}
+
+#[cfg(test)]
+mod playing_sync_tests {
+    use super::PlayingSync;
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn a_stale_engine_flag_does_not_undo_a_stop() {
+        let t = Instant::now();
+        let mut s = PlayingSync::default();
+        // Playing, confirmed by the engine.
+        assert_eq!(s.step(true, true, t), None);
+        // The user presses Stop; the engine flag is still true for a block.
+        assert_eq!(s.step(false, true, t + Duration::from_millis(10)), None);
+        assert_eq!(s.step(false, true, t + Duration::from_millis(20)), None);
+        // The engine catches up.
+        assert_eq!(s.step(false, false, t + Duration::from_millis(30)), None);
+    }
+
+    #[test]
+    fn the_engine_ending_the_song_by_itself_updates_the_button() {
+        let t = Instant::now();
+        let mut s = PlayingSync::default();
+        assert_eq!(s.step(true, true, t), None);
+        assert_eq!(
+            s.step(true, false, t + Duration::from_millis(10)),
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn a_lasting_disagreement_follows_the_engine() {
+        let t = Instant::now();
+        let mut s = PlayingSync::default();
+        // Play was pressed but the engine never started.
+        assert_eq!(s.step(true, false, t), None);
+        assert_eq!(
+            s.step(
+                true,
+                false,
+                t + PlayingSync::SETTLE - Duration::from_millis(1)
+            ),
+            None
+        );
+        assert_eq!(
+            s.step(
+                true,
+                false,
+                t + PlayingSync::SETTLE + Duration::from_millis(1)
+            ),
+            Some(false)
+        );
     }
 }

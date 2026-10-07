@@ -254,10 +254,10 @@ impl SoundPage {
         expert.set_child(Some(
             &adw::ButtonContent::builder()
                 .icon_name("window-new-symbolic")
-                .label("Expert Window")
+                .label("Advanced: Edit Sound…")
                 .build(),
         ));
-        expert.set_tooltip_text(Some("Open the plugin's own controls"));
+        expert.set_tooltip_text(Some("Opens the plugin's own window, for experts"));
         let no_window = gtk::Label::new(Some("This plugin has no window of its own."));
         no_window.add_css_class("dim-label");
         no_window.set_xalign(0.0);

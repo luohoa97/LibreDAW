@@ -1141,6 +1141,7 @@ fn install_tick(app: &Rc<App>) {
     let worker = Rc::new(AutosaveWorker::spawn());
     let debounce = Rc::new(RefCell::new(AutosaveDebounce::standard()));
     let seen_revision = Rc::new(Cell::new(app.session.borrow().document().revision));
+    let play_sync = RefCell::new(crate::transport_logic::PlayingSync::default());
     let a = app.clone();
     glib::timeout_add_local(Duration::from_millis(10), move || {
         let now = Instant::now();
@@ -1192,8 +1193,11 @@ fn install_tick(app: &Rc<App>) {
             .status
             .playing
             .load(std::sync::atomic::Ordering::Relaxed);
-        if a.session.borrow().link.is_live() && a.ui.borrow().playing != playing {
-            a.ui.borrow_mut().playing = playing;
+        let shown = a.ui.borrow().playing;
+        if a.session.borrow().link.is_live()
+            && let Some(now_playing) = play_sync.borrow_mut().step(shown, playing, now)
+        {
+            a.ui.borrow_mut().playing = now_playing;
             a.notify();
         }
         glib::ControlFlow::Continue

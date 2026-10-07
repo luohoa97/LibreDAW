@@ -379,6 +379,21 @@ pub struct PollResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn adding_an_instrument_never_opens_a_plugin_window() {
+        // Only the explicit buttons (inspector, mixer) open a plugin window.
+        for (name, src) in [
+            ("channels.rs", include_str!("channels.rs")),
+            ("session.rs", include_str!("session.rs")),
+            ("window.rs", include_str!("window.rs")),
+            ("control_bridge.rs", include_str!("control_bridge.rs")),
+            ("browser.rs", include_str!("browser.rs")),
+            ("dialogs.rs", include_str!("dialogs.rs")),
+        ] {
+            assert!(!src.contains("show_gui"), "{name} opens a plugin window");
+        }
+    }
     use protocol::engine::{ChannelSlot, TrackSlot};
 
     fn ch(i: u16) -> PluginSlot {
