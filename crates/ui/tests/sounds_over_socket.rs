@@ -384,3 +384,59 @@ fn the_real_fl_install_is_searchable_and_addable() {
     println!("{surge}");
     assert!(surge.contains("surge:"));
 }
+
+#[test]
+fn sounds_know_their_kit_and_kits_list_their_pieces() {
+    let rig = rig("kits");
+    let install = fixture(&rig.dir.join("fl"));
+    let loaded = fl::scan(&install, &rig.dir.join("cache"), true).expect("fixture scans");
+    fl::set_status(Status::Ready(Arc::new(loaded)));
+    let kits = talk(
+        &rig,
+        vec![search(
+            r#""tags":["source:FL Studio"],"role":"drums","limit":50"#,
+        )],
+    )
+    .remove(0);
+    let kit_id = id_with(&kits, "fl:kit:");
+    // The kit entry lists its pieces: role, sound id and name.
+    let got = talk(
+        &rig,
+        vec![search(&format!(r#""tags":["kit_id:{kit_id}"],"limit":1"#))],
+    )
+    .remove(0);
+    assert!(got.contains(&kit_id), "{got}");
+    for slot in [
+        "slot:kick\u{1f}fl:sound:",
+        "slot:snare\u{1f}fl:sound:",
+        "slot:hat\u{1f}fl:sound:",
+    ] {
+        // The wire escapes the separator as \u001f.
+        let wire = slot.replace('\u{1f}', "\\u001f");
+        assert!(got.contains(&wire), "{slot} in {got}");
+    }
+    // Every piece names its kit, and `kit:` filters by it.
+    let kick = talk(
+        &rig,
+        vec![search(
+            r#""tags":["kit:909","kick","source:FL Studio"],"limit":50"#,
+        )],
+    )
+    .remove(0);
+    assert!(kick.contains("909 Kick"), "{kick}");
+    assert!(
+        kick.contains(&format!("{kit_id}\\u001f")),
+        "kit on the sound: {kick}"
+    );
+    let none = talk(
+        &rig,
+        vec![search(
+            r#""tags":["kit:nonesuch","source:FL Studio"],"limit":50"#,
+        )],
+    )
+    .remove(0);
+    assert!(!none.contains("909 Kick"), "{none}");
+    // Built-in Oto Kit sounds are not offered.
+    let oto = talk(&rig, vec![search(r#""tags":["kick"],"limit":50"#)]).remove(0);
+    assert!(!oto.contains("\"oto:"), "{oto}");
+}

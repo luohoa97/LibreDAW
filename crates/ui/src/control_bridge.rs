@@ -735,6 +735,8 @@ pub const SOUND_BY_ID: &str = "@sound";
 /// `source:FL Studio` and `offset:40`; every other tag is a search word.
 /// A reply entry carries its kind first in `tags` and its source in `pack`;
 /// an entry whose id starts with `note:` is a message for the agent.
+/// A kit travels as `id\u{1f}name` in `kit`, and a kit entry lists its pieces
+/// as `slot:role\u{1f}id\u{1f}name` tags (the protocol has no fields for them yet).
 fn sound_search(
     app: &Rc<App>,
     role: Option<&str>,
@@ -753,6 +755,10 @@ fn sound_search(
     for t in tags {
         if let Some(s) = t.strip_prefix("source:") {
             q.source = s.into();
+        } else if let Some(k) = t.strip_prefix("kit_id:") {
+            q.kit_id = k.into();
+        } else if let Some(k) = t.strip_prefix("kit:") {
+            q.kit = k.into();
         } else if let Some(n) = t.strip_prefix("offset:") {
             q.offset = n.trim().parse().unwrap_or(0);
         } else {
@@ -763,26 +769,36 @@ fn sound_search(
     let fl = fl_state(app);
     let entries = catalogue(app, &fl);
     let (page, total) = cat::search(&entries, &q);
-    let mut sounds: Vec<protocol::control::SoundInfo> = page
-        .into_iter()
-        .map(|e| {
-            let mut tags = vec![e.kind.to_string()];
-            tags.extend(e.tags.iter().map(|t| agent_string(t)));
-            protocol::control::SoundInfo {
-                id: agent_string(&e.id),
-                name: agent_string(&e.name),
-                role: agent_string(&e.role),
-                genres: if e.family.is_empty() {
-                    Vec::new()
-                } else {
-                    vec![agent_string(&e.family)]
-                },
-                tags,
-                pack: e.source.to_string(),
-                kit: None,
-            }
-        })
-        .collect();
+    let mut sounds: Vec<protocol::control::SoundInfo> =
+        page.into_iter()
+            .map(|e| {
+                let mut tags = vec![e.kind.to_string()];
+                tags.extend(e.tags.iter().map(|t| agent_string(t)));
+                tags.extend(e.slots.iter().map(|(role, id, name)| {
+                    format!(
+                        "slot:{}\u{1f}{}\u{1f}{}",
+                        agent_string(role),
+                        agent_string(id),
+                        agent_string(name)
+                    )
+                }));
+                protocol::control::SoundInfo {
+                    id: agent_string(&e.id),
+                    name: agent_string(&e.name),
+                    role: agent_string(&e.role),
+                    genres: if e.family.is_empty() {
+                        Vec::new()
+                    } else {
+                        vec![agent_string(&e.family)]
+                    },
+                    tags,
+                    pack: e.source.to_string(),
+                    kit: e.kit.as_ref().map(|(id, name)| {
+                        format!("{}\u{1f}{}", agent_string(id), agent_string(name))
+                    }),
+                }
+            })
+            .collect();
     let asks_fl = q.source.trim().is_empty() || q.source.to_lowercase().contains("fl");
     if asks_fl && let Some(n) = cat::fl_note(&fl.status, fl.remembered) {
         sounds.push(note(n));

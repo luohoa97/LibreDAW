@@ -876,12 +876,42 @@ fn sounds_json(sounds: &[protocol::control::SoundInfo], offset: usize, limit: us
             .tags
             .split_first()
             .map_or(("", &[][..]), |(k, t)| (k.as_str(), t));
-        items.push(
-            json!({"id": s.id, "name": s.name, "role": s.role, "tags": tags,
-            "source": s.pack, "kind": kind, "family": s.genres.first()}),
-        );
+        let slots: Vec<Value> = tags
+            .iter()
+            .filter_map(|t| t.strip_prefix("slot:"))
+            .filter_map(|t| {
+                let mut p = t.splitn(3, '\u{1f}');
+                Some(json!({"role": p.next()?, "id": p.next()?, "name": p.next()?}))
+            })
+            .collect();
+        let tags: Vec<&String> = tags.iter().filter(|t| !t.starts_with("slot:")).collect();
+        let mut item = json!({"id": s.id, "name": s.name, "role": s.role, "tags": tags,
+            "source": s.pack, "kind": kind, "family": s.genres.first()});
+        if let Some((id, name)) = s.kit.as_deref().and_then(|k| k.split_once('\u{1f}')) {
+            item["kit"] = json!({"id": id, "name": name});
+        }
+        if !slots.is_empty() {
+            item["slots"] = json!(slots);
+        }
+        items.push(item);
     }
+    // Sounds of one kit, side by side, so a kick, snare and hat that go
+    // together can be picked from the same kit.
+    let mut kits: Vec<Value> = Vec::new();
+    for it in &items {
+        let Some(kit) = it.get("kit") else { continue };
+        let at = kits.iter().position(|k| k["kit"]["id"] == kit["id"]);
+        let one = json!({"id": it["id"], "name": it["name"], "role": it["role"]});
+        match at {
+            Some(i) => kits[i]["sounds"].as_array_mut().unwrap().push(one),
+            None => kits.push(json!({"kit": kit, "sounds": [one]})),
+        }
+    }
+    kits.retain(|k| k["sounds"].as_array().is_some_and(|s| s.len() > 1));
     let mut v = json!({"sounds": items});
+    if !kits.is_empty() {
+        v["kits"] = json!(kits);
+    }
     if !notes.is_empty() {
         v["notes"] = json!(notes);
     }
