@@ -1644,9 +1644,10 @@ Flatpak with a full release.
 
 ### Amendment 15 (2026-10-07, owner)
 
-User-visible "Pattern" is renamed "Loop" (views: Loops, Song, Mixer).
+User-visible "Pattern" is renamed "Beat" (views: Beats, Song, Mixer).
 Internal names (protocol, files, code) keep "pattern". The loop selector
 and its actions (new, duplicate, rename, delete) are one menu button.
+("Loop" was chosen first and replaced by "Beat" by the owner.)
 
 ### Amendment 14 (2026-10-07, owner)
 
