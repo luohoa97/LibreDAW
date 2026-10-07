@@ -13,6 +13,7 @@ pub mod loadproject;
 pub mod metronome;
 pub mod mixer;
 pub mod plugins;
+pub mod portal_rt;
 pub mod preview;
 pub mod recorder;
 pub mod render;

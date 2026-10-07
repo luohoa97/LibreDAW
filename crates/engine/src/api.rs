@@ -67,6 +67,8 @@ struct Flags {
     needs_restart: AtomicBool,
     /// Bit 63 set once probed; policy in bits 32..63, priority in the low 32.
     sched: AtomicU64,
+    /// Outcome of the real-time request (the portal inside a Flatpak).
+    rt_report: crate::portal_rt::Report,
 }
 
 /// Callback index at which the scheduling policy is read (cpal promotes the
@@ -187,6 +189,8 @@ pub struct Engine {
     stream: Option<cpal::Stream>,
     disposal: Option<Disposal>,
     flags: Arc<Flags>,
+    /// Keeps the portal helper thread alive for the life of the stream.
+    _promoter: Option<Arc<crate::portal_rt::Promoter>>,
 }
 
 fn host_id(h: Host) -> (HostId, &'static str) {
@@ -275,7 +279,14 @@ impl Engine {
         let flags = Arc::new(Flags {
             needs_restart: AtomicBool::new(false),
             sched: AtomicU64::new(0),
+            rt_report: crate::portal_rt::new_report(),
         });
+        // Inside a Flatpak the direct rtkit request fails; the portal
+        // promotes the callback thread instead (off the audio thread).
+        let promoter =
+            crate::portal_rt::Promoter::spawn(rate, cfg.buffer_frames, flags.rt_report.clone())
+                .map(Arc::new);
+        let cb_promoter = promoter.clone();
         let cb_flags = flags.clone();
         let cb_status = shared.status.clone();
         let err_flags = flags.clone();
@@ -303,6 +314,11 @@ impl Engine {
                         }
                     }
                     last = Some(now);
+                    if calls == 1
+                        && let Some(p) = &cb_promoter
+                    {
+                        p.request_from_callback();
+                    }
                     runtime.process_interleaved(data);
                     if let Some(p) = &cb_probe {
                         p.record(frames, now.elapsed().as_nanos() as u64);
@@ -353,6 +369,7 @@ impl Engine {
             stream: Some(stream),
             disposal: Some(disposal),
             flags,
+            _promoter: promoter,
         })
     }
 
@@ -382,6 +399,18 @@ impl Engine {
     pub fn callback_sched(&self) -> Option<(i32, i32)> {
         let v = self.flags.sched.load(Relaxed);
         (v >> 63 == 1).then_some((((v >> 32) & 0x7fff_ffff) as i32, v as u32 as i32))
+    }
+
+    /// How the real-time priority request went, for logs and the load
+    /// probe next to `callback_sched`: inside a Flatpak the portal's answer
+    /// (granted, or the reason it failed), otherwise a note that cpal's
+    /// direct rtkit request applies. "pending" until the first callback.
+    pub fn realtime_report(&self) -> String {
+        self.flags
+            .rt_report
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
     }
 
     /// Queues a compiled state. `Err` returns it when the state ring is

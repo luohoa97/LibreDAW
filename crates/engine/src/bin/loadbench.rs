@@ -153,6 +153,7 @@ fn live(a: &Args) -> Result<(), String> {
     let playing = e.status.playing.load(Relaxed);
     let tick = e.status.playhead_tick.load(Relaxed);
     let sched = e.callback_sched();
+    let rt_report = e.realtime_report();
     let restart = e.needs_restart();
     e.stop(); // joins the audio thread; the probe is quiet from here on
 
@@ -195,6 +196,7 @@ fn live(a: &Args) -> Result<(), String> {
         total_ns as f64 / 1e6
     );
     println!("thread:       {sched_text}");
+    println!("realtime:     {rt_report}");
     println!("transport:    playing={playing} playhead_tick={tick} needs_restart={restart}");
     println!(
         "RESULT mode=live host={} buffer_req={} buffer_cb_median={} rate={} seconds={} callbacks={} \

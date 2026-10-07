@@ -875,6 +875,8 @@ name = "libredaw-engine"
 version = "0.0.0"
 dependencies = [
  "cpal",
+ "dbus",
+ "libc",
  "libredaw-plugin-host",
  "libredaw-protocol",
  "rtrb",

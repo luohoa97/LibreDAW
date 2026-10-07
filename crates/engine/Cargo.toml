@@ -15,3 +15,7 @@ libredaw-plugin-host = { path = "../plugin-host" }
 cpal = { version = "0.18", default-features = false, features = ["jack", "pipewire", "realtime-dbus"] }
 # Wait-free SPSC rings for the state, command, event and retire rings (SPEC 4.2, 4.4).
 rtrb = "0.4"
+# The Flatpak realtime portal client (src/portal_rt.rs). Both crates are already in
+# the build through cpal's realtime-dbus (audio_thread_priority), same versions.
+dbus = "0.6.4"
+libc = "0.2"
