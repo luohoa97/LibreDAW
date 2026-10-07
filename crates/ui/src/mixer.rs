@@ -181,8 +181,9 @@ impl Mixer {
         let mut s = String::new();
         for t in &p.tracks {
             s.push_str(&format!("t{}:{}", t.id, t.name));
-            for r in t.inserts.iter().filter_map(crate::change::clap_of) {
-                s.push_str(&format!(",{}={}", r.instance, r.plugin_id));
+            // Every effect, built-in or plugin, changes the strip.
+            for i in &t.inserts {
+                s.push_str(&format!(",{}", i.instance()));
             }
             s.push(';');
         }
@@ -348,17 +349,49 @@ impl Mixer {
         fx_label.add_css_class("caption-heading");
         fx_label.set_xalign(0.0);
         inner.append(&fx_label);
-        for r in track.inserts.iter().filter_map(crate::change::clap_of) {
-            inner.append(&self.insert_row(id, r.instance, &r.plugin_id));
+        // Every effect on the track, built-in or plugin, in signal order.
+        for ins in &track.inserts {
+            let row = match ins {
+                protocol::model::Insert::Clap(r) => self.insert_row(id, r.instance, &r.plugin_id),
+                protocol::model::Insert::Builtin { instance, fx } => {
+                    self.builtin_row(id, *instance, fx.kind())
+                }
+            };
+            inner.append(&row);
         }
-        let add = gtk::Button::from_icon_name("list-add-symbolic");
+        // One "add effect" menu: the built-in effects, then a plugin.
+        let add_tip = "Add an effect that changes how this track sounds";
+        let add = gtk::MenuButton::new();
+        add.set_icon_name("list-add-symbolic");
         add.add_css_class("flat");
-        add.set_tooltip_text(Some("Add an effect that changes how this track sounds"));
-        add.update_property(&[gtk::accessible::Property::Label(&format!(
-            "Add effect to {name}"
-        ))]);
-        let m = self.clone();
-        add.connect_clicked(move |b| m.add_effect(b.upcast_ref(), id));
+        add.set_tooltip_text(Some(add_tip));
+        add.update_property(&[gtk::accessible::Property::Label(add_tip)]);
+        add.set_menu_model(Some(&menus::effects_menu()));
+        let fx = gio::SimpleActionGroup::new();
+        for n in menus::FX_ACTIONS {
+            let action = if *n == "add" {
+                gio::SimpleAction::new(n, Some(glib::VariantTy::STRING))
+            } else {
+                gio::SimpleAction::new(n, None)
+            };
+            let (m, b, n) = (self.clone(), add.clone(), *n);
+            action.connect_activate(move |_, v| match n {
+                "add" => {
+                    let want = v.and_then(|v| v.get::<String>());
+                    if let Some(kind) = menus::EFFECTS
+                        .iter()
+                        .find(|e| Some(e.1) == want.as_deref())
+                        .map(|e| e.0)
+                    {
+                        m.add_builtin(id, kind);
+                    }
+                }
+                "plugin" => m.add_effect(b.upcast_ref(), id),
+                _ => {}
+            });
+            fx.add_action(&action);
+        }
+        add.insert_action_group("fx", Some(&fx));
         inner.append(&add);
 
         // Pan, with its name.
@@ -472,7 +505,7 @@ impl Mixer {
         let meter = Meter::new();
         meter.set_label(&format!("Level of {name}"));
         meter.set_vexpand(true);
-        let peak = gtk::Label::new(Some("-inf"));
+        let peak = gtk::Label::new(Some("Silent"));
         peak.add_css_class("numeric");
         peak.add_css_class("caption");
         peak.add_css_class("dim-label");
@@ -658,6 +691,58 @@ impl Mixer {
         row.upcast()
     }
 
+    /// A built-in effect on the strip: its plain name (the explanation in
+    /// the tooltip) and a Remove button.
+    fn builtin_row(
+        self: &Rc<Mixer>,
+        track: TrackId,
+        inst: InstanceId,
+        kind: protocol::beats::BuiltinFxKind,
+    ) -> gtk::Widget {
+        let (name, what) = menus::effect_name(kind);
+        let row = gtk::Box::new(gtk::Orientation::Horizontal, 2);
+        let label = gtk::Label::new(Some(name));
+        label.set_xalign(0.0);
+        label.set_hexpand(true);
+        label.set_ellipsize(gtk::pango::EllipsizeMode::End);
+        label.set_margin_start(6);
+        label.set_tooltip_text(Some(what));
+        row.append(&label);
+        let del = gtk::Button::from_icon_name("window-close-symbolic");
+        del.add_css_class("flat");
+        del.add_css_class("circular");
+        let tip = format!("Remove {name}");
+        del.set_tooltip_text(Some(&tip));
+        del.update_property(&[gtk::accessible::Property::Label(&tip)]);
+        let m = self.clone();
+        del.connect_clicked(move |_| {
+            m.app.edit(vec![Edit::RemoveInsert {
+                track,
+                instance: inst,
+            }]);
+        });
+        row.append(&del);
+        row.upcast()
+    }
+
+    /// Adds a built-in effect at the end of the track's effects.
+    fn add_builtin(&self, track: TrackId, fx: protocol::beats::BuiltinFxKind) {
+        let n = self
+            .app
+            .session
+            .borrow()
+            .document()
+            .project
+            .track(track)
+            .map(|t| t.inserts.len())
+            .unwrap_or(0);
+        self.app.edit(vec![Edit::AddBuiltinInsert {
+            track,
+            index: n.min(255) as u8,
+            fx,
+        }]);
+    }
+
     fn show_gui(&self, inst: InstanceId, title: &str) {
         let r = self.app.session.borrow_mut().registry.show_gui(inst, title);
         if let Err(e) = r {
@@ -740,7 +825,10 @@ impl Mixer {
         for st in self.strips.borrow().iter() {
             let p = self.app.take_peaks(st.track, MeterUser::Mixer);
             st.meter.update([peak_to_db(p[0]), peak_to_db(p[1])]);
-            let text = db_text(st.meter.peak_db());
+            let text = match db_text(st.meter.peak_db()) {
+                t if t == "-inf" => "Silent".to_string(),
+                t => t,
+            };
             if st.peak.text() != text {
                 st.peak.set_text(&text);
             }

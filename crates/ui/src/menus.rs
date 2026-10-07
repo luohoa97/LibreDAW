@@ -172,6 +172,73 @@ pub fn sound_menu() -> gio::Menu {
     menu
 }
 
+/// Actions of a mixer track's "add effect" menu (`fx.*`).
+pub const FX_ACTIONS: &[&str] = &["add", "plugin"];
+
+/// The built-in effects, with the names and one-line explanations shown
+/// (SPEC 20.6), and the id the menu passes.
+pub const EFFECTS: &[(protocol::beats::BuiltinFxKind, &str, &str, &str)] = {
+    use protocol::beats::BuiltinFxKind as K;
+    &[
+        (
+            K::Eq,
+            "eq",
+            "EQ",
+            "Makes the low, middle or high sounds louder or softer",
+        ),
+        (
+            K::Compressor,
+            "compressor",
+            "Compressor",
+            "Evens out loud and quiet moments",
+        ),
+        (
+            K::Saturator,
+            "saturator",
+            "Warmth",
+            "Adds a little grit and warmth",
+        ),
+        (
+            K::Reverb,
+            "reverb",
+            "Reverb",
+            "Makes it sound like a room or a hall",
+        ),
+        (K::Delay, "delay", "Echo", "Repeats the sound, fading away"),
+        (
+            K::Limiter,
+            "limiter",
+            "Limiter",
+            "Stops the sound from getting too loud",
+        ),
+    ]
+};
+
+/// The name and explanation of a built-in effect.
+pub fn effect_name(kind: protocol::beats::BuiltinFxKind) -> (&'static str, &'static str) {
+    EFFECTS
+        .iter()
+        .find(|e| e.0 == kind)
+        .map(|e| (e.2, e.3))
+        .unwrap_or(("Effect", "A built-in effect"))
+}
+
+/// A mixer track's "add effect" menu: the built-in effects, then a plugin.
+pub fn effects_menu() -> gio::Menu {
+    let menu = gio::Menu::new();
+    let builtin = gio::Menu::new();
+    for (_, id, name, _) in EFFECTS {
+        let item = gio::MenuItem::new(Some(name), None);
+        item.set_action_and_target_value(Some("fx.add"), Some(&id.to_variant()));
+        builtin.append_item(&item);
+    }
+    menu.append_section(None, &builtin);
+    let plugin = gio::Menu::new();
+    plugin.append(Some("_Plugin Effect…"), Some("fx.plugin"));
+    menu.append_section(None, &plugin);
+    menu
+}
+
 /// The menu of a mixer track.
 pub fn strip_menu() -> gio::Menu {
     let menu = gio::Menu::new();
@@ -258,6 +325,7 @@ mod tests {
         walk(&strip_menu(), "strip", STRIP_ACTIONS);
         walk(&sound_menu(), "sound", SOUND_ACTIONS);
         walk(&clip_menu(), "clip", CLIP_ACTIONS);
+        walk(&effects_menu(), "fx", FX_ACTIONS);
         // The primary and Add Channel menus mix window and app actions.
         for menu in [main_menu(), add_channel_menu()] {
             for (action, _) in items_of(menu.upcast_ref()) {

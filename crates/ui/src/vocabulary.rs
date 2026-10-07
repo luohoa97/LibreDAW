@@ -182,6 +182,7 @@ mod tests {
             crate::menus::roll_menu(),
             crate::menus::strip_menu(),
             crate::menus::sound_menu(),
+            crate::menus::effects_menu(),
         ] {
             labels(m.upcast_ref(), &mut texts);
         }
@@ -190,7 +191,11 @@ mod tests {
             .filter(|t| !violations(t).is_empty())
             .map(|t| format!("{t}: {:?}", violations(t)))
             .collect();
-        assert!(bad.is_empty(), "plain language (SPEC 20.6):\n{}", bad.join("\n"));
+        assert!(
+            bad.is_empty(),
+            "plain language (SPEC 20.6):\n{}",
+            bad.join("\n")
+        );
     }
 
     /// Every visible string in the crate follows the 20.6 vocabulary.
