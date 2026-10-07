@@ -487,6 +487,10 @@ dependencies = [
 [[package]]
 name = "libredaw-script"
 version = "0.0.0"
+dependencies = [
+ "libredaw-protocol",
+ "serde_json",
+]
 
 [[package]]
 name = "libredaw-ui"
