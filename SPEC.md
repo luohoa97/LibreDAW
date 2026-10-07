@@ -1058,25 +1058,48 @@ with no other libraries; they are not needed for quality.
 
 
 
-### 15.11 History tree (versions)
+### 15.11 History tree (persisted, git-like)
 
-Undo (section 6) already stores immutable project snapshots with shared
-structure, so a tree costs little extra memory.
-- Undo history is a tree, not a stack: making an edit after undoing starts
-  a new branch instead of discarding the redo states.
-- Beginners see normal Undo and Redo plus a "History" panel: a list of
-  named versions ("Version 3: darker 808") and, on demand, the branches.
-  Clicking a version restores it as a new edit (undoable).
-- "Save version" names the current state. Named versions persist in the
-  bundle as `versions/<n>-<slug>.toml`, full project files in the same
-  canonical text format (7.2), so they diff in git. Unnamed history is
-  in-memory only and dropped on close, within the section 6 memory limit
-  (named versions do not count against it).
-- Agents use the same tree through MCP: `version_save`, `version_list`,
-  `version_restore`, `history_tree`. An agent can try several variations on
-  branches and the user picks one.
-- Not a full git: no merge between branches (merging music edits is not
-  well defined), no remote sync.
+Undo (section 6) already stores immutable snapshots with shared structure,
+so each edit costs only the nodes it changed. The whole tree is persisted
+in the project, content-addressed like git:
+
+- Objects: each node of the project tree (project root, pattern, channel,
+  mixer, playlist) is written in the canonical text form (7.2) to
+  `Name.ldaw/history/objects/<hash>.toml`, where `<hash>` is the hash of
+  that text. Unchanged nodes are shared between commits by hash, on disk as
+  in memory. Plugin state blobs and samples are already immutable files and
+  are referenced by name.
+- Commits: `history/commits/<hash>.toml` with parent commit, root object
+  hash, time, author (`user`, `script`, or `agent:<name>`), and a short
+  description generated from the edit ("move 4 notes in Pattern 2").
+  Every undo group (gesture, script batch, MCP request) is one commit.
+  Undo, redo, and branching move a `HEAD` pointer; nothing is discarded.
+- Named versions: `history/refs/<slug>` points at a commit
+  ("darker-808"). Beginners see Undo/Redo and a History panel of named
+  versions; the full tree is one click away.
+- Writing: commits are written by the save worker thread, append-only,
+  batched (at most every 2 seconds and on save or close), with the same
+  write-temp, fsync, rename procedure as 7.4. A crash loses at most the
+  last 2 seconds of history, never the saved project.
+- Memory: only recent snapshots stay in RAM (the section 6 limit now bounds
+  the in-memory cache, not the history). Older states load from disk on
+  demand.
+- Garbage collection: 7.4 step 4 must keep every blob and sample that any
+  commit references, not only the current `project.toml`. History is only
+  pruned by an explicit "Compact history" command, which keeps named
+  versions and a chosen time window.
+- Git: the history directory is plain text plus immutable binaries. Users
+  may commit it or add it to `.gitignore`; "Export project for sharing"
+  leaves it out by default.
+- Hash: needs one hash crate (`blake3`, CC0-1.0 OR Apache-2.0, to be
+  confirmed by `cargo deny`). Not cryptographic security, only identity.
+- Agents use the tree through MCP: `version_save`, `version_list`,
+  `version_restore`, `history_tree`, `history_diff`. An agent can try
+  several variations on branches and the user picks one.
+- No merge between branches (merging music edits is not well defined) and
+  no remote sync.
+
 ## 16. Agent control (LibreDAW MCP)
 
 Status: approved scope (Amendment 6), not yet adversarially reviewed.
@@ -1173,6 +1196,12 @@ plugins, edit everything a user can edit, and make beats.
 ---
 
 ## Changelog
+
+### Amendment 8 (2026-10-07, owner)
+
+The whole history tree is persisted in the project, content-addressed like
+git (15.11). Blob GC in 7.4 must keep anything a commit references. The
+section 6 memory limit now bounds only the in-memory cache.
 
 ### Amendment 7 (2026-10-07, owner)
 
