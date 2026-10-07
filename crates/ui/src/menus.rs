@@ -166,7 +166,7 @@ pub fn sound_menu() -> gio::Menu {
     let menu = gio::Menu::new();
     menu.append(Some("_Add to Project"), Some("sound.add"));
     menu.append(
-        Some("_Replace the Selected Channel's Sound"),
+        Some("_Replace the Selected Instrument's Sound"),
         Some("sound.replace"),
     );
     menu

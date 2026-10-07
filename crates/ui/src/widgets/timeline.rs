@@ -1044,12 +1044,15 @@ impl Timeline {
                     } else {
                         colors.get(Role::Accent)
                     };
-                    s.push_rounded_clip(&gsk::RoundedRect::from_rect(
-                        draw::rect(x0 - 1.0, cy - 2.0, cw + 4.0, chh + 4.0),
-                        8.0,
-                    ));
-                    draw::outline(s, &ring, x0 - 1.0, cy - 2.0, cw + 4.0, chh + 4.0, 2.0);
-                    s.pop();
+                    // A rounded ring just outside the clip.
+                    s.append_border(
+                        &gsk::RoundedRect::from_rect(
+                            draw::rect(x0 - 1.0, cy - 2.0, cw + 4.0, chh + 4.0),
+                            8.0,
+                        ),
+                        &[2.0; 4],
+                        &[ring; 4],
+                    );
                 }
             }
         }

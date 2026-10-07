@@ -203,12 +203,12 @@ pub fn snap_round(tick: f64, unit: u32) -> i64 {
 /// Snap choices of the roll: label and ticks. `None` ticks means the
 /// pattern's step length.
 pub const SNAPS: [(&str, Option<u32>); 7] = [
-    ("Step", None),
-    ("1/4", Some(PPQ)),
-    ("1/8", Some(PPQ / 2)),
-    ("1/16", Some(PPQ / 4)),
-    ("1/32", Some(PPQ / 8)),
-    ("1/3 beat", Some(PPQ / 3)),
+    ("Grid Square", None),
+    ("Beat", Some(PPQ)),
+    ("Half Beat", Some(PPQ / 2)),
+    ("Quarter Beat", Some(PPQ / 4)),
+    ("Eighth Beat", Some(PPQ / 8)),
+    ("Third of a Beat", Some(PPQ / 3)),
     ("Off", Some(1)),
 ];
 

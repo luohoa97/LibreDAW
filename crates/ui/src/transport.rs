@@ -126,6 +126,11 @@ impl Transport {
         let tempo_group = gtk::Box::new(gtk::Orientation::Horizontal, 6);
         tempo_group.append(&tempo_label);
         tempo_group.append(&tempo);
+        // The unit right after the value reads as "120 BPM" (SPEC 20.6).
+        let bpm = gtk::Label::new(Some("BPM"));
+        bpm.add_css_class("dim-label");
+        bpm.set_tooltip_text(Some("Beats per minute"));
+        tempo_group.append(&bpm);
 
         // Narrow: the tempo is one button that opens the settings popover.
         let tempo_btn = gtk::MenuButton::new();

@@ -147,6 +147,52 @@ mod tests {
         assert!(!bare_bpm("120 BPM"));
     }
 
+    /// Labels that live in tables and menus, not in widget calls.
+    #[test]
+    fn tables_and_menus_use_plain_words() {
+        use gtk::gio;
+        use gtk::prelude::*;
+        let mut texts: Vec<String> = Vec::new();
+        for (l, _) in crate::view_math::SNAPS {
+            texts.push(l.to_string());
+        }
+        for l in crate::lane_logic::Lane::ALL {
+            texts.push(l.label().to_string());
+            texts.push(l.tooltip().to_string());
+        }
+        fn labels(menu: &gio::MenuModel, out: &mut Vec<String>) {
+            for i in 0..menu.n_items() {
+                if let Some(l) = menu
+                    .item_attribute_value(i, "label", None)
+                    .and_then(|v| v.get::<String>())
+                {
+                    out.push(l.replace('_', ""));
+                }
+                for link in ["section", "submenu"] {
+                    if let Some(sub) = menu.item_link(i, link) {
+                        labels(&sub, out);
+                    }
+                }
+            }
+        }
+        for m in [
+            crate::menus::main_menu(),
+            crate::menus::channel_menu(),
+            crate::menus::clip_menu(),
+            crate::menus::roll_menu(),
+            crate::menus::strip_menu(),
+            crate::menus::sound_menu(),
+        ] {
+            labels(m.upcast_ref(), &mut texts);
+        }
+        let bad: Vec<String> = texts
+            .iter()
+            .filter(|t| !violations(t).is_empty())
+            .map(|t| format!("{t}: {:?}", violations(t)))
+            .collect();
+        assert!(bad.is_empty(), "plain language (SPEC 20.6):\n{}", bad.join("\n"));
+    }
+
     /// Every visible string in the crate follows the 20.6 vocabulary.
     #[test]
     fn no_visible_string_uses_daw_jargon() {
@@ -183,7 +229,8 @@ mod tests {
                     for (bad, good) in violations(&lit) {
                         found.push(format!("{file}:{}: \"{lit}\": \"{bad}\" -> {good}", i + 1));
                     }
-                    if bare_bpm(&lit) {
+                    // The tempo field shows "Tempo [120] BPM": there the unit is fine.
+                    if bare_bpm(&lit) && !file.ends_with("transport.rs") {
                         found.push(format!("{file}:{}: \"BPM\" alone -> Tempo", i + 1));
                     }
                 }
