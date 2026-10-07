@@ -62,6 +62,26 @@ pub const MAX_EDITS_PER_REQUEST: usize = 10_000;
 pub const MAX_AGENT_STRING_CHARS: usize = 64;
 
 /// Project file format version (7.3). Bump on any schema change.
-pub const FORMAT_VERSION: u32 = 1;
+pub const FORMAT_VERSION: u32 = 2;
 
 const _: () = assert!(RETIRE_RING_CAP > STATE_RING_CAP);
+
+// Milestone B limits (15.1 to 15.6, 17.2).
+
+/// Continuous parameters per built-in effect insert in the `FxParamTable`.
+pub const FX_PARAMS_PER_INSERT: usize = 16;
+/// Sends per mixer track.
+pub const MAX_SENDS: usize = 4;
+/// Choke groups are 1 to `MAX_CHOKE_GROUP`; 0 means none.
+pub const MAX_CHOKE_GROUP: u8 = 16;
+/// Swing in 1/1000 of a step; 750 delays every second step by 3/4 step.
+pub const MAX_SWING: u16 = 750;
+/// Step pitch lane range in semitones.
+pub const MAX_STEP_OFFSET: i8 = 24;
+/// Allowed ratchet counts (notes per step).
+pub const RATCHETS: [u8; 6] = [1, 2, 3, 4, 6, 8];
+/// Samples registered in a project.
+pub const MAX_SAMPLES: usize = 4096;
+/// Playlist tracks and clips.
+pub const MAX_PLAYLIST_TRACKS: usize = 128;
+pub const MAX_CLIPS: usize = 20_000;
