@@ -241,3 +241,27 @@ fn sequencer_paths_make_no_allocations() {
     }
     assert_eq!(rt_events(), before, "audio thread allocated or freed");
 }
+
+#[test]
+fn voice_stealing_under_a_dense_chord_makes_no_allocations() {
+    // 24 simultaneous keys on a 16-voice synth, repeated every beat
+    let notes: Vec<N> = (0..24)
+        .flat_map(|k| (0..4).map(move |s| (k * 4 + s + 1, s * 960, 900, 40 + k as u8, 100)))
+        .collect();
+    let pr = one_synth(120.0, notes, 16);
+    let mut r = rig(&pr, 48000.0, true);
+    let mut l = vec![0.0f32; 256];
+    let mut rr = vec![0.0f32; 256];
+    let before = rt_events();
+    let mut loud = 0.0f32;
+    for _ in 0..400 {
+        let g = RtGuard::enter_counting();
+        r.rt.process_planar(&mut l, &mut rr);
+        drop(g);
+        loud = loud.max(peak(&l));
+        assert!(l.iter().all(|x| x.is_finite()));
+        assert!(r.rt.active_voices(ChannelSlot(0)) <= 16);
+    }
+    assert_eq!(rt_events(), before);
+    assert!(loud > 0.05);
+}
