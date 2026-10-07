@@ -234,6 +234,8 @@ Accessible: the flow box is a list; each card has the label "Trap template, 140 
 
 ### 3.2 Pattern view: overview
 
+**Amendment (owner, 2026-10-07): replaces the vertical split below.** The Pattern page is an `AdwNavigationView`: the root page "Steps" (pattern toolbar plus channel list with steps), and a pushed `AdwNavigationPage` per channel titled with the channel name that shows the piano roll, with the standard back button, swipe, Esc, and Alt+Left. "Edit Notes", double-click on a channel name, and Return on a channel push it. There is no `GtkPaned`, no `PatternFocus` button, and no hand-drawn separator anywhere in the app: structure comes from `AdwToolbarView` top bars, the `.view` background, spacing, and stock selection styles, as in GNOME core apps. The text below about the split is kept for history only.
+
 `AdwViewStack` page "pattern". Content is a `GtkPaned` (vertical, `wide-handle=true`, `shrink-start-child=false`, `shrink-end-child=false`, `resize-start-child=true`, `resize-end-child=true`, `position-set` stored in the view file):
 
 ```
