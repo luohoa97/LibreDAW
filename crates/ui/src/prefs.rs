@@ -224,6 +224,13 @@ fn agents_page(app: &Rc<App>) -> adw::PreferencesPage {
     control.add(&connected);
     page.add(&control);
 
+    page.add(&connect_group(app));
+    page
+}
+
+/// The copy-and-paste setup line of each AI program (Preferences and the
+/// Agent panel).
+pub fn connect_group(app: &Rc<App>) -> adw::PreferencesGroup {
     let setup = adw::PreferencesGroup::new();
     setup.set_title("Connect an Agent");
     setup.set_description(Some(
@@ -251,6 +258,5 @@ fn agents_page(app: &Rc<App>) -> adw::PreferencesPage {
         row.add_suffix(&copy);
         setup.add(&row);
     }
-    page.add(&setup);
-    page
+    setup
 }

@@ -122,6 +122,11 @@ impl AgentPanel {
         self.page.add(&session);
         self.groups.borrow_mut().push(session);
 
+        // The commands to paste into Claude Code, Codex and the others.
+        let connect = crate::prefs::connect_group(&self.app);
+        self.page.add(&connect);
+        self.groups.borrow_mut().push(connect);
+
         if !ui.pending.is_empty() {
             let waiting = adw::PreferencesGroup::new();
             waiting.set_title("Waiting for You");
