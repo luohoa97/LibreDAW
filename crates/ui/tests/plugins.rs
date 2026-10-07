@@ -219,6 +219,7 @@ fn channel_instrument_gets_an_instrument_slot_and_save_captures_state() {
                 name: "Sine".into(),
                 instrument: protocol::edit::NewInstrument::Clap {
                     plugin_id: "test.sine".into(),
+                    preset: None,
                 },
                 root_key: 60,
                 track: TrackId::MASTER,

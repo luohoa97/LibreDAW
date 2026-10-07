@@ -46,6 +46,7 @@ fn doc_with_plugins(gen_a: u32, gen_b: u32, fill: u8) -> (Document, InstanceId, 
                 name: "Surge".into(),
                 instrument: NewInstrument::Clap {
                     plugin_id: "a.b".into(),
+                    preset: None,
                 },
                 root_key: 60,
                 track: TrackId::MASTER,

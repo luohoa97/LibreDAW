@@ -179,7 +179,7 @@ pub fn plugins_in(edits: &[Edit]) -> Vec<String> {
     for e in edits {
         match e {
             Edit::AddChannel {
-                instrument: NewInstrument::Clap { plugin_id },
+                instrument: NewInstrument::Clap { plugin_id, .. },
                 ..
             }
             | Edit::AddInsert { plugin_id, .. } => {
@@ -1205,6 +1205,7 @@ mod tests {
                 name: "x".into(),
                 instrument: NewInstrument::Clap {
                     plugin_id: "c.d".into(),
+                    preset: None,
                 },
                 root_key: 60,
                 track: TrackId::MASTER,

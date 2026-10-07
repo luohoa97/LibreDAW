@@ -44,6 +44,7 @@ fn clap_doc() -> Document {
             name: "Surge".into(),
             instrument: NewInstrument::Clap {
                 plugin_id: "a.b".into(),
+                preset: None,
             },
             root_key: 60,
             track: TrackId::MASTER,

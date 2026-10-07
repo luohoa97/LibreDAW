@@ -240,6 +240,7 @@ fn plugin_param_edits_replay_as_events_on_undo_but_are_not_echoed_from_plugins()
             name: "p".into(),
             instrument: NewInstrument::Clap {
                 plugin_id: "not.installed".into(),
+                preset: None,
             },
             root_key: 60,
             track: TrackId::MASTER,
@@ -292,6 +293,7 @@ fn plugin_param_inside_a_plugin_gesture_is_one_undo_step() {
             name: "p".into(),
             instrument: NewInstrument::Clap {
                 plugin_id: "not.installed".into(),
+                preset: None,
             },
             root_key: 60,
             track: TrackId::MASTER,
@@ -324,6 +326,7 @@ fn plugin_param_outside_a_gesture_is_not_an_undo_step_but_marks_dirty() {
             name: "p".into(),
             instrument: NewInstrument::Clap {
                 plugin_id: "not.installed".into(),
+                preset: None,
             },
             root_key: 60,
             track: TrackId::MASTER,

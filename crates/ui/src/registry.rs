@@ -510,6 +510,7 @@ mod tests {
                 name: "p".into(),
                 instrument: NewInstrument::Clap {
                     plugin_id: "not.installed".into(),
+                    preset: None,
                 },
                 root_key: 60,
                 track: TrackId::MASTER,

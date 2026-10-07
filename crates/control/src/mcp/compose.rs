@@ -266,7 +266,10 @@ fn new_instrument(
                 .clone()
                 .ok_or("kind \"plugin\" needs `plugin_id` (from the plugins tool)")?;
             (
-                NewInstrument::Clap { plugin_id },
+                NewInstrument::Clap {
+                    plugin_id,
+                    preset: None,
+                },
                 a.root_key.unwrap_or(60),
                 Some("instance"),
             )

@@ -233,6 +233,7 @@ fn add_clap_channel_creates_channel_then_instance_id() {
             name: "Surge".into(),
             instrument: NewInstrument::Clap {
                 plugin_id: "org.surge-synth-team.surge-xt".into(),
+                preset: None,
             },
             root_key: 60,
             track: TrackId::MASTER,
@@ -370,6 +371,7 @@ fn synth_edits_reject_clap_channels() {
             name: "p".into(),
             instrument: NewInstrument::Clap {
                 plugin_id: "a.b".into(),
+                preset: None,
             },
             root_key: 60,
             track: TrackId::MASTER,
@@ -1139,6 +1141,7 @@ fn plugin_params_and_state() {
             name: "p".into(),
             instrument: NewInstrument::Clap {
                 plugin_id: "a.b".into(),
+                preset: None,
             },
             root_key: 60,
             track: TrackId::MASTER,
@@ -1360,6 +1363,7 @@ pub(crate) fn random_edit(r: &mut Rng, d: &Document) -> Edit {
             } else {
                 NewInstrument::Clap {
                     plugin_id: format!("p.{}", r.below(5)),
+                    preset: None,
                 }
             },
             root_key: if r.chance(95) {

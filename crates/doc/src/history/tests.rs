@@ -38,6 +38,7 @@ fn add_clap() -> Edit {
         name: "p".into(),
         instrument: NewInstrument::Clap {
             plugin_id: "a.b".into(),
+            preset: None,
         },
         root_key: 60,
         track: TrackId::MASTER,

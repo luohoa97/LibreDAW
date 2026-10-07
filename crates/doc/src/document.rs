@@ -410,7 +410,7 @@ fn apply_one(w: &mut Work, e: &Edit) -> Result<(), EditError> {
             let id = ChannelId(w.alloc()?);
             let instrument = match instrument {
                 NewInstrument::Synth { params } => Instrument::Synth(*params),
-                NewInstrument::Clap { plugin_id } => Instrument::Clap(new_clap(w, plugin_id)?),
+                NewInstrument::Clap { plugin_id, .. } => Instrument::Clap(new_clap(w, plugin_id)?),
                 NewInstrument::Sampler { sample, mode } => Instrument::Sampler(Sampler {
                     sample: sample.clone(),
                     mode: *mode,

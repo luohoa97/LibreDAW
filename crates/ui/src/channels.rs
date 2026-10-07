@@ -90,6 +90,7 @@ impl NewChannel {
                 unique_name(name, taken),
                 NewInstrument::Clap {
                     plugin_id: id.clone(),
+                    preset: None,
                 },
                 60,
             ),
