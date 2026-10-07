@@ -132,6 +132,8 @@ enum Entry {
         kit: Kit,
         rows: Vec<adw::ActionRow>,
     },
+    /// Your FL Studio sounds (fl_browser).
+    Fl(Rc<crate::fl_browser::FlSection>),
 }
 
 type Entries = Rc<RefCell<Vec<Entry>>>;
@@ -223,6 +225,9 @@ pub fn build(app: &Rc<App>) -> gtk::Widget {
                         row.set_visible(ok);
                         shown += ok as usize;
                     }
+                    Entry::Fl(sec) => {
+                        shown += sec.update(&s.search, s.role);
+                    }
                     Entry::Kit {
                         expander,
                         kit,
@@ -258,6 +263,8 @@ pub fn build(app: &Rc<App>) -> gtk::Widget {
             if !sound_picker::installed(&app) {
                 list.append(&install_row());
             }
+            let fl_sec = crate::fl_browser::section(&app);
+            list.append(fl_sec.offer_row());
             for (i, p) in drum_presets().iter().enumerate() {
                 let row = preset_row(&app, p);
                 list.append(&row);
@@ -278,12 +285,15 @@ pub fn build(app: &Rc<App>) -> gtk::Widget {
                     rows,
                 });
             }
+            list.append(fl_sec.list_row());
+            es.push(Entry::Fl(fl_sec));
             // Advanced: any other instrument on this computer.
             list.append(&more_row());
             *entries.borrow_mut() = es;
             apply();
         }
     });
+    crate::fl_browser::set_listener(rebuild.clone());
     rebuild();
     sound_picker::set_refresh(rebuild.clone());
 

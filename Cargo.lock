@@ -966,6 +966,7 @@ dependencies = [
  "libredaw-control",
  "libredaw-doc",
  "libredaw-engine",
+ "libredaw-library",
  "libredaw-plugin-host",
  "libredaw-protocol",
 ]
