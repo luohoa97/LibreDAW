@@ -255,13 +255,13 @@ pub fn build(app: &Rc<App>) -> gtk::Widget {
                 list.remove(&c);
             }
             let mut es = Vec::new();
+            if !sound_picker::installed(&app) {
+                list.append(&install_row());
+            }
             for (i, p) in drum_presets().iter().enumerate() {
                 let row = preset_row(&app, p);
                 list.append(&row);
                 es.push(Entry::Preset { row, index: i });
-            }
-            if !sound_picker::installed(&app) {
-                list.append(&install_row());
             }
             let have = sound_picker::installed(&app);
             for (i, s) in sounds::sounds().iter().enumerate() {
@@ -430,7 +430,7 @@ fn more_row() -> adw::ActionRow {
 fn preset_row(app: &Rc<App>, p: &Preset) -> adw::ActionRow {
     let row = adw::ActionRow::new();
     row.set_title(p.name);
-    row.set_subtitle(&format!("{} · Oto", role_label(p.role)));
+    row.set_subtitle(&format!("{} · Oto Kit", role_label(p.role)));
     row.set_activatable(true);
     row.set_tooltip_text(Some("Add to Project"));
     let add_btn = gtk::Button::from_icon_name("list-add-symbolic");
