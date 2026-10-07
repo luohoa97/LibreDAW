@@ -1084,6 +1084,7 @@ dependencies = [
  "libredaw-plugin-host",
  "libredaw-protocol",
  "libredaw-script",
+ "libredaw-transcribe",
  "serde",
  "serde_json",
 ]
