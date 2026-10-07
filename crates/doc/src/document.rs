@@ -949,6 +949,8 @@ fn set_step_ticks(w: &mut Work, pattern: PatternId, new: u32) -> Result<(), Edit
 #[cfg(test)]
 mod beats_tests;
 #[cfg(test)]
+mod clips_props;
+#[cfg(test)]
 mod clips_tests;
 #[cfg(test)]
 pub(crate) mod tests;

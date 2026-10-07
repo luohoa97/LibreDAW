@@ -8,3 +8,4 @@ pub mod persist;
 pub mod presets;
 pub mod samples;
 pub mod sha256;
+pub mod starter;
