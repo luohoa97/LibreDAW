@@ -21,12 +21,12 @@ Tools named `edit` take raw `protocol::edit::Edit` values (ticks, not bars).
 
 | User action | MCP tool | Gap |
 |---|---|---|
-| Start a beat from a template card (Phonk, Trap, ...) or Empty | `project_new {template}` | |
+| Start a beat from a template card (Phonk, Trap, ...) or Empty | `project_new {template}` | not done yet: the `name` argument of `ProjectNew` is sent as `None` |
 | Open a recent project / Open Project... | `project_list`, `project_open {path}` | the file chooser is by design: agents open paths inside the projects folder only (17.1) |
 | Save (Ctrl+S) | `project_save` | |
 | Save As... | none | by design: a path outside the projects folder is a PRIVILEGED write; not in the protocol |
 | Unsaved Work: Open or Discard a recovery bundle | none | by design: Home page recovery is the user's decision |
-| Close project, return to Home | none | by design (navigation) |
+| Close project, return to Home | none | not done yet: `ProjectClose` exists in protocol (f5e9677), the `project_close` tool (a global action, 18.6) is not wired |
 | Project Properties: tempo, time signature | `song_set {tempo, beats_per_bar}` | |
 | Project Properties: name | none | model: no project name edit (the name is the bundle name) |
 | Project Properties: key | none | model: no project key yet (15.10.5) |
@@ -187,3 +187,9 @@ Tools named `edit` take raw `protocol::edit::Edit` values (ticks, not bars).
 |---|---|---|
 | Scan, list plugins | `plugins {scan}` | |
 | Load a plugin instrument or effect | `instruments_add {kind: "plugin"}`, `fx_add {fx: {plugin_id}}` | first load needs approval (by design) |
+
+## Voice (SPEC 21.5, later milestone)
+
+| User action | MCP tool | Gap |
+|---|---|---|
+| Record, hum to notes, transcribe, takes, lyrics, audio import | `record_prepare`, `hum_prepare`, `transcribe`, `takes`, `lyrics_*`, `audio_import` (planned) | not built: Voice milestone |
