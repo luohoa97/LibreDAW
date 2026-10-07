@@ -8,7 +8,7 @@ use control::shapes::{self, Preset};
 use protocol::consts::PPQ;
 use protocol::edit::Edit;
 use protocol::ids::{ChannelId, TrackId};
-use protocol::model::{Curve, Insert, Project, Shape, ShapePoint, ShapeTarget};
+use protocol::model::{Curve, Insert, Instrument, Project, Shape, ShapePoint, ShapeTarget};
 
 use crate::timeline_logic::Row;
 
@@ -119,9 +119,13 @@ pub fn choices(p: &Project, ch: ChannelId) -> Vec<(String, ShapeTarget)> {
     let mut all = vec![
         ShapeTarget::Volume { track: c.track },
         ShapeTarget::Pan { track: c.track },
-        ShapeTarget::Pitch { instrument: ch },
-        ShapeTarget::Filter { instrument: ch },
     ];
+    // The engine bends the pitch of its own sounds, not of plugins or
+    // recorded audio, so those rows are not offered Pitch.
+    if !matches!(c.instrument, Instrument::Clap(_) | Instrument::Audio) {
+        all.push(ShapeTarget::Pitch { instrument: ch });
+    }
+    all.push(ShapeTarget::Filter { instrument: ch });
     if let Some(t) = p.track(c.track) {
         for i in &t.inserts {
             if let Insert::Builtin { instance, fx, .. } = i {
@@ -414,7 +418,11 @@ mod tests {
             p.channels.push(std::sync::Arc::new(Channel {
                 id: ChannelId(id),
                 name: format!("c{id}"),
-                instrument: Instrument::Audio,
+                instrument: if id == 1 {
+                    Instrument::Synth(protocol::model::SynthParams::default())
+                } else {
+                    Instrument::Audio
+                },
                 root_key: 60,
                 track,
                 mix: Mix::default(),
@@ -477,8 +485,10 @@ mod tests {
         p.shapes
             .push(shape(10, ShapeTarget::Volume { track: TrackId(1) }));
         assert_eq!(choices(&p, ChannelId(1))[0].0, "Left/Right");
-        // A row on the main output has no effects.
-        assert_eq!(choices(&p, ChannelId(2)).len(), 4);
+        // An audio row on the main output has no effects and no Pitch.
+        let audio = choices(&p, ChannelId(2));
+        assert_eq!(audio.len(), 3);
+        assert!(audio.iter().all(|(n, _)| n != "Pitch"));
     }
 
     #[test]
