@@ -13,6 +13,7 @@ pub mod analysis;
 #[cfg(test)]
 mod analysis_tests;
 mod client;
+pub mod fake_ui;
 mod socket;
 mod state;
 

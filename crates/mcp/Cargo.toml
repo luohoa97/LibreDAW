@@ -22,3 +22,7 @@ libredaw-script = { path = "../script" }
 serde_json = { version = "1", features = ["preserve_order"] }
 # Derive typed tool arguments so a bad argument gets a clear error (SPEC 16.3).
 serde = { version = "1", features = ["derive"] }
+
+[dev-dependencies]
+# Real control server and fake UI loop for the end-to-end tests (SPEC 16.2).
+libredaw-control = { path = "../control" }
