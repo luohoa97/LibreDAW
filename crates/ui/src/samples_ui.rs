@@ -340,6 +340,17 @@ pub fn install_drop_target(widget: &impl IsA<gtk::Widget>, app: &Rc<App>) {
 }
 
 /// Where the folders the user added to the sound browser are listed.
+/// Every kit LibreDAW can use: installed packs, then the user's folders.
+pub fn library(app: &App) -> Vec<Kit> {
+    let mut kits = soundlib::discover(&soundlib::default_roots());
+    for dir in load_folders(app) {
+        if let Some(k) = soundlib::scan_folder(&dir) {
+            kits.push(k);
+        }
+    }
+    kits
+}
+
 pub fn folders_file(app: &App) -> PathBuf {
     app.dirs.config.join("libredaw").join("sound-folders.toml")
 }

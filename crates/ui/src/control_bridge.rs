@@ -21,8 +21,9 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use control::{ClientInfo, ControlConfig, ControlServer, Incoming, Ticket, UiEvent};
 use protocol::control::{
-    Analysis, BufferSize, ControlError, JobState, Outcome, PluginInfo, ProjectInfo, ReplyBody,
-    Request, RequestBody, Setting, Settings, Theme, Transport, WavFormat, agent_string,
+    Analysis, BufferSize, ControlError, Focus, JobState, MAX_ACTIVITY_CHARS, Outcome, PluginInfo,
+    ProjectInfo, ReplyBody, Request, RequestBody, Setting, Settings, Theme, Transport, WavFormat,
+    agent_string,
 };
 use protocol::edit::{Edit, NewInstrument};
 
@@ -60,6 +61,32 @@ pub struct AgentUi {
     pub wants_control: bool,
     /// The ticket of an approval that timed out last (for the toast).
     pub timed_out: bool,
+    /// What the agent says it is doing now (18.2), if anything.
+    pub activity: Option<AgentActivity>,
+}
+
+/// An agent's declared activity (SPEC 18.2).
+#[derive(Clone, Debug, PartialEq)]
+pub struct AgentActivity {
+    /// Untrusted text, control characters removed, at most
+    /// `MAX_ACTIVITY_CHARS` characters.
+    pub text: String,
+    pub focus: Option<Focus>,
+    /// The author tag of the agent that set it.
+    pub author: String,
+    pub client: u64,
+}
+
+/// Cleans an activity text: no control characters, at most
+/// `MAX_ACTIVITY_CHARS` characters, trimmed. `None` when nothing is left.
+pub fn activity_text(s: &str) -> Option<String> {
+    let t: String = s
+        .chars()
+        .filter(|c| !c.is_control())
+        .take(MAX_ACTIVITY_CHARS)
+        .collect();
+    let t = t.trim().to_string();
+    (!t.is_empty()).then_some(t)
 }
 
 struct Job {
@@ -558,6 +585,121 @@ fn note_activity(app: &App, author: &Author, edits: &[Edit]) {
     }
 }
 
+/// An agent declares (or ends, with `None` text) what it is doing (18.2).
+pub fn set_activity(app: &App, author: &Author, text: Option<&str>, focus: Option<Focus>) {
+    let client = match author {
+        Author::Agent(tag) => tag
+            .rsplit('-')
+            .next()
+            .and_then(|n| n.parse().ok())
+            .unwrap_or(0),
+        _ => 0,
+    };
+    let new = text.and_then(activity_text).map(|text| AgentActivity {
+        text,
+        focus,
+        author: author.tag(),
+        client,
+    });
+    let mut log = None;
+    if let Some(b) = app.bridge.borrow_mut().as_mut() {
+        if let Some(a) = &new
+            && b.ui.activity.as_ref().map(|o| &o.text) != Some(&a.text)
+        {
+            log = Some(a.text.clone());
+        }
+        b.ui.activity = new;
+    }
+    if let Some(text) = log {
+        push_activity(app, author, text);
+    }
+}
+
+fn push_activity(app: &App, author: &Author, text: String) {
+    if let Some(b) = app.bridge.borrow_mut().as_mut() {
+        b.ui.recent.insert(
+            0,
+            Activity {
+                text,
+                author: author.tag(),
+                unix_s: SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0),
+            },
+        );
+        b.ui.recent.truncate(30);
+    }
+}
+
+/// The sound library (installed packs and the user's folders).
+fn library(app: &App) -> Vec<crate::soundlib::Kit> {
+    crate::samples_ui::library(app)
+}
+
+/// `KitAdd`: imports the kit's files off the GTK thread, then adds one
+/// sampler channel per piece in one undo group by the agent.
+fn kit_add(
+    app: &Rc<App>,
+    ticket: Ticket,
+    author: &Author,
+    pack: &str,
+    kit: &str,
+    track: Option<protocol::ids::TrackId>,
+) -> Option<Outcome> {
+    let kits = library(app);
+    let Some(kit) = crate::sound_search::find_kit(&kits, pack, kit).cloned() else {
+        return Some(err(ControlError::NotFound { what: "kit".into() }));
+    };
+    if let Some(t) = track
+        && app.session.borrow().document().project.track(t).is_none()
+    {
+        return Some(err(ControlError::NotFound {
+            what: "track".into(),
+        }));
+    }
+    let server = app.bridge.borrow().as_ref()?.server.clone();
+    let items = kit
+        .pieces
+        .iter()
+        .map(|p| crate::samples_ui::ImportItem::piece(p, kit.source))
+        .collect();
+    let (a, author) = (app.clone(), author.clone());
+    crate::samples_ui::import(app, items, move |results| {
+        let mut setups = Vec::new();
+        for (p, r) in kit.pieces.iter().zip(results) {
+            match r {
+                Ok(s) => setups.push(crate::samples_ui::piece_setup(p, s)),
+                Err(reason) => {
+                    server.reply(ticket, err(ControlError::Internal { reason }));
+                    return;
+                }
+            }
+        }
+        let target = match track {
+            Some(t) => crate::channels::KitTrack::Existing(t),
+            None => crate::channels::KitTrack::New(format!("{} Kit", kit.title)),
+        };
+        let o = match crate::channels::add_kit_as(&a, author.clone(), target, setups) {
+            Ok(ids) => {
+                push_activity(
+                    &a,
+                    &author,
+                    agent_string(&format!("Added the {} kit", kit.title)),
+                );
+                ok(ReplyBody::Applied(protocol::edit::Applied {
+                    revision: revision(&a),
+                    created: ids.iter().map(|c| c.0).collect(),
+                }))
+            }
+            Err(()) => err(ControlError::Busy),
+        };
+        server.reply(ticket, o);
+        changed(&a);
+    });
+    None
+}
+
 /// Runs one request. Returns the outcome now, or `None` when the answer
 /// comes later (a queued batch, a job step, a save).
 fn execute(app: &Rc<App>, ticket: Ticket, author: &Author, req: Request) -> Option<Outcome> {
@@ -755,6 +897,31 @@ fn execute(app: &Rc<App>, ticket: Ticket, author: &Author, req: Request) -> Opti
                 }
                 None => err(ControlError::NotFound { what: "job".into() }),
             }
+        }
+        RequestBody::SetActivity { text, focus } => {
+            set_activity(app, author, text.as_deref(), focus);
+            ok(ReplyBody::Done)
+        }
+        RequestBody::SoundSearch {
+            role,
+            genre,
+            tags,
+            limit,
+        } => ok(ReplyBody::Sounds {
+            sounds: crate::sound_search::search(
+                &library(app),
+                role.as_deref(),
+                genre.as_deref(),
+                &tags,
+                limit.min(crate::sound_search::MAX_RESULTS),
+            ),
+        }),
+        RequestBody::KitAdd { pack, kit, track } => {
+            let current = revision(app);
+            if is_stale(base_revision, current) {
+                return Some(err(ControlError::Stale { current }));
+            }
+            return kit_add(app, ticket, author, &pack, &kit, track);
         }
         RequestBody::SettingsGet => ok(ReplyBody::Settings(settings(app))),
         RequestBody::SettingsSet { setting } => set_setting(app, setting, author),
@@ -1172,6 +1339,80 @@ mod tests {
                 .author
                 .starts_with("agent:test-")
         );
+    }
+
+    #[test]
+    fn an_agent_declares_and_ends_its_activity() {
+        let rig = rig("activity");
+        let long = "x".repeat(200);
+        let out = talk(
+            &rig,
+            "agent",
+            vec![
+                r#"{"id":1,"body":{"op":"set_activity","text":"Writing the hats\u0007","focus":{"kind":"channel","id":4}}}"#.into(),
+            ],
+        );
+        assert!(out[1].contains("\"status\":\"ok\""), "{}", out[1]);
+        {
+            let b = rig.app.bridge.borrow();
+            let a = b.as_ref().unwrap().ui.activity.clone().expect("activity");
+            assert_eq!(a.text, "Writing the hats", "control characters removed");
+            assert_eq!(a.focus, Some(Focus::Channel(protocol::ids::ChannelId(4))));
+            assert!(a.author.starts_with("agent:test-"));
+            assert_eq!(b.as_ref().unwrap().ui.recent[0].text, "Writing the hats");
+        }
+        let req = format!(r#"{{"id":2,"body":{{"op":"set_activity","text":"{long}"}}}}"#);
+        talk(&rig, "agent", vec![req]);
+        let len = rig
+            .app
+            .bridge
+            .borrow()
+            .as_ref()
+            .unwrap()
+            .ui
+            .activity
+            .as_ref()
+            .map(|a| a.text.chars().count());
+        assert_eq!(len, Some(MAX_ACTIVITY_CHARS));
+        talk(
+            &rig,
+            "agent",
+            vec![r#"{"id":3,"body":{"op":"set_activity","text":null}}"#.into()],
+        );
+        assert!(
+            rig.app
+                .bridge
+                .borrow()
+                .as_ref()
+                .unwrap()
+                .ui
+                .activity
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn activity_text_is_cleaned() {
+        assert_eq!(activity_text("  hi\n "), Some("hi".into()));
+        assert_eq!(activity_text("\u{7}\u{8}"), None);
+        assert_eq!(activity_text(&"é".repeat(99)).unwrap().chars().count(), 80);
+    }
+
+    #[test]
+    fn an_unknown_kit_is_not_found() {
+        let rig = rig("kit");
+        let out = talk(
+            &rig,
+            "agent",
+            vec![
+                r#"{"id":1,"body":{"op":"kit_add","pack":"nope","kit":"nope","track":null}}"#
+                    .into(),
+                r#"{"id":2,"body":{"op":"sound_search","role":"kick","genre":null,"tags":[],"limit":5}}"#
+                    .into(),
+            ],
+        );
+        assert!(out[1].contains("not_found"), "{}", out[1]);
+        assert!(out[2].contains("\"status\":\"ok\""), "{}", out[2]);
     }
 
     #[test]

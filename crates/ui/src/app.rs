@@ -417,6 +417,11 @@ impl App {
             .begin_gesture(Author::User, description)
     }
 
+    /// As `gesture_begin`, for a script or an agent.
+    pub fn gesture_begin_as(&self, author: Author, description: &str) -> bool {
+        self.session.borrow_mut().begin_gesture(author, description)
+    }
+
     pub fn gesture_edit(&self, edits: Vec<Edit>) -> Option<Applied> {
         let r = self.session.borrow_mut().gesture_edit(&edits);
         match r {

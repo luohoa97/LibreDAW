@@ -13,6 +13,7 @@ use protocol::ids::{ChannelId, TrackId};
 use protocol::model::{SampleRef, SynthParams};
 
 use crate::app::App;
+use doc::history::Author;
 use doc::presets::{self, unique_name};
 
 /// A sample for a new sampler channel and the settings that come with it.
@@ -296,11 +297,38 @@ pub fn add_starter_beat(app: &Rc<App>) {
     }
 }
 
+/// Where the channels of a kit go.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum KitTrack {
+    /// One new mixer track with this name.
+    New(String),
+    /// An existing track.
+    Existing(TrackId),
+}
+
 /// Adds every piece of a kit as a sampler channel, all on one new track
 /// named `track_name`, as one undo step. Returns the channels.
 pub fn add_kit(app: &Rc<App>, track_name: &str, pieces: Vec<SamplerSetup>) -> Vec<ChannelId> {
+    add_kit_as(
+        app,
+        Author::User,
+        KitTrack::New(track_name.to_string()),
+        pieces,
+    )
+    .unwrap_or_default()
+}
+
+/// As `add_kit`, by `author` and onto `track`. A script's or agent's kit is
+/// always one undo group: `Err(())` when another gesture is open (the
+/// caller answers Busy). The user's falls back to separate steps.
+pub fn add_kit_as(
+    app: &Rc<App>,
+    author: Author,
+    track: KitTrack,
+    pieces: Vec<SamplerSetup>,
+) -> Result<Vec<ChannelId>, ()> {
     if pieces.is_empty() {
-        return Vec::new();
+        return Ok(Vec::new());
     }
     let (taken, room): (Vec<String>, bool) = {
         let s = app.session.borrow();
@@ -311,7 +339,11 @@ pub fn add_kit(app: &Rc<App>, track_name: &str, pieces: Vec<SamplerSetup>) -> Ve
         )
     };
     let fallback = app.ui.borrow().track;
-    let grouped = app.gesture_begin("Add kit");
+    let user = author == Author::User;
+    let grouped = app.gesture_begin_as(author, "Add kit");
+    if !grouped && !user {
+        return Err(());
+    }
     app.ensure_pattern();
     let run = |e: Vec<Edit>| {
         if grouped {
@@ -328,14 +360,17 @@ pub fn add_kit(app: &Rc<App>, track_name: &str, pieces: Vec<SamplerSetup>) -> Ve
     if !samples.is_empty() {
         run(samples);
     }
-    let mut track = fallback;
-    if room
-        && let Some(a) = run(vec![Edit::AddTrack {
-            name: track_name.to_string(),
-        }])
-    {
-        track = TrackId(a.created[0]);
-    }
+    let track = match track {
+        KitTrack::Existing(t) => t,
+        KitTrack::New(name) => {
+            let made = if room {
+                run(vec![Edit::AddTrack { name }])
+            } else {
+                None
+            };
+            made.map(|a| TrackId(a.created[0])).unwrap_or(fallback)
+        }
+    };
     let mut names: Vec<String> = taken;
     let mut adds = Vec::new();
     let mut whats = Vec::new();
@@ -365,10 +400,11 @@ pub fn add_kit(app: &Rc<App>, track_name: &str, pieces: Vec<SamplerSetup>) -> Ve
     if grouped {
         app.gesture_end();
     }
-    if let Some(first) = ids.first() {
+    // An agent's kit never moves the user's selection.
+    if user && let Some(first) = ids.first() {
         app.select_channel(*first);
     }
-    ids
+    Ok(ids)
 }
 
 /// Removes a channel (and its track when nothing else uses it) and offers

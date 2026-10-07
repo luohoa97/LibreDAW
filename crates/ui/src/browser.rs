@@ -223,13 +223,7 @@ pub fn build(app: &Rc<App>) -> gtk::Widget {
                 list.append(&row);
                 es.push(Entry::Preset { row, index: i });
             }
-            let mut kits = soundlib::discover(&soundlib::default_roots());
-            for dir in samples_ui::load_folders(&app) {
-                if let Some(k) = soundlib::scan_folder(&dir) {
-                    kits.push(k);
-                }
-            }
-            for kit in kits {
+            for kit in samples_ui::library(&app) {
                 let (expander, rows) = kit_rows(&app, &kit);
                 list.append(&expander);
                 es.push(Entry::Kit {
