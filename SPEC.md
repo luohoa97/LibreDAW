@@ -686,6 +686,23 @@ Audio sync (needs approval: syscall exception):
   licensed GPL-3.0-or-later, carry an SPDX comment in the SVG, and are
   listed in `ASSETS.md`.
 - Fonts: system fonts only. Nothing bundled.
+- Close saves (Amendment 9). Closing the window, quitting, or a session
+  logout saves the project (7.4, plugin state captured first, 7.5) and then
+  exits. There is no "save changes?" dialog. A project that was never
+  saved is saved as `~/Music/LibreDAW/Untitled <n>.ldaw` (XDG music dir,
+  `n` the next free number) and a toast on next launch says where. If the
+  save fails (disk full, permission), the window stays open and shows the
+  error; it never exits with unsaved work. Undo history persists, so
+  "I did not want those changes" is answered by Undo or History, not by a
+  discard prompt.
+- Fast restart (Amendment 9). The app saves a small view state file
+  (`.view.toml` in the bundle, not part of the project format: open
+  project, selected pattern and channel, open panels, scroll, zoom) on
+  close. On launch it reopens the last project with that view. A
+  developer loop `tools/dev.fish` runs `cargo watch`, and on each rebuild
+  asks the running app to close (which saves) and starts the new build, so
+  a code change is visible in seconds at the same place in the project.
+  No hot code swapping.
 
 ---
 
@@ -1423,6 +1440,14 @@ range checks.
 ---
 
 ## Changelog
+
+### Amendment 9 (2026-10-07, owner)
+
+Closing LibreDAW saves the project and exits, with no prompt; never-saved
+projects go to `~/Music/LibreDAW/Untitled <n>.ldaw`; a failed save keeps
+the window open. Fast restart: view state saved on close and restored on
+launch, plus a `tools/dev.fish` rebuild-and-relaunch loop (11). No hot code
+swapping.
 
 ### Review 2 (2026-10-07): sections 13, 15, 16
 
