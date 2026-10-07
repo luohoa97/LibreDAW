@@ -278,12 +278,10 @@ impl History {
             for p in &e.project.patterns {
                 if pats.insert(Arc::as_ptr(p)) {
                     total += std::mem::size_of::<Pattern>() + p.name.len();
-                    for cn in &p.notes {
-                        total += std::mem::size_of::<protocol::model::ChannelNotes>()
-                            + cn.notes.len() * std::mem::size_of::<protocol::model::Note>();
-                    }
+                    total += p.notes.len() * std::mem::size_of::<protocol::model::Note>();
                 }
             }
+            total += e.project.clips.len() * std::mem::size_of::<protocol::model::Clip>();
             for c in &e.project.channels {
                 if others.insert(Arc::as_ptr(c) as *const u8) {
                     total += std::mem::size_of::<protocol::model::Channel>() + c.name.len();

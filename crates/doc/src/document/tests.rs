@@ -55,6 +55,7 @@ pub(crate) fn base() -> (Document, ChannelId, PatternId) {
     let (d, p) = ok(
         &d,
         Edit::AddPattern {
+            instrument: ChannelId(c[0]),
             name: "A".into(),
             length_steps: 16,
         },
@@ -62,12 +63,11 @@ pub(crate) fn base() -> (Document, ChannelId, PatternId) {
     (d, ChannelId(c[0]), PatternId(p[0]))
 }
 
-fn step_on(d: &Document, p: PatternId, c: ChannelId, step: u8) -> Document {
+fn step_on(d: &Document, p: PatternId, _c: ChannelId, step: u8) -> Document {
     ok(
         d,
         Edit::SetStep {
             pattern: p,
-            channel: c,
             step,
             on: true,
             vel: None,
@@ -79,7 +79,7 @@ fn step_on(d: &Document, p: PatternId, c: ChannelId, step: u8) -> Document {
 fn steps_on(d: &Document, p: PatternId, c: ChannelId) -> Vec<u8> {
     let pat = d.project.pattern(p).unwrap();
     let root = d.project.channel(c).unwrap().root_key;
-    pat.notes_of(c)
+    pat.notes
         .iter()
         .filter(|n| n.is_step_note(root, pat))
         .map(|n| (n.start / pat.step_ticks) as u8)
@@ -89,7 +89,7 @@ fn steps_on(d: &Document, p: PatternId, c: ChannelId) -> Vec<u8> {
 fn row_editable(d: &Document, p: PatternId, c: ChannelId) -> bool {
     let pat = d.project.pattern(p).unwrap();
     let root = d.project.channel(c).unwrap().root_key;
-    pat.notes_of(c).iter().all(|n| n.is_step_note(root, pat))
+    pat.notes.iter().all(|n| n.is_step_note(root, pat))
 }
 
 fn assert_saves(d: &Document) {
@@ -126,14 +126,13 @@ fn apply_bumps_revision_once_per_batch() {
 
 #[test]
 fn failed_batch_applies_nothing() {
-    let (d, c, p) = base();
+    let (d, _c, p) = base();
     let err = apply_batch(
         &d,
         &[
             Edit::SetTempo { bpm: 90.0 },
             Edit::AddNotes {
                 pattern: p,
-                channel: c,
                 notes: vec![NewNote {
                     start: 0,
                     len: 0,
@@ -255,7 +254,7 @@ fn remove_channel_drops_its_notes() {
     assert_eq!(d.project.note_count(), 1);
     let (d, _) = ok(&d, Edit::RemoveChannel { channel: c });
     assert_eq!(d.project.note_count(), 0);
-    assert!(d.project.patterns[0].notes.is_empty());
+    assert!(d.project.patterns.is_empty() && d.project.clips.is_empty());
     assert!(apply(&d, &Edit::RemoveChannel { channel: c }).is_err());
     assert_saves(&d);
 }
@@ -409,6 +408,7 @@ fn patterns_add_rename_remove_and_length() {
             apply(
                 &d,
                 &Edit::AddPattern {
+                    instrument: c,
                     name: name.into(),
                     length_steps: len
                 }
@@ -453,12 +453,11 @@ fn patterns_add_rename_remove_and_length() {
 
 #[test]
 fn shortening_removes_notes_starting_at_or_after_the_end_only() {
-    let (d, c, p) = base();
+    let (d, _c, p) = base();
     let (d, _) = ok(
         &d,
         Edit::AddNotes {
             pattern: p,
-            channel: c,
             notes: vec![
                 NewNote {
                     start: 7 * 240 + 100,
@@ -482,20 +481,19 @@ fn shortening_removes_notes_starting_at_or_after_the_end_only() {
             length_steps: 8,
         },
     );
-    let notes = d.project.patterns[0].notes_of(c);
+    let notes = d.project.patterns[0].notes.clone();
     assert_eq!(notes.len(), 1);
     assert_eq!(notes[0].start, 7 * 240 + 100);
 }
 
 #[test]
 fn step_on_off_and_velocity() {
-    let (d, c, p) = base();
+    let (d, _c, p) = base();
     let set = |d: &Document, on: bool, vel: Option<u8>| {
         ok(
             d,
             Edit::SetStep {
                 pattern: p,
-                channel: c,
                 step: 3,
                 on,
                 vel,
@@ -504,7 +502,7 @@ fn step_on_off_and_velocity() {
     };
     let (d, ids) = set(&d, true, Some(77));
     assert_eq!(ids.len(), 1);
-    let n = d.project.patterns[0].notes_of(c)[0];
+    let n = d.project.patterns[0].notes[0];
     assert_eq!(
         (n.start, n.len, n.key, n.vel),
         (3 * 240, 240, 60, 77),
@@ -513,10 +511,10 @@ fn step_on_off_and_velocity() {
     // On again is a no-op that may update velocity.
     let (d2, ids) = set(&d, true, Some(50));
     assert!(ids.is_empty());
-    assert_eq!(d2.project.patterns[0].notes_of(c).len(), 1);
-    assert_eq!(d2.project.patterns[0].notes_of(c)[0].vel, 50);
+    assert_eq!(d2.project.patterns[0].notes.len(), 1);
+    assert_eq!(d2.project.patterns[0].notes[0].vel, 50);
     let (d3, _) = set(&d, true, None);
-    assert_eq!(d3.project.patterns[0].notes_of(c)[0].vel, 77);
+    assert_eq!(d3.project.patterns[0].notes[0].vel, 77);
     // Off removes the note and the empty channel entry.
     let (d, _) = set(&d, false, None);
     assert!(d.project.patterns[0].notes.is_empty());
@@ -528,19 +526,18 @@ fn step_on_off_and_velocity() {
 fn step_default_velocity() {
     let (d, c, p) = base();
     let d = step_on(&d, p, c, 0);
-    assert_eq!(d.project.patterns[0].notes_of(c)[0].vel, DEFAULT_STEP_VEL);
+    assert_eq!(d.project.patterns[0].notes[0].vel, DEFAULT_STEP_VEL);
 }
 
 #[test]
 fn step_bounds_and_velocity_checked() {
-    let (d, c, p) = base();
+    let (d, _c, p) = base();
     for (step, vel) in [(16u8, None), (255, None), (0, Some(0u8)), (0, Some(128))] {
         assert!(
             apply(
                 &d,
                 &Edit::SetStep {
                     pattern: p,
-                    channel: c,
                     step,
                     on: true,
                     vel
@@ -554,7 +551,7 @@ fn step_bounds_and_velocity_checked() {
 
 #[test]
 fn step_off_removes_every_root_key_note_at_that_start() {
-    let (d, c, p) = base();
+    let (d, _c, p) = base();
     let nn = |len, key| NewNote {
         start: 480,
         len,
@@ -565,7 +562,6 @@ fn step_off_removes_every_root_key_note_at_that_start() {
         &d,
         Edit::AddNotes {
             pattern: p,
-            channel: c,
             notes: vec![nn(100, 60), nn(240, 60), nn(240, 61)],
         },
     );
@@ -573,13 +569,12 @@ fn step_off_removes_every_root_key_note_at_that_start() {
         &d,
         Edit::SetStep {
             pattern: p,
-            channel: c,
             step: 2,
             on: false,
             vel: None,
         },
     );
-    let left = d.project.patterns[0].notes_of(c);
+    let left = d.project.patterns[0].notes.clone();
     assert_eq!(left.len(), 1);
     assert_eq!(left[0].key, 61);
 }
@@ -598,6 +593,7 @@ fn spec_5_2_test_steps_root_key_step_length_row_stays_editable() {
     let (d2, p2) = ok(
         &d,
         Edit::AddPattern {
+            instrument: c,
             name: "B".into(),
             length_steps: 8,
         },
@@ -628,7 +624,7 @@ fn spec_5_2_test_steps_root_key_step_length_row_stays_editable() {
     assert_eq!(d4.project.pattern(p).unwrap().step_ticks, 480);
     assert_eq!(steps_on(&d4, p, c), on);
     assert!(row_editable(&d4, p, c));
-    for n in d4.project.pattern(p).unwrap().notes_of(c) {
+    for n in d4.project.pattern(p).unwrap().notes.clone() {
         assert_eq!(n.len, 480);
         assert_eq!(n.start % 480, 0);
     }
@@ -656,7 +652,6 @@ fn root_key_leaves_piano_roll_notes_alone() {
         &d,
         Edit::AddNotes {
             pattern: p,
-            channel: c,
             notes: vec![NewNote {
                 start: 5,
                 len: 7,
@@ -673,7 +668,7 @@ fn root_key_leaves_piano_roll_notes_alone() {
             key: 40,
         },
     );
-    let notes = d.project.pattern(p).unwrap().notes_of(c);
+    let notes = d.project.pattern(p).unwrap().notes.clone();
     let free: Vec<_> = notes.iter().filter(|n| n.len == 7).collect();
     assert_eq!(free.len(), 1);
     assert_eq!(free[0].key, 60);
@@ -709,7 +704,7 @@ fn step_ticks_range_checked() {
 
 #[test]
 fn add_notes_validates_every_field() {
-    let (d, c, p) = base();
+    let (d, _c, p) = base();
     let good = NewNote {
         start: 0,
         len: 10,
@@ -720,7 +715,6 @@ fn add_notes_validates_every_field() {
         &d,
         Edit::AddNotes {
             pattern: p,
-            channel: c,
             notes: vec![good],
         },
     );
@@ -750,7 +744,6 @@ fn add_notes_validates_every_field() {
                 &d,
                 &Edit::AddNotes {
                     pattern: p,
-                    channel: c,
                     notes: vec![good, b]
                 }
             )
@@ -763,18 +756,6 @@ fn add_notes_validates_every_field() {
             &d,
             &Edit::AddNotes {
                 pattern: PatternId(999),
-                channel: c,
-                notes: vec![good]
-            }
-        )
-        .is_err()
-    );
-    assert!(
-        apply(
-            &d,
-            &Edit::AddNotes {
-                pattern: p,
-                channel: ChannelId(999),
                 notes: vec![good]
             }
         )
@@ -784,7 +765,7 @@ fn add_notes_validates_every_field() {
 
 #[test]
 fn notes_stay_sorted_and_ids_ascend() {
-    let (d, c, p) = base();
+    let (d, _c, p) = base();
     let n = |start, key| NewNote {
         start,
         len: 10,
@@ -795,13 +776,12 @@ fn notes_stay_sorted_and_ids_ascend() {
         &d,
         Edit::AddNotes {
             pattern: p,
-            channel: c,
             notes: vec![n(500, 60), n(100, 70), n(100, 60), n(100, 60)],
         },
     );
     assert_eq!(ids.len(), 4);
     assert!(ids.windows(2).all(|w| w[0] < w[1]));
-    let notes = d.project.patterns[0].notes_of(c);
+    let notes = d.project.patterns[0].notes.clone();
     let keys: Vec<_> = notes.iter().map(|n| (n.start, n.key, n.id.0)).collect();
     let mut sorted = keys.clone();
     sorted.sort();
@@ -810,7 +790,7 @@ fn notes_stay_sorted_and_ids_ascend() {
 
 #[test]
 fn remove_move_resize_velocity() {
-    let (d, c, p) = base();
+    let (d, _c, p) = base();
     let nn = |start, key| NewNote {
         start,
         len: 100,
@@ -821,7 +801,6 @@ fn remove_move_resize_velocity() {
         &d,
         Edit::AddNotes {
             pattern: p,
-            channel: c,
             notes: vec![nn(0, 60), nn(200, 62)],
         },
     );
@@ -835,7 +814,7 @@ fn remove_move_resize_velocity() {
             dkey: -2,
         },
     );
-    let ns = d2.project.patterns[0].notes_of(c);
+    let ns = d2.project.patterns[0].notes.clone();
     assert_eq!((ns[0].start, ns[0].key), (50, 58));
     assert_eq!((ns[1].start, ns[1].key), (250, 60));
     for (dt, dkey) in [
@@ -870,7 +849,7 @@ fn remove_move_resize_velocity() {
             dkey: 0,
         },
     );
-    let ns = d3.project.patterns[0].notes_of(c);
+    let ns = d3.project.patterns[0].notes.clone();
     assert_eq!(ns[0].id, b);
     assert_eq!(ns[1].id, a);
     // Resize.
@@ -882,7 +861,7 @@ fn remove_move_resize_velocity() {
             dlen: -99,
         },
     );
-    assert_eq!(d4.project.patterns[0].notes_of(c)[0].len, 1);
+    assert_eq!(d4.project.patterns[0].notes[0].len, 1);
     for dlen in [-100, i64::MAX, i64::MIN, MAX_TICK as i64] {
         assert!(
             apply(
@@ -906,12 +885,7 @@ fn remove_move_resize_velocity() {
             vel: 1,
         },
     );
-    assert!(
-        d5.project.patterns[0]
-            .notes_of(c)
-            .iter()
-            .all(|n| n.vel == 1)
-    );
+    assert!(d5.project.patterns[0].notes.iter().all(|n| n.vel == 1));
     assert!(
         apply(
             &d,
@@ -931,7 +905,7 @@ fn remove_move_resize_velocity() {
             notes: vec![a, a],
         },
     );
-    assert_eq!(d6.project.patterns[0].notes_of(c).len(), 1);
+    assert_eq!(d6.project.patterns[0].notes.len(), 1);
     assert!(matches!(
         apply(
             &d,
@@ -954,7 +928,7 @@ fn remove_move_resize_velocity() {
 
 #[test]
 fn note_limits_checked_before_cloning() {
-    let (d, c, p) = base();
+    let (d, _c, p) = base();
     // Fill one pattern to its limit directly, so the test does not need
     // 100,000 apply calls.
     let mut proj = (*d.project).clone();
@@ -972,14 +946,13 @@ fn note_limits_checked_before_cloning() {
         })
         .collect();
     notes.sort_by_key(|n| (n.start, n.key, n.id));
-    pat.notes = vec![ChannelNotes { channel: c, notes }];
+    pat.notes = notes;
     let d = Document::from_project(proj, 1000 + MAX_NOTES_PER_PATTERN as u32);
     validate(&d.project).unwrap();
     let r = apply(
         &d,
         &Edit::AddNotes {
             pattern: p,
-            channel: c,
             notes: vec![NewNote {
                 start: 0,
                 len: 1,
@@ -998,7 +971,6 @@ fn note_limits_checked_before_cloning() {
         &d,
         &Edit::SetStep {
             pattern: p,
-            channel: c,
             step: 1,
             on: true,
             vel: None,
@@ -1266,6 +1238,7 @@ fn structural_sharing_of_untouched_parts() {
     let (d, _) = ok(
         &d,
         Edit::AddPattern {
+            instrument: c,
             name: "B".into(),
             length_steps: 16,
         },
@@ -1314,12 +1287,7 @@ fn ids_of(d: &Document) -> Ids {
 fn all_notes(d: &Document, p: PatternId) -> Vec<NoteId> {
     d.project
         .pattern(p)
-        .map(|pat| {
-            pat.notes
-                .iter()
-                .flat_map(|c| c.notes.iter().map(|n| n.id))
-                .collect()
-        })
+        .map(|pat| pat.notes.iter().map(|n| n.id).collect())
         .unwrap_or_default()
 }
 
@@ -1438,6 +1406,7 @@ pub(crate) fn random_edit(r: &mut Rng, d: &Document) -> Edit {
             wave: [Wave::Sine, Wave::Saw, Wave::Square, Wave::Triangle][r.below(4) as usize],
         },
         13 | 14 => Edit::AddPattern {
+            instrument: ch_id(r),
             name: name(r),
             length_steps: r.below(70) as u8,
         },
@@ -1456,7 +1425,6 @@ pub(crate) fn random_edit(r: &mut Rng, d: &Document) -> Edit {
         },
         19..=22 => Edit::SetStep {
             pattern: pa_id(r),
-            channel: ch_id(r),
             step: r.below(70) as u8,
             on: r.chance(70),
             vel: if r.chance(60) {
@@ -1469,7 +1437,6 @@ pub(crate) fn random_edit(r: &mut Rng, d: &Document) -> Edit {
             let n = r.below(6) as usize;
             Edit::AddNotes {
                 pattern: pa_id(r),
-                channel: ch_id(r),
                 notes: (0..n)
                     .map(|_| NewNote {
                         start: r.below(4200) as u32,
@@ -1647,11 +1614,10 @@ fn random_batches_are_atomic_and_valid() {
 
 #[test]
 fn max_size_batch_applies() {
-    let (d, c, p) = base();
+    let (d, _c, p) = base();
     let edits: Vec<Edit> = (0..MAX_EDITS_PER_REQUEST)
         .map(|i| Edit::AddNotes {
             pattern: p,
-            channel: c,
             notes: vec![NewNote {
                 start: (i % 3000) as u32,
                 len: 10,
