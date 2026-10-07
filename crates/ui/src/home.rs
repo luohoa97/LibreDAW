@@ -18,11 +18,14 @@ use crate::home_logic::{self, HomeItem, Kind};
 /// A search box appears above the recent projects past this many.
 const SEARCH_ABOVE: usize = 8;
 
+/// A refresh that can name itself (the rows call it after a change).
+type Refresh = Rc<dyn Fn()>;
+
 pub struct Home {
     pub widget: adw::ToolbarView,
     pub toasts: adw::ToastOverlay,
     /// Reads the folders again and redraws.
-    pub refresh: Rc<dyn Fn()>,
+    pub refresh: Refresh,
 }
 
 pub fn build(app: &Rc<App>) -> Home {
@@ -74,7 +77,7 @@ pub fn build(app: &Rc<App>) -> Home {
     widget.add_top_bar(&header);
     widget.set_content(Some(&toasts));
 
-    let refresh: Rc<std::cell::RefCell<Option<Rc<dyn Fn()>>>> = Rc::default();
+    let refresh: Rc<std::cell::RefCell<Option<Refresh>>> = Rc::default();
     let (a, c, p, r) = (app.clone(), content.clone(), pages.clone(), refresh.clone());
     let redraw: Rc<dyn Fn()> = Rc::new(move || {
         let again: Rc<dyn Fn()> = r.borrow().clone().expect("set below");

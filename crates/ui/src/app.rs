@@ -57,6 +57,9 @@ type Toaster = Rc<dyn Fn(&str)>;
 type CommandListener = Rc<dyn Fn(UiCommand)>;
 type ActionToaster = Rc<dyn Fn(&str, &str, Box<dyn Fn()>)>;
 
+/// Swaps Home and the project; the argument is whether Home shows.
+type HomeHook = Rc<dyn Fn(bool)>;
+
 pub struct App {
     pub session: RefCell<Session>,
     pub ui: RefCell<UiState>,
@@ -72,7 +75,7 @@ pub struct App {
     action_toaster: RefCell<Option<ActionToaster>>,
     /// Whether Home is showing instead of the project (SPEC 19.1).
     at_home: Cell<bool>,
-    home_hook: RefCell<Option<Rc<dyn Fn(bool)>>>,
+    home_hook: RefCell<Option<HomeHook>>,
     notifying: Cell<bool>,
     pub settings: RefCell<Settings>,
     /// The control socket, when it started.
