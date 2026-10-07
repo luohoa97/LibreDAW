@@ -844,11 +844,17 @@ selection, keyboard editing path.
 5. Built-in effects: EQ, compressor (with sidechain input), saturator /
    distortion, reverb, delay, limiter on master.
 6. Mixer sends to effect return tracks.
+7. Playlist (moved from C by Amendment 11): pattern clips placed on tracks
+   along a timeline; song mode transport; full-song export (15.6).
+8. Note preview: clicking a step, a piano-roll key, or a channel name plays
+   the sound (`EngineCommand::Preview`, Amendment 11).
+9. GNOME HIG compliant layout for every view (Amendment 11; the layout
+   document is `docs/ui-design.md`).
 
 ### 13.3 Milestone C: songs and zero-skill UX (section 15.6 to 15.8)
 
-1. Playlist: pattern clips placed on tracks along a timeline; song mode
-   transport; full-song export.
+1. Audio clips on the playlist (moved in by Amendment 11): samples placed
+   on the timeline with waveform display. Automation stays after C.
 2. Start screen: recent projects, "new from template", demo projects.
 3. Templates and presets: genre templates (phonk, trap, boom bap, lo-fi,
    house), synth and 808 presets, drum kits.
@@ -1464,6 +1470,16 @@ range checks.
 ---
 
 ## Changelog
+
+### Amendment 11 (2026-10-07, owner)
+
+Playlist moved from Milestone C to B; audio clips added to C; automation
+stays after C. Milestone B work starts now, in parallel with finishing A
+(owner decision). Note preview on click (`EngineCommand::Preview`, a
+simple form of the 17.2 audition). The whole UI must follow the GNOME HIG;
+custom widgets are drawn with GtkSnapshot and GSK render nodes, with cached
+static layers. Built-in sounds live in the separate `libredaw-sounds`
+repository (15.3).
 
 ### Amendment 10 (2026-10-07, owner)
 
