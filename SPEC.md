@@ -968,15 +968,19 @@ Milestone B starts.
   them in any LibreDAW repository or package. Whether a vendor's license
   allows its samples to be used outside its own product is the user's
   responsibility; the browser says so when adding a folder.
-- Only plain audio files (WAV) can be imported. Another DAW's built-in
-  instruments are code (plugins), not files, and their presets use
-  proprietary formats; they cannot be imported.
+- Audio files can be imported as WAV (PCM, float, and Vorbis-in-WAV as
+  FL Studio stores it), FLAC, Ogg Vorbis, MP3 and WavPack (Amendment 23).
+  Decoding runs off the audio thread. Decoded audio of `local_only` files
+  may be cached on the user's machine, never in a bundle. Another DAW's
+  built-in instruments are code (plugins), not files, and their presets
+  use proprietary formats; they cannot be imported.
 - Project bundles copy used samples in (15.1). Samples from user libraries
   are marked `local_only` in `project.toml`. "Export project for sharing"
   leaves them out by default and lists them, so sharing a project does not
   redistribute them by accident.
-- If no sound pack is installed, the DAW still runs: the synth and 808 are
-  built in.
+- If no sound pack or instrument plugin is installed, the DAW still runs:
+  the native Sampler plays samples, and first setup offers the one-click
+  instrument install (Amendment 23).
 
 ### 15.4 Step sequencer lanes and groove
 
@@ -1776,6 +1780,58 @@ mixer; none adds a parallel concept.
 - The step and swing semantics of 17.2 apply per content.
 ---
 
+### 20.6 Plain language (Amendment 24, binding)
+
+Owner: "What's a step? What's that dropdown for? No one knows how to pick
+up a DAW." The UI assumes the user has never used a DAW.
+
+- **No unexplained jargon:**
+  - No visible label uses a term that a first-time user would have to
+    look up.
+  - Words the user must learn (bar, beat, tempo) are taught where they
+    first appear: in the ruler, the tooltip, the empty state and the
+    tutorial.
+- **Every control:**
+  - It has a tooltip of one plain sentence that says what it does ("Plays
+    each hit a little late for a laid-back groove").
+  - It has an accessible label with the same words.
+- **Empty states teach the next action:** "Click a square to add a drum
+  hit", "Click an empty spot in a row to add a clip".
+- **Depth stays in place but behind disclosure:** the per-hit lanes,
+  swing, time signature and mixer details sit behind a "More" toggle or
+  in the inspector (20.1). They are never on the first screen.
+- **No unlabeled dropdowns.** Every menu button says what it holds.
+- **Vocabulary.** Visible words follow this list. Code names may differ.
+
+  | Internal / DAW term | Shown to the user |
+  |---|---|
+  | Step, step sequencer | **Grid** ("Click squares to place hits") |
+  | Piano roll | **Piano** ("Draw notes; higher is higher pitch") |
+  | Pattern, clip content | not shown (clips only) |
+  | Clip | **Clip** (tooltip: "A piece of music on a row") |
+  | Velocity | **Volume** (per hit) |
+  | Ratchet | **Repeats** |
+  | Pitch offset | **Pitch** |
+  | Swing | **Swing** (tooltip explains) |
+  | BPM | **Tempo** (value shown as "120 BPM") |
+  | Tap | **Tap Tempo** |
+  | Time signature | in More only, as "Beats per bar" |
+  | Loop region | **Loop** |
+  | Linked copy / Make Unique | **Copy That Changes Together** / **Edit Separately** |
+  | Quantize | **Snap to Grid** |
+  | Insert effect | **Effects** |
+  | Send | **Send to <track>** |
+  | Pan | **Left/Right** |
+  | Channel | **Instrument** |
+  | Master | **Main Output** |
+  | Render / bounce | **Export** |
+
+- **Acceptance (QA gate):**
+  - ux-qa checks every visible label and tooltip against this list.
+  - It runs a first-time-user script with no help: make a beat, make the
+    kick quieter, add a melody, make the song longer, export it.
+  - Any step that needs a DAW term or a guess fails the gate.
+
 ## 21. Voice: recording, hum to notes, and lyrics (Amendment 20)
 
 Owner direction: "hum a beat ... it turns into MIDI and Claude does the
@@ -2001,6 +2057,24 @@ made every edit, so this section turns that record into a report.
 ---
 
 ## Changelog
+
+### Amendment 24 (2026-10-07, owner)
+
+- Added 20.6: the plain-language rule. A first-time user must need no
+  DAW knowledge. It sets a vocabulary list (Grid, Piano, Volume,
+  Repeats, Tempo, Loop, and so on), one-sentence tooltips on every
+  control, teaching empty states and no unlabeled dropdowns. A
+  first-time-user QA script gates every UI build.
+
+### Amendment 23 (2026-10-07, owner)
+
+- Instruments are libre CLAP plugins (Surge XT, Odin 2, Dexed), offered
+  by role through curated presets and installed in one click at first
+  setup. The native Synth and 808 leave the user-facing choices, and the
+  native Sampler stays as the sample player.
+- 15.3: import accepts WAV (including Vorbis-in-WAV), FLAC, Ogg Vorbis,
+  MP3 and WavPack, because 96% of an FL Studio library is not plain
+  PCM WAV.
 
 ### Amendment 22 (2026-10-07, owner)
 
