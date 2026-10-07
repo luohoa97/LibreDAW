@@ -202,7 +202,7 @@ fn new_instrument(
                 mode: s.mode,
             },
             Instrument::Bass808(b) => NewInstrument::Bass808 { mono: b.mono },
-            // TODO(mcp teammate): audio rows are made by the audio tools (21.1).
+            // An audio row is made by audio_clip_add; copying one gives an empty audio row.
             Instrument::Audio => NewInstrument::Audio,
             Instrument::Clap(_) => {
                 return Err(format!(

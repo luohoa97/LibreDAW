@@ -26,6 +26,7 @@ pub(crate) mod serve;
 pub(crate) mod session;
 pub mod summary;
 pub mod tools;
+pub mod v4;
 
 pub(crate) use session::Session;
 

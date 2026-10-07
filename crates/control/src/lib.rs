@@ -17,6 +17,7 @@ pub mod fake_ui;
 pub mod fxpresets;
 pub mod hum;
 pub mod mcp;
+pub mod shapes;
 mod socket;
 pub mod song_map;
 mod state;

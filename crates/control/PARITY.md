@@ -109,6 +109,24 @@ Tools named `edit` take raw `protocol::edit::Edit` values (ticks, not bars).
 | Click a key to audition it | none | protocol: no audition request (proposal P2) |
 | Snap, Stay in Key, zoom | none | by design: view aids (Stay in Key also needs the project key) |
 
+## Audio clips, patterns and shapes (SPEC 20.7, 21.1, 24.2-1)
+
+| User action | MCP tool | Gap |
+|---|---|---|
+| Drop a sound on the timeline (new Audio row, full-length clip, one undo step) | `audio_clip_add {sound or sample, start}` | the window imports and measures the sound (`RequestBody::AudioClipAdd`), so the clip is the whole sound; `length` or `seconds` with a `sample` builds the edits directly |
+| Drop on an existing Audio row | `audio_clip_add {instrument}` | |
+| Trim the edges, set gain, fades | `audio_clip_set {trim_start, trim_end, gain_db, fade_in, fade_out}` | |
+| Move, copy, split, mute, delete an audio clip | `clips_change`, `clips_copy`, `clips_split`, `clips_remove` | |
+| Make Pattern (Ctrl+G) | `pattern_make {clips, name}` | |
+| Place a pattern at the playhead | `pattern_place {pattern, start}` | |
+| See the patterns | `pattern_list`, `project_summary` | |
+| Move or duplicate a pattern block | `clips_change`, `clips_copy` on its clips | |
+| Rename a pattern | `edit` with `rename_group` | |
+| Add a shape (Volume, Pan, Pitch, Filter, effect setting) | `shape_add {target, preset or points}` | |
+| Shape presets (Fade In, Fade Out, Swell, Drop, Pump, Wobble, Tape Stop) | `shape_add {preset, start, end}` | |
+| Edit shape points, curve types | `shape_set {points}` | |
+| Remove a shape | `shape_remove` | |
+
 ## Mixer
 
 | User action | MCP tool | Gap |
@@ -125,7 +143,7 @@ Tools named `edit` take raw `protocol::edit::Edit` values (ticks, not bars).
 | Pick a ready-made setting for an effect (Drive: Warm, Crunch, Phonk 808, Phonk Cowbell, Hard Clip) | `fx_add {preset}`, `fx_set {preset}` | |
 | Duck to Kick (instrument menu, mixer strip) | `duck_to_kick {row or track, amount}` | |
 | Loudness on Main Output | `loudness {amount or preset}` | the window also shows the LUFS reading; `analyze` gives it for the whole song |
-| Bypass effect | none | model: inserts have no bypass flag |
+| Effect On switch (EQ ... Limiter) | `fx_bypass {insert, bypass}` | plugin effects have no switch here |
 | Sends level, pre/post, remove | `send_set` | |
 | Change color | none | model: tracks have no color field |
 

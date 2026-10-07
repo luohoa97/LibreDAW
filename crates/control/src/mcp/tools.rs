@@ -31,6 +31,10 @@ pub enum Plan {
     /// Read the project, build one batch, send it.
     Compose(Compose),
     Summary,
+    /// `pattern_list`.
+    PatternList,
+    /// `audio_clip_add` of a whole sound: the DAW imports and measures it.
+    AudioDrop(super::v4::AudioClipAddArgs),
     Inspect(InspectArgs),
     /// Contents to show; empty: all.
     ContentGet(Vec<Target>),
@@ -94,6 +98,14 @@ pub enum Compose {
     ContentSet(compose::ContentSetArgs),
     LoopSet(compose::LoopArgs),
     SongSet(compose::SongArgs),
+    AudioClipAdd(super::v4::AudioClipAddArgs),
+    AudioClipSet(super::v4::AudioClipSetArgs),
+    PatternMake(super::v4::PatternMakeArgs),
+    PatternPlace(super::v4::PatternPlaceArgs),
+    ShapeAdd(super::v4::ShapeAddArgs),
+    ShapeSet(super::v4::ShapeSetArgs),
+    ShapeRemove(super::v4::ShapeRemoveArgs),
+    FxBypass(super::v4::FxBypassArgs),
 }
 
 impl Compose {
@@ -115,6 +127,14 @@ impl Compose {
             Compose::ContentSet(a) => compose::content_set(project, a),
             Compose::LoopSet(a) => compose::loop_set(project, a),
             Compose::SongSet(a) => compose::song_set(project, a),
+            Compose::AudioClipAdd(a) => super::v4::audio_clip_add(project, ids, a),
+            Compose::AudioClipSet(a) => super::v4::audio_clip_set(project, a),
+            Compose::PatternMake(a) => super::v4::pattern_make(project, ids, a),
+            Compose::PatternPlace(a) => super::v4::pattern_place(project, ids, a),
+            Compose::ShapeAdd(a) => super::v4::shape_add(project, ids, a),
+            Compose::ShapeSet(a) => super::v4::shape_set(project, a),
+            Compose::ShapeRemove(a) => super::v4::shape_remove(project, a),
+            Compose::FxBypass(a) => super::v4::fx_bypass(project, a),
         }
     }
 }
@@ -607,6 +627,22 @@ pub fn plan(name: &str, args: Value) -> Result<Plan, PlanError> {
             }
             Ok(edits(vec![Edit::RemoveClips { clips: a.ids }]))
         }
+        "audio_clip_add" => {
+            let a: super::v4::AudioClipAddArgs = parse(args)?;
+            if a.is_drop() {
+                Ok(Plan::AudioDrop(a))
+            } else {
+                c(Compose::AudioClipAdd(a))
+            }
+        }
+        "audio_clip_set" => c(Compose::AudioClipSet(parse(args)?)),
+        "pattern_make" => c(Compose::PatternMake(parse(args)?)),
+        "pattern_place" => c(Compose::PatternPlace(parse(args)?)),
+        "pattern_list" => parse::<NoArgs>(args).map(|_| Plan::PatternList),
+        "shape_add" => c(Compose::ShapeAdd(parse(args)?)),
+        "shape_set" => c(Compose::ShapeSet(parse(args)?)),
+        "shape_remove" => c(Compose::ShapeRemove(parse(args)?)),
+        "fx_bypass" => c(Compose::FxBypass(parse(args)?)),
         "loop_set" => c(Compose::LoopSet(parse(args)?)),
         "song_set" => c(Compose::SongSet(parse(args)?)),
         // Contents
@@ -997,6 +1033,63 @@ pub fn definitions() -> Vec<Value> {
             "Remove clips (content no clip uses any more goes too), in ONE undo group.",
             json!({"clips": clip_ids()}),
             &["clips"],
+        ),
+        tool(
+            "audio_clip_add",
+            "Put a sound on the timeline as an audio clip, in ONE undo group (the same as dragging it there: a new audio row with its own mixer track, named after the sound, and one clip as long as the whole sound). Give sound = an id from sound_search (it is imported first), or sample = the hash of a sample already in the project (inspect shows it). start is in bars. Leave out length and seconds to get the whole sound; give length (bars) or seconds only to cut the clip shorter or longer. instrument = an existing audio row; leave it out to get a new audio row. offset = bars into the sound where playing starts (with length). Returns the clip and instrument ids. Change the clip later with audio_clip_set.",
+            json!({"sound": {"type": "string", "description": "A sound id from sound_search."}, "sample": {"type": "string", "description": "Or a sample hash (64 hex digits) already in the project."}, "instrument": instrument(), "start": bars("Where the clip starts."), "length": bars("Clip length (default: the whole sound)."), "seconds": {"type": "number", "exclusiveMinimum": 0, "description": "Or the clip length in seconds."}, "offset": bars("Where in the sound playing starts."), "name": {"type": "string", "maxLength": 128}}),
+            &["start"],
+        ),
+        tool(
+            "audio_clip_set",
+            "Change one audio clip in ONE undo group: trim_start and trim_end (bars to cut off that end; negative brings sound back), gain_db (-100 to 24), fade_in and fade_out (bars). Move, copy, split, mute and remove it with clips_change, clips_copy, clips_split and clips_remove.",
+            json!({"clip": int("Clip id."), "trim_start": bars("Signed bars to cut from the start."), "trim_end": bars("Signed bars to cut from the end."), "gain_db": {"type": "number", "minimum": -100, "maximum": 24}, "fade_in": bars("Fade in length."), "fade_out": bars("Fade out length.")}),
+            &["clip"],
+        ),
+        tool(
+            "pattern_make",
+            "Make a pattern: a beat or section made of several instruments, placed as one block. Give clips (one per row, they are lined up at the earliest start) and a name. Returns the pattern id (G<id>). Move the members together with clips_change on the pattern's clips.",
+            json!({"clips": clip_ids(), "name": {"type": "string", "minLength": 1, "maxLength": 128}}),
+            &["clips", "name"],
+        ),
+        tool(
+            "pattern_place",
+            "Place another copy of a pattern at a bar, in ONE undo group. The copies are linked to the pattern's clips. Returns the new clip ids.",
+            json!({"pattern": int("Pattern id (G<id>, from pattern_make or pattern_list)."), "start": bars("Where the copy starts.")}),
+            &["pattern", "start"],
+        ),
+        tool(
+            "pattern_list",
+            "List the patterns: name, where each copy is placed (bars) and its clips.",
+            json!({}),
+            &[],
+        ),
+        tool(
+            "shape_add",
+            &format!(
+                "Add a shape: a curve that moves a setting over the song, in ONE undo group. target = {{kind, ...}}: kind volume or pan (track = mixer track id), pitch (semitones) or filter (0 closed to 1 open) (instrument = row id), fx (insert = effect id, param = a setting name from fx_set). Give preset ({}) over start..end (bars; default the loop) or points [{{at, value, curve}}] (curve: smooth, linear, hold, stairs, pulse, wave). Values: volume -60..6 dB, pan -1..1, pitch -24..24, filter 0..1, fx in the setting's own range. Tape stop works on pitch and on volume: add both. Returns the shape id (S<id>).",
+                crate::shapes::NAMES
+            ),
+            json!({"target": {"type": "object", "required": ["kind"], "additionalProperties": false, "properties": {"kind": {"type": "string", "enum": ["volume", "pan", "pitch", "filter", "fx"]}, "track": int("Mixer track id."), "instrument": instrument(), "insert": int("Effect id."), "param": {"type": "string"}}}, "preset": {"type": "string"}, "start": bars("Preset start."), "end": bars("Preset end."), "points": {"type": "array", "maxItems": 512, "items": {"type": "object", "required": ["at", "value"], "additionalProperties": false, "properties": {"at": bars("Where."), "value": {"type": "number"}, "curve": {"type": "string", "enum": ["smooth", "linear", "hold", "stairs", "pulse", "wave"]}}}}}),
+            &["target"],
+        ),
+        tool(
+            "shape_set",
+            "Replace the points of a shape, in ONE undo group: preset (with start and end) or points, as in shape_add.",
+            json!({"shape": int("Shape id (S<id>)."), "preset": {"type": "string"}, "start": bars("Preset start."), "end": bars("Preset end."), "points": {"type": "array", "maxItems": 512, "items": {"type": "object", "required": ["at", "value"], "additionalProperties": false, "properties": {"at": bars("Where."), "value": {"type": "number"}, "curve": {"type": "string", "enum": ["smooth", "linear", "hold", "stairs", "pulse", "wave"]}}}}}),
+            &["shape"],
+        ),
+        tool(
+            "shape_remove",
+            "Remove shapes, in ONE undo group.",
+            json!({"shapes": ids("Shape ids (S<id>).")}),
+            &["shapes"],
+        ),
+        tool(
+            "fx_bypass",
+            "Switch an effect off (bypass: true, the sound passes through unchanged) or back on (bypass: false), like the On switch in the effect panel. Works for the built-in effects.",
+            json!({"insert": int("Effect id."), "bypass": {"type": "boolean"}}),
+            &["insert", "bypass"],
         ),
         tool(
             "loop_set",

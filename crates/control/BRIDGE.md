@@ -159,3 +159,15 @@ it changes glow too, derived from each agent batch (or the explicit
 See the mcp-v3 report: `next_id` in the `Project` reply, an `Audition`
 request, a `Seek` request, and a `SoundAdd` request. The bridge needs no
 change until the orchestrator adds them.
+
+## AudioClipAdd (protocol v4)
+
+`AudioClipAdd { sound, instrument, start }` is a drop (SPEC 21.1, Amendment
+31). `sound` is a catalogue id from `SoundSearch` or the hash of a sample
+already in the project. The bridge imports it if needed, measures it off the
+GTK thread, and applies one undo group by the request's author: `AddSample`,
+then (without `instrument`) `AddTrack` and `AddChannel` with
+`NewInstrument::Audio` named after the file, then `AddAudioClip` at `start`
+ticks, `offset` 0, and `len` the whole sound at the project's tempo. It needs
+`base_revision`; the reply is `Applied`, the clip's id last in `created`
+(the row before it when the request made one).

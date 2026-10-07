@@ -459,6 +459,7 @@ fn kit_rows(app: &Rc<App>, kit: &Kit) -> (adw::ExpanderRow, Vec<adw::ActionRow>)
         row.set_tooltip_text(Some("Add this sound as a new instrument"));
         let (a, k, p) = (app.clone(), kit.clone(), piece.clone());
         row.connect_activated(move |_| samples_ui::add_piece(&a, &k, &p));
+        samples_ui::make_draggable(&row, piece.path.clone());
         expander.add_row(&row);
         rows.push(row);
     }

@@ -1829,7 +1829,8 @@ up a DAW." The UI assumes the user has never used a DAW.
   |---|---|
   | Step, step sequencer | **Grid** ("Click squares to place hits") |
   | Piano roll | **Piano** ("Draw notes; higher is higher pitch") |
-  | Pattern, clip content | not shown (clips only) |
+  | Pattern (clip content) | not shown (clips only) |
+| Pattern (group of clips, 20.7) | **Pattern**, in the Patterns lane (tooltip: "A beat or section made of several instruments, placed as one block") |
   | Clip | **Clip** (tooltip: "A piece of music on a row") |
   | Velocity | **Volume** (per hit) |
   | Ratchet | **Repeats** |

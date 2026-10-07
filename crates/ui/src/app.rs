@@ -87,6 +87,8 @@ pub struct App {
     view_listeners: RefCell<Vec<Rc<dyn Fn()>>>,
     command_listeners: RefCell<Vec<CommandListener>>,
     peaks: RefCell<[std::collections::HashMap<TrackId, [f32; 2]>; 2]>,
+    /// Waveform summaries of audio clips (SPEC 21.1).
+    pub wave_peaks: crate::audio_clips::PeakCache,
 }
 
 /// Who reads the meter peaks (each keeps its own accumulation).
@@ -134,6 +136,7 @@ impl App {
             view_listeners: RefCell::new(Vec::new()),
             command_listeners: RefCell::new(Vec::new()),
             peaks: RefCell::default(),
+            wave_peaks: Default::default(),
             dirs,
             session_id: doc::persist::session_id(
                 std::time::SystemTime::now()
@@ -381,7 +384,19 @@ impl App {
                 if let Some(ch) = channel {
                     self.select_channel(ch);
                 }
-                self.toast("This instrument has no clips yet: click its row on the timeline");
+                let audio = channel.is_some_and(|ch| {
+                    self.session
+                        .borrow()
+                        .document()
+                        .project
+                        .channel(ch)
+                        .is_some_and(|c| matches!(c.instrument, protocol::model::Instrument::Audio))
+                });
+                self.toast(if audio {
+                    "A sound row has no notes: drop a sound on it to add one"
+                } else {
+                    "This instrument has no clips yet: click its row on the timeline"
+                });
             }
         }
     }

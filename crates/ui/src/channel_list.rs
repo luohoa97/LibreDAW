@@ -51,6 +51,18 @@ pub fn signature(app: &App, row_h: u32) -> String {
             c.choke_group,
             s.sample_missing(c) as u8
         ));
+        // What the menu offers changes with the shapes and the effects.
+        for (name, _) in crate::shape_logic::choices(p, c.id) {
+            out.push_str(&name);
+            out.push(',');
+        }
+    }
+    for sh in &p.shapes {
+        out.push_str(&format!(
+            "S{}:{};",
+            sh.id.0,
+            crate::shape_logic::lane_name(p, sh)
+        ));
     }
     out
 }
@@ -63,6 +75,11 @@ impl ChannelList {
         widget.set_halign(gtk::Align::Start);
         let spacer = gtk::Box::new(gtk::Orientation::Vertical, 0);
         spacer.set_height_request(tl::RULER_H as i32);
+        // The Patterns lane's header sits level with the lane (SPEC 20.7).
+        let patterns = crate::patterns_ui::header(app);
+        patterns.set_valign(gtk::Align::End);
+        patterns.set_height_request(tl::PATTERN_H as i32);
+        spacer.append(&patterns);
         widget.append(&spacer);
         // A stock list: hover and selection come from libadwaita.
         let rows = gtk::ListBox::new();
@@ -215,13 +232,44 @@ impl ChannelList {
         }
         self.labels.borrow_mut().clear();
         self.row_widgets.borrow_mut().clear();
-        let (chans, missing) = {
+        let (chans, missing, layout, lane_names) = {
             let s = self.app.session.borrow();
-            let chans = s.document().project.channels.clone();
+            let p = &s.document().project;
+            let chans = p.channels.clone();
             let missing: Vec<bool> = chans.iter().map(|c| s.sample_missing(c)).collect();
-            (chans, missing)
+            let lane_names: Vec<(protocol::ids::ShapeId, String)> = p
+                .shapes
+                .iter()
+                .map(|sh| (sh.id, crate::shape_logic::lane_name(p, sh)))
+                .collect();
+            (chans, missing, crate::shape_logic::layout(p), lane_names)
         };
-        for (i, (ch, miss)) in chans.into_iter().zip(missing).enumerate() {
+        let mut by_channel: Vec<Option<(usize, std::sync::Arc<protocol::model::Channel>, bool)>> =
+            chans
+                .into_iter()
+                .zip(missing)
+                .enumerate()
+                .map(|(i, (c, m))| Some((i, c, m)))
+                .collect();
+        for kind in layout {
+            let (i, ch, miss) = match kind {
+                crate::timeline_logic::Row::Instrument(id) => {
+                    match by_channel
+                        .iter_mut()
+                        .find(|c| c.as_ref().is_some_and(|c| c.1.id == id))
+                        .and_then(Option::take)
+                    {
+                        Some(x) => x,
+                        None => continue,
+                    }
+                }
+                crate::timeline_logic::Row::Shape(id) => {
+                    if let Some((_, name)) = lane_names.iter().find(|(s, _)| *s == id) {
+                        self.append_shape_row(id, name, row_h);
+                    }
+                    continue;
+                }
+            };
             let row = gtk::ListBoxRow::new();
             row.set_activatable(true);
             row.set_height_request(row_h as i32);
@@ -246,6 +294,44 @@ impl ChannelList {
             }
             self.row_widgets.borrow_mut().push((ch.id, row));
         }
+    }
+
+    /// A lane under an instrument: its name and a button that removes it.
+    /// It is not an instrument, so it is never selected or played.
+    fn append_shape_row(
+        self: &Rc<ChannelList>,
+        id: protocol::ids::ShapeId,
+        name: &str,
+        row_h: u32,
+    ) {
+        let row = gtk::ListBoxRow::new();
+        row.set_activatable(false);
+        row.set_selectable(false);
+        row.set_height_request(row_h as i32);
+        row.set_tooltip_text(Some(crate::shape_logic::TOOLTIP));
+        row.update_property(&[gtk::accessible::Property::Label(name)]);
+        let content = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+        content.set_margin_start(18);
+        let label = gtk::Label::new(Some(name));
+        label.add_css_class("caption");
+        label.add_css_class("dim-label");
+        label.set_xalign(0.0);
+        label.set_hexpand(true);
+        label.set_ellipsize(gtk::pango::EllipsizeMode::End);
+        content.append(&label);
+        let remove = gtk::Button::from_icon_name("window-close-symbolic");
+        remove.add_css_class("flat");
+        remove.add_css_class("circular");
+        remove.set_valign(gtk::Align::Center);
+        remove.set_tooltip_text(Some("Remove this shape"));
+        remove.update_property(&[gtk::accessible::Property::Label("Remove this shape")]);
+        let a = self.app.clone();
+        remove.connect_clicked(move |_| {
+            a.edit(vec![Edit::RemoveShape { shape: id }]);
+        });
+        content.append(&remove);
+        row.set_child(Some(&content));
+        self.rows.append(&row);
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -374,7 +460,7 @@ impl ChannelList {
                     Some(gtk::glib::VariantTy::INT32),
                     &(choke as i32).to_variant(),
                 )
-            } else if matches!(*name, "drive" | "duck") {
+            } else if matches!(*name, "drive" | "duck" | "shape") {
                 gio::SimpleAction::new(name, Some(gtk::glib::VariantTy::INT32))
             } else {
                 gio::SimpleAction::new(name, None)
@@ -391,7 +477,15 @@ impl ChannelList {
         }
         row.insert_action_group("row", Some(&group));
         let a = self.app.clone();
-        crate::context_menu::attach(row, &menus::channel_menu(), move |_| {
+        let (names, basic) = {
+            let s = self.app.session.borrow();
+            let list = crate::shape_logic::choices(&s.document().project, id);
+            (
+                list.iter().map(|(n, _)| n.clone()).collect::<Vec<_>>(),
+                crate::shape_logic::basic_count(&list),
+            )
+        };
+        crate::context_menu::attach(row, &menus::channel_menu_with(&names, basic), move |_| {
             if a.current_channel() != Some(id) {
                 a.select_channel(id);
             }

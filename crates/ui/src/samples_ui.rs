@@ -51,7 +51,7 @@ impl ImportItem {
 }
 
 /// Copies or records one file. Runs on a worker thread.
-fn import_one(home: &Path, item: &ImportItem) -> Result<SampleRef, String> {
+pub(crate) fn import_one(home: &Path, item: &ImportItem) -> Result<SampleRef, String> {
     if let Some(want) = &item.expect_sha256 {
         let bytes = std::fs::read(&item.path)
             .map_err(|e| format!("Cannot read {}: {e}", item.path.display()))?;
@@ -333,6 +333,18 @@ pub fn choose_for_channel(parent: &impl IsA<gtk::Widget>, app: &Rc<App>, channel
             }
         },
     );
+}
+
+/// Lets a sound row be dragged onto the timeline (SPEC 21.1): the drop
+/// carries the file, like a file from the file manager.
+pub fn make_draggable(widget: &impl IsA<gtk::Widget>, path: PathBuf) {
+    let src = gtk::DragSource::new();
+    src.set_actions(gdk::DragAction::COPY);
+    src.connect_prepare(move |_, _, _| {
+        let list = gdk::FileList::from_array(&[gio::File::for_path(&path)]);
+        Some(gdk::ContentProvider::for_value(&list.to_value()))
+    });
+    widget.add_controller(src);
 }
 
 /// Accepts WAV files dropped from the file manager on `widget`: each

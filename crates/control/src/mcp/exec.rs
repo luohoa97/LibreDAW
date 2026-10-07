@@ -189,6 +189,10 @@ impl Exec {
             } => return self.send(body, base_revision, refresh),
             Plan::Compose(c) => self.compose(&c),
             Plan::Summary => self.summary(),
+            Plan::AudioDrop(a) => self.audio_drop(&a),
+            Plan::PatternList => self
+                .project()
+                .map(|(_, p)| ToolOutput::ok(super::v4::pattern_list(&p))),
             Plan::Inspect(a) => self.inspect(&a),
             Plan::ContentGet(t) => self.content_get(&t),
             Plan::Transport => self.transport(),
@@ -259,6 +263,39 @@ impl Exec {
             }
         }
         unreachable!("the loop returns")
+    }
+
+    /// `audio_clip_add` of a whole sound: the window imports it, measures
+    /// it and places it (the drop), and the reply names the row and clip.
+    fn audio_drop(&self, a: &super::v4::AudioClipAddArgs) -> Out<ToolOutput> {
+        let (rev, project) = self.project()?;
+        let body = super::v4::drop_request(&project, a)
+            .map_err(|m| ToolOutput::error("bad_arguments", &clean_text(&m)))?;
+        let applied = match self.call(body, Some(rev)) {
+            Ok(Outcome::Ok {
+                body: ReplyBody::Applied(a),
+            }) => a,
+            Ok(Outcome::Ok { .. }) => return Err(unexpected("the drop")),
+            Ok(Outcome::Err { error }) => return Err(edit_error_out(&error, &[])),
+            Err(e) => return Err(call_error_out(&e)),
+        };
+        let n = applied.created.len();
+        let mut built = Built::default();
+        if let Some(clip) = applied.created.last() {
+            built.reply.insert("clip".into(), json!(clip));
+            built.report_clips.push(protocol::ids::ClipId(*clip));
+        }
+        let row = a
+            .instrument
+            .map(|i| i.0)
+            .or_else(|| n.checked_sub(2).map(|i| applied.created[i]));
+        if let Some(row) = row {
+            built.reply.insert("instrument".into(), json!(row));
+        }
+        built
+            .diff
+            .push("sound placed at its full length as an audio clip".into());
+        Ok(self.composed_reply(applied, built))
     }
 
     fn composed_reply(&self, applied: Applied, built: Built) -> ToolOutput {

@@ -17,6 +17,11 @@ fn clips(app: &App) -> Vec<Clip> {
     app.session.borrow().document().project.clips.clone()
 }
 
+/// Whether the clip plays audio instead of notes.
+pub fn is_audio(app: &App, id: ClipId) -> bool {
+    clips(app).iter().any(|c| c.id == id && c.audio.is_some())
+}
+
 /// Click on an empty spot of `instrument`'s row: a one-bar clip at the
 /// bar under the pointer (shortened before the next clip), selected.
 /// Returns the new clip.
@@ -118,9 +123,34 @@ pub fn delete(app: &Rc<App>, ids: &[ClipId]) {
     }
 }
 
+/// Ctrl+G or Make Pattern: the selected clips, one per row, become a
+/// pattern that moves and copies as one block (SPEC 20.7). Returns whether
+/// it was made.
+pub fn make_pattern(app: &Rc<App>, ids: &[ClipId]) -> bool {
+    let (ok, name) = {
+        let s = app.session.borrow();
+        let p = &s.document().project;
+        (
+            crate::pattern_logic::can_make(p, ids),
+            crate::pattern_logic::new_name(p),
+        )
+    };
+    if let Err(m) = ok {
+        app.toast(m);
+        return false;
+    }
+    app.edit(vec![Edit::MakePattern {
+        clips: ids.to_vec(),
+        name,
+    }])
+    .is_some()
+}
+
 /// What a clip menu item does, by its action name (`menus::CLIP_ACTIONS`).
 pub fn perform(app: &Rc<App>, ids: &[ClipId], action: &str) {
     match action {
+        // An audio clip has no notes to edit.
+        "edit" if ids.first().is_some_and(|c| is_audio(app, *c)) => {}
         "edit" => {
             if let Some(c) = ids.first() {
                 app.select_clip(*c);
@@ -134,6 +164,9 @@ pub fn perform(app: &Rc<App>, ids: &[ClipId], action: &str) {
         "split" => split_at(app, ids, app.playhead_tick().min(u32::MAX as u64) as u32),
         "mute" => toggle_mute(app, ids),
         "delete" => delete(app, ids),
+        "make-pattern" => {
+            make_pattern(app, ids);
+        }
         _ => {}
     }
 }

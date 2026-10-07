@@ -10,8 +10,6 @@ pub const FORBIDDEN: &[(&str, &str)] = &[
     ("steps", "Grid (or hits)"),
     ("step sequencer", "Grid"),
     ("piano roll", "Piano"),
-    ("pattern", "clip, or nothing"),
-    ("patterns", "clips, or nothing"),
     ("velocity", "Volume"),
     ("ratchet", "Repeats"),
     ("quantize", "Snap to Grid"),
@@ -137,6 +135,14 @@ mod tests {
     }
 
     #[test]
+    fn patterns_are_named_in_the_lane_and_menus() {
+        // SPEC 20.7: "Pattern" is shown, with its one-line explanation.
+        assert!(violations("Make Pattern").is_empty());
+        assert!(violations(crate::pattern_logic::TOOLTIP).is_empty());
+        assert!(!violations("Pan").is_empty(), "Left/Right instead");
+    }
+
+    #[test]
     fn the_checker_finds_jargon() {
         assert!(!violations("Show the Velocity Lane").is_empty());
         assert!(violations("Volume of each hit").is_empty());
@@ -179,6 +185,9 @@ mod tests {
             crate::menus::main_menu(),
             crate::menus::channel_menu(),
             crate::menus::clip_menu(),
+            crate::menus::pattern_menu(),
+            crate::menus::shape_lane_menu(),
+            crate::menus::shape_point_menu(),
             crate::menus::roll_menu(),
             crate::menus::strip_menu(),
             crate::menus::sound_menu(),

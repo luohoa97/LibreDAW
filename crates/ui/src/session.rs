@@ -366,6 +366,19 @@ impl Session {
         self.sample_home.as_deref()
     }
 
+    /// The file that holds a sample of the project, if it can be found.
+    pub fn sample_path(&self, hash: &str) -> Option<PathBuf> {
+        let home = self.sample_home.as_deref()?;
+        let sample = self
+            .editor
+            .document()
+            .project
+            .samples
+            .iter()
+            .find(|s| s.hash == hash)?;
+        resolve_sample(home, sample, &self.local_samples)
+    }
+
     /// Reloads the local-only registry (after an import added to it).
     pub fn reload_local_samples(&mut self) {
         if let Some(p) = doc::samples::default_local_samples_path() {

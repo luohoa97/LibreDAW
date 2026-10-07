@@ -15,7 +15,7 @@ use protocol::ids::{ChannelId, InstanceId};
 use protocol::model::{Instrument, SynthParam, SynthParams, Wave};
 
 use crate::app::{App, UiCommand};
-use crate::inspector_native::{Bass808Page, SamplerPage};
+use crate::inspector_native::{AudioPage, Bass808Page, SamplerPage};
 use crate::knob_logic::{MACROS, MORE, format_value, from_unit, to_unit, vary};
 use crate::shortcuts;
 use crate::widgets::color_bar::ColorBar;
@@ -59,6 +59,7 @@ struct SoundPage {
     no_window: gtk::Label,
     bass: Rc<Bass808Page>,
     samp: Rc<SamplerPage>,
+    audio: Rc<AudioPage>,
     updating: Cell<bool>,
     seed: Cell<u64>,
     instance: Cell<Option<InstanceId>>,
@@ -270,6 +271,8 @@ impl SoundPage {
         stack.add_named(&bass.widget, Some("bass808"));
         let samp = SamplerPage::new(app);
         stack.add_named(&samp.widget, Some("sampler"));
+        let audio = AudioPage::new(app);
+        stack.add_named(&audio.widget, Some("audio"));
 
         let page = Rc::new(SoundPage {
             app: app.clone(),
@@ -286,6 +289,7 @@ impl SoundPage {
             no_window,
             bass,
             samp,
+            audio,
             updating: Cell::new(false),
             seed: Cell::new(0x9e37_79b9_7f4a_7c15),
             instance: Cell::new(None),
@@ -520,8 +524,10 @@ impl SoundPage {
                 self.expert.set_sensitive(has_gui);
                 self.no_window.set_visible(!has_gui);
             }
-            // TODO(ui teammate): an inspector page for audio rows (21.1).
-            Instrument::Audio => {}
+            Instrument::Audio => {
+                self.stack.set_visible_child_name("audio");
+                self.audio.sync(&channel, slot);
+            }
         }
         self.updating.set(false);
     }
