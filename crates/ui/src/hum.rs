@@ -31,12 +31,26 @@ use crate::hum_logic::{Effect, Flow, HumNote, Input, Phase, PlaceOpts, free_star
 /// Turns a recording into the notes heard in it.
 pub type Transcriber = fn(&engine::Captured) -> Result<Vec<HumNote>, String>;
 
-/// Until the transcription crate is wired in.
-fn not_ready(_: &engine::Captured) -> Result<Vec<HumNote>, String> {
-    Err("Turning a hum into notes is not ready in this version of Oto.".into())
+/// The real model: the hum downmixed to mono, one voice.
+fn real(c: &engine::Captured) -> Result<Vec<HumNote>, String> {
+    let opts = transcribe::Options {
+        monophonic: true,
+        onset_threshold: 0.4,
+        ..Default::default()
+    };
+    let notes = transcribe::transcribe(&c.mono(), c.rate, &opts).map_err(|e| e.to_string())?;
+    Ok(notes
+        .iter()
+        .map(|n| HumNote {
+            start_s: n.start_s,
+            end_s: n.end_s,
+            key: n.midi_key,
+            volume: n.velocity as f32 / 127.0,
+        })
+        .collect())
 }
 
-static TRANSCRIBER: Mutex<Transcriber> = Mutex::new(not_ready);
+static TRANSCRIBER: Mutex<Transcriber> = Mutex::new(real);
 
 /// Replaces the transcription (the real model, or a fake in tests).
 pub fn set_transcriber(f: Transcriber) {
@@ -602,13 +616,9 @@ fn announce(
     if clips.is_empty() {
         return;
     }
-    let weights: Vec<(u8, f32)> = heard
-        .iter()
-        .map(|n| (n.key, (n.end_s - n.start_s) as f32))
-        .collect();
-    let key = shared::detect_key(&weights);
-    let msg = match key {
-        Some(k) => format!("Your hum is in {}", k.name()),
+    let weights: Vec<(u8, f64)> = heard.iter().map(|n| (n.key, n.end_s - n.start_s)).collect();
+    let msg = match shared::key_name(&weights) {
+        Some(k) => format!("Your hum is in {k}"),
         None => format!("Added {} notes from your hum", placement.note_count()),
     };
     let after = app.session.borrow().document().revision;
@@ -835,5 +845,50 @@ mod tests {
         let (state, ids, _) = job().unwrap();
         assert_eq!(state, JobState::Done);
         assert_eq!(ids, vec![made[0].0]);
+    }
+
+    /// A sung-like sine melody (A3 C4 E4 A3, gentle vibrato, soft edges),
+    /// stereo, through the stub microphone, the real model, and the timeline.
+    #[test]
+    fn a_sine_melody_becomes_notes_end_to_end() {
+        let rate = 44_100u32;
+        let melody = [(220.0f64, 57u8), (261.63, 60), (329.63, 64), (220.0, 57)];
+        let mut samples = Vec::new();
+        let mut phase = 0.0f64;
+        for (f, _) in melody {
+            let n = (rate as f64 * 0.7) as usize;
+            for i in 0..n {
+                let t = i as f64 / rate as f64;
+                let vib = 1.0 + 0.004 * (std::f64::consts::TAU * 5.0 * t).sin();
+                phase += std::f64::consts::TAU * f * vib / rate as f64;
+                let env = (i.min(n - i) as f64 / (0.03 * rate as f64)).min(1.0);
+                let v = (0.4 * env * phase.sin()) as f32;
+                samples.extend([v, v]);
+            }
+            samples.extend(std::iter::repeat_n(0.0f32, rate as usize / 10 * 2));
+        }
+        let a = app();
+        a.session.borrow_mut().link.stub_capture = Some(engine::Captured {
+            rate,
+            channels: 2,
+            samples,
+        });
+        a.session.borrow_mut().link.start_capture().unwrap();
+        let rec = a.session.borrow_mut().link.stop_capture();
+        let heard = real(&rec).expect("the model runs");
+        assert!(heard.len() >= 3, "{heard:?}");
+        let keys: Vec<u8> = heard.iter().map(|n| n.key).collect();
+        for want in [57u8, 60, 64] {
+            assert!(
+                keys.iter().any(|k| k.abs_diff(want) <= 1),
+                "{want} in {keys:?}"
+            );
+        }
+        let c = add_synth(&a);
+        a.select_channel(c);
+        let made = put_on_timeline(&a, &heard, None, false);
+        assert_eq!(made.len(), 1);
+        let p = a.session.borrow().document().project.clone();
+        assert!(p.pattern(clips(&a)[0].pattern).unwrap().notes.len() >= 3);
     }
 }

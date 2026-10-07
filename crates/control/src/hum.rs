@@ -53,76 +53,27 @@ pub fn decode(text: &str) -> Option<Prepare> {
     })
 }
 
-/// A key: tonic as a pitch class (0 is C) and major or minor.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Key {
-    pub tonic: u8,
-    pub minor: bool,
-}
-
-impl Key {
-    /// "A minor", "F# major".
-    pub fn name(&self) -> String {
-        const NAMES: [&str; 12] = [
-            "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B",
-        ];
-        format!(
-            "{} {}",
-            NAMES[(self.tonic % 12) as usize],
-            if self.minor { "minor" } else { "major" }
-        )
+/// The key that fits `(midi key, length)` pairs best, for example
+/// "A minor". `None` for fewer than three notes or a single pitch class.
+pub fn key_name(notes: &[(u8, f64)]) -> Option<String> {
+    let mut classes = [false; 12];
+    for (k, _) in notes {
+        classes[(*k % 12) as usize] = true;
     }
-}
-
-const MAJOR: [f32; 12] = [
-    6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88,
-];
-const MINOR: [f32; 12] = [
-    6.33, 2.68, 3.52, 5.38, 2.60, 3.53, 2.54, 4.75, 3.98, 2.69, 3.34, 3.17,
-];
-
-fn correlation(a: &[f32; 12], b: &[f32; 12], shift: usize) -> f32 {
-    let ma = a.iter().sum::<f32>() / 12.0;
-    let mb = b.iter().sum::<f32>() / 12.0;
-    let (mut num, mut da, mut db) = (0.0, 0.0, 0.0);
-    for i in 0..12 {
-        let x = a[(i + shift) % 12] - ma;
-        let y = b[i] - mb;
-        num += x * y;
-        da += x * x;
-        db += y * y;
-    }
-    if da == 0.0 || db == 0.0 {
-        0.0
-    } else {
-        num / (da.sqrt() * db.sqrt())
-    }
-}
-
-/// The best fitting key for `(midi key, weight)` pairs (Krumhansl-Schmuckler;
-/// the weight is usually the note's length). `None` for fewer than three
-/// notes or one pitch class only.
-pub fn detect_key(notes: &[(u8, f32)]) -> Option<Key> {
-    if notes.len() < 3 {
+    if notes.len() < 3 || classes.iter().filter(|c| **c).count() < 2 {
         return None;
     }
-    let mut hist = [0.0f32; 12];
-    for (k, w) in notes {
-        hist[(*k % 12) as usize] += w.max(0.0);
-    }
-    if hist.iter().filter(|v| **v > 0.0).count() < 2 {
-        return None;
-    }
-    let mut best: Option<(f32, Key)> = None;
-    for tonic in 0..12u8 {
-        for (minor, profile) in [(false, &MAJOR), (true, &MINOR)] {
-            let c = correlation(&hist, profile, tonic as usize);
-            if best.is_none_or(|(b, _)| c > b) {
-                best = Some((c, Key { tonic, minor }));
-            }
-        }
-    }
-    best.map(|(_, k)| k)
+    let events: Vec<transcribe::NoteEvent> = notes
+        .iter()
+        .map(|(k, len)| transcribe::NoteEvent {
+            start_s: 0.0,
+            end_s: len.max(0.0),
+            midi_key: *k,
+            velocity: 100,
+            confidence: 1.0,
+        })
+        .collect();
+    transcribe::detect_key(&events).map(|k| k.name())
 }
 
 #[cfg(test)]
@@ -158,8 +109,7 @@ mod tests {
 
     #[test]
     fn finds_a_minor_and_c_major() {
-        // A minor: A B C D E F G A, tonic and fifth held longer.
-        let a_minor: Vec<(u8, f32)> = [
+        let a_minor = [
             (57, 2.0),
             (59, 1.0),
             (60, 1.0),
@@ -168,10 +118,9 @@ mod tests {
             (65, 0.5),
             (67, 0.5),
             (57, 2.0),
-        ]
-        .into();
-        assert_eq!(detect_key(&a_minor).unwrap().name(), "A minor");
-        let c_major: Vec<(u8, f32)> = [
+        ];
+        assert_eq!(key_name(&a_minor).unwrap(), "A minor");
+        let c_major = [
             (60, 2.0),
             (62, 1.0),
             (64, 1.0),
@@ -180,9 +129,8 @@ mod tests {
             (69, 1.0),
             (71, 0.5),
             (60, 2.0),
-        ]
-        .into();
-        assert_eq!(detect_key(&c_major).unwrap().name(), "C major");
-        assert_eq!(detect_key(&[(60, 1.0)]), None);
+        ];
+        assert_eq!(key_name(&c_major).unwrap(), "C major");
+        assert_eq!(key_name(&[(60, 1.0)]), None);
     }
 }

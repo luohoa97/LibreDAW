@@ -749,8 +749,8 @@ impl Exec {
                 }));
             }
         }
-        let weights: Vec<(u8, f32)> = all.iter().map(|n| (n.key, n.len as f32)).collect();
-        let key = crate::hum::detect_key(&weights).map(|k| k.name());
+        let weights: Vec<(u8, f64)> = all.iter().map(|n| (n.key, n.len as f64)).collect();
+        let key = crate::hum::key_name(&weights);
         let end = clips.iter().map(|c| c.end()).max().unwrap_or(first.end());
         Ok(ToolOutput::ok(json!({
             "state": "done",

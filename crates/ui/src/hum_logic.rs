@@ -57,10 +57,6 @@ fn to_ticks(seconds: f64, bpm: f64) -> i64 {
     (seconds * bpm / 60.0 * PPQ as f64).round() as i64
 }
 
-fn snap(v: i64, grid: i64) -> i64 {
-    (v + grid / 2).div_euclid(grid) * grid
-}
-
 fn velocity(volume: f32) -> u8 {
     (40.0 + 87.0 * volume.clamp(0.0, 1.0)).round() as u8
 }
@@ -72,19 +68,32 @@ pub fn place(heard: &[HumNote], o: &PlaceOpts) -> Placement {
     let grid = DEFAULT_STEP_TICKS as i64;
     let mut raw: Vec<(i64, i64, u8, u8)> = Vec::new();
     let mut dropped = 0;
-    for n in heard {
-        if n.start_s < 0.0 || n.end_s <= n.start_s {
-            dropped += 1;
-            continue;
-        }
+    let events: Vec<transcribe::NoteEvent> = heard
+        .iter()
+        .filter(|n| {
+            let ok = n.start_s >= 0.0 && n.end_s > n.start_s;
+            dropped += !ok as usize;
+            ok
+        })
+        .map(|n| transcribe::NoteEvent {
+            start_s: n.start_s,
+            end_s: n.end_s,
+            midi_key: n.key,
+            velocity: velocity(n.volume),
+            confidence: 1.0,
+        })
+        .collect();
+    // To the sixteenth grid unless the user keeps their own timing.
+    let events = transcribe::quantize(&events, o.bpm, 0.25, 0.0, o.keep_timing);
+    for n in &events {
         let s = to_ticks(n.start_s, o.bpm);
         let l = to_ticks(n.end_s, o.bpm) - s;
-        let (s, l) = if o.keep_timing {
-            (s, l.max(60))
+        let l = if o.keep_timing {
+            l.max(60)
         } else {
-            (snap(s, grid), snap(l, grid).max(grid))
+            l.max(grid)
         };
-        raw.push((s, l, n.key.min(127), velocity(n.volume)));
+        raw.push((s, l, n.midi_key.min(127), n.velocity));
     }
     raw.sort_by_key(|n| (n.0, std::cmp::Reverse(n.1)));
     // One voice: a note that lands where another starts is dropped; one that
