@@ -125,7 +125,11 @@ The `ui` crate runs the control socket server (`$XDG_RUNTIME_DIR/libredaw/contro
 17.1). Wire format: one `protocol::control::Request` per line in, one
 `protocol::control::Reply` per line out, JSON. The first line from a
 client is a hello: `{"hello": {"transport": "agent" | "script", "client": "<name>"}}`
-(ui replies `{"hello_ok": {"protocol": 1}}`). The `script` crate runs the
+(ui replies `{"hello_ok": {"protocol": 1}}`). A refused hello gets one line
+`{"hello_err": {"reason": "agents_disabled" | "not_allowed" | "bad_hello" | "busy_owner"}}`
+and the server closes the connection. `agents_disabled` means the user has not
+enabled agent control for this session; clients show "enable agent control in
+LibreDAW" rather than a protocol error. The `script` crate runs the
 Deno child and translates its stdio JSON to these requests; `mcp` maps MCP
 tools to these requests.
 
