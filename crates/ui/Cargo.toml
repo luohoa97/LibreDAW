@@ -12,3 +12,6 @@ name = "ui"
 [dependencies]
 libredaw-protocol = { path = "../protocol" }
 libredaw-plugin-host = { path = "../plugin-host" }
+libredaw-engine = { path = "../engine" }
+gtk4 = { version = "0.11", features = ["v4_10"] }
+libadwaita = { version = "0.9", features = ["v1_5"] }
