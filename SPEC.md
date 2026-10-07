@@ -1042,7 +1042,41 @@ A preset is a small TOML file: engine id, plugin state or native
 parameters, macro mappings, tags, loudness. User libraries from other
 installed DAWs (15.3) appear as local-only packs in the same browser.
 
+Imported sounds get the same layer. A user library (15.3) is analyzed once
+when added, on a worker thread, and the results cached in
+`~/.cache/libredaw/`:
+- loudness, for level matching;
+- pitch and key for tonal one-shots (808s, bass, melodic samples), so they
+  play in key;
+- tempo and length for loops, so they sync to the project;
+- role guess (kick, snare, hat, 808, loop, vocal, fx) from the file name,
+  folder name, and simple audio features, editable by the user.
+Imported samples then load into the sampler, whose macros (Pitch, Tone,
+Punch, Length, Grit, Space) work the same as for built-in sounds. The
+built-in kits are still needed so the DAW works out of the box for users
+with no other libraries; they are not needed for quality.
 
+
+
+### 15.11 History tree (versions)
+
+Undo (section 6) already stores immutable project snapshots with shared
+structure, so a tree costs little extra memory.
+- Undo history is a tree, not a stack: making an edit after undoing starts
+  a new branch instead of discarding the redo states.
+- Beginners see normal Undo and Redo plus a "History" panel: a list of
+  named versions ("Version 3: darker 808") and, on demand, the branches.
+  Clicking a version restores it as a new edit (undoable).
+- "Save version" names the current state. Named versions persist in the
+  bundle as `versions/<n>-<slug>.toml`, full project files in the same
+  canonical text format (7.2), so they diff in git. Unnamed history is
+  in-memory only and dropped on close, within the section 6 memory limit
+  (named versions do not count against it).
+- Agents use the same tree through MCP: `version_save`, `version_list`,
+  `version_restore`, `history_tree`. An agent can try several variations on
+  branches and the user picks one.
+- Not a full git: no merge between branches (merging music edits is not
+  well defined), no remote sync.
 ## 16. Agent control (LibreDAW MCP)
 
 Status: approved scope (Amendment 6), not yet adversarially reviewed.
@@ -1139,6 +1173,12 @@ plugins, edit everything a user can edit, and make beats.
 ---
 
 ## Changelog
+
+### Amendment 7 (2026-10-07, owner)
+
+Imported sounds get the same preset layer via one-time analysis (15.10).
+Undo history becomes a tree with named, persisted versions (15.11),
+usable by agents through MCP.
 
 ### Amendment 6 (2026-10-07, owner)
 
