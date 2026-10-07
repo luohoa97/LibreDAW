@@ -5,7 +5,7 @@
 //!
 //! Edits that create entities carry no ids: `apply()` allocates them from
 //! the document's counter and reports them in `Applied::created`.
-//! Milestone A only; later milestones add variants (interface change).
+//! Adding variants is an interface change (orchestrator only).
 
 use serde::{Deserialize, Serialize};
 
@@ -141,7 +141,7 @@ pub enum Edit {
 
     // Steps and notes
     /// On: add a step note (velocity `vel`, default 100). Off: remove every
-    /// note at that step with the channel's root key (5.2).
+    /// step note at that step, whatever its pitch offset (5.2, 17.2).
     SetStep {
         pattern: PatternId,
         step: u8,

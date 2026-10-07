@@ -86,7 +86,7 @@ macro_rules! native_params {
 pub enum SampleMode {
     /// Plays to the end of the sample; ignores note-off and key.
     OneShot,
-    /// Key-tracked from the channel's root key; note-off starts release.
+    /// Key-tracked from the instrument's root key; note-off starts release.
     Pitched,
 }
 

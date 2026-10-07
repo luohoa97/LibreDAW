@@ -3,7 +3,7 @@
 //! 17.1). Requests and replies are newline-delimited JSON. The DAW, not the
 //! client, enforces the capability mask and the PRIVILEGED rule.
 //!
-//! Milestone A only; later milestones add variants (interface change).
+//! Adding variants is an interface change (orchestrator only).
 
 use std::sync::Arc;
 

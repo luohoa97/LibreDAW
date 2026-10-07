@@ -31,7 +31,7 @@ pub enum ValidationError {
     /// Sends and sidechains form a loop (17.2).
     RoutingCycle,
     /// Two clips on one instrument's row overlap.
-    Overlap { what: String, id: u32 },
+    Overlap { a: u32, b: u32 },
 }
 
 impl std::fmt::Display for ValidationError {
@@ -47,7 +47,7 @@ impl std::fmt::Display for ValidationError {
             ValidationError::NotSorted { what } => write!(f, "{what} not sorted"),
             ValidationError::BadMaster => write!(f, "master track must be track 0 and first"),
             ValidationError::RoutingCycle => write!(f, "sends and sidechains form a loop"),
-            ValidationError::Overlap { what, id } => write!(f, "{what} overlap at {id}"),
+            ValidationError::Overlap { a, b } => write!(f, "clips {a} and {b} overlap"),
         }
     }
 }
@@ -503,8 +503,8 @@ pub fn validate(p: &Project) -> Result<(), ValidationError> {
             }
             if a.instrument == c.instrument && a.end() > c.start {
                 return Err(ValidationError::Overlap {
-                    what: "clips".into(),
-                    id: c.id.0,
+                    a: a.id.0,
+                    b: c.id.0,
                 });
             }
         }

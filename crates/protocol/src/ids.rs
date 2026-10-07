@@ -30,7 +30,7 @@ id_type!(
     TrackId,
     /// A plugin or built-in effect instance (channel instrument or track insert).
     InstanceId,
-    /// A pattern clip on the playlist (15.6).
+    /// A clip on an instrument's row of the timeline (20.2).
     ClipId,
 );
 
