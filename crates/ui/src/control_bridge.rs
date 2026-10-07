@@ -268,6 +268,10 @@ impl Bridge {
         self.server.agents_enabled()
     }
 
+    pub fn socket_path(&self) -> &std::path::Path {
+        self.server.socket_path()
+    }
+
     pub fn shutdown(self) {
         if let Ok(s) = Rc::try_unwrap(self.server) {
             s.shutdown();
@@ -700,41 +704,182 @@ fn kit_add(
             what: "track".into(),
         }));
     }
-    let server = app.bridge.borrow().as_ref()?.server.clone();
     let items = kit
         .pieces
         .iter()
         .map(|p| crate::samples_ui::ImportItem::piece(p, kit.source))
         .collect();
+    let target = match track {
+        Some(t) => crate::channels::KitTrack::Existing(t),
+        None => crate::channels::KitTrack::New(format!("{} Kit", kit.title)),
+    };
+    let done = format!("Added the {} kit", kit.title);
+    let pieces = kit.pieces;
+    import_and_add(
+        app,
+        ticket,
+        author,
+        items,
+        move |i, s| crate::samples_ui::piece_setup(&pieces[i], s),
+        target,
+        done,
+        "Adding a drum kit",
+    )
+}
+
+/// `KitAdd` with this `pack` adds one sound by catalogue id (`kit` is the
+/// id) instead of a kit.
+pub const SOUND_BY_ID: &str = "@sound";
+
+/// `SoundSearch` carries the catalogue's extra arguments in `tags`:
+/// `source:FL Studio` and `offset:40`; every other tag is a search word.
+/// A reply entry carries its kind first in `tags` and its source in `pack`;
+/// an entry whose id starts with `note:` is a message for the agent.
+fn sound_search(
+    app: &Rc<App>,
+    role: Option<&str>,
+    genre: Option<&str>,
+    tags: &[String],
+    limit: u32,
+) -> ReplyBody {
+    use crate::sound_catalog as cat;
+    let mut q = cat::Query {
+        role: role.unwrap_or("").into(),
+        genre: genre.unwrap_or("").into(),
+        limit: limit.min(crate::sound_search::MAX_RESULTS) as usize,
+        ..cat::Query::default()
+    };
+    let mut words = Vec::new();
+    for t in tags {
+        if let Some(s) = t.strip_prefix("source:") {
+            q.source = s.into();
+        } else if let Some(n) = t.strip_prefix("offset:") {
+            q.offset = n.trim().parse().unwrap_or(0);
+        } else {
+            words.push(t.as_str());
+        }
+    }
+    q.text = words.join(" ");
+    let fl = fl_state(app);
+    let entries = catalogue(app, &fl);
+    let (page, total) = cat::search(&entries, &q);
+    let mut sounds: Vec<protocol::control::SoundInfo> = page
+        .into_iter()
+        .map(|e| {
+            let mut tags = vec![e.kind.to_string()];
+            tags.extend(e.tags.iter().map(|t| agent_string(t)));
+            protocol::control::SoundInfo {
+                id: agent_string(&e.id),
+                name: agent_string(&e.name),
+                role: agent_string(&e.role),
+                genres: if e.family.is_empty() {
+                    Vec::new()
+                } else {
+                    vec![agent_string(&e.family)]
+                },
+                tags,
+                pack: e.source.to_string(),
+                kit: None,
+            }
+        })
+        .collect();
+    let asks_fl = q.source.trim().is_empty() || q.source.to_lowercase().contains("fl");
+    if asks_fl && let Some(n) = cat::fl_note(&fl.status, fl.remembered) {
+        sounds.push(note(n));
+    }
+    if total > q.offset + sounds.iter().filter(|s| !s.id.starts_with("note:")).count() {
+        sounds.push(note(&format!(
+            "{total} sounds match; ask again with offset {} for the next ones.",
+            q.offset + q.limit
+        )));
+    }
+    ReplyBody::Sounds { sounds }
+}
+
+fn note(text: &str) -> protocol::control::SoundInfo {
+    protocol::control::SoundInfo {
+        id: "note:".into(),
+        name: text.into(),
+        role: String::new(),
+        genres: Vec::new(),
+        tags: Vec::new(),
+        pack: String::new(),
+        kit: None,
+    }
+}
+
+struct FlState {
+    status: crate::fl_library::Status,
+    remembered: bool,
+}
+
+/// The FL library as the Sounds pane has it. The choice saved earlier is
+/// picked up (and read) the first time an agent asks, without the pane
+/// having been opened. An agent never turns the library on.
+fn fl_state(app: &Rc<App>) -> FlState {
+    use crate::fl_library as fl;
+    let remembered = fl::load(&app.dirs.config).is_some();
+    if matches!(fl::status(), fl::Status::Off) && remembered {
+        crate::fl_browser::resume(app);
+    }
+    FlState {
+        status: fl::status(),
+        remembered,
+    }
+}
+
+fn loaded_of(fl: &FlState) -> Option<std::sync::Arc<crate::fl_library::Loaded>> {
+    match &fl.status {
+        crate::fl_library::Status::Ready(l) => Some(l.clone()),
+        _ => None,
+    }
+}
+
+fn catalogue(app: &Rc<App>, fl: &FlState) -> Vec<crate::sound_catalog::Entry> {
+    let kits = library(app);
+    let loaded = loaded_of(fl);
+    let a = app.clone();
+    crate::sound_catalog::build(
+        &kits,
+        &move |s| crate::sound_picker::available(&a, s),
+        loaded.as_deref(),
+    )
+}
+
+/// Imports `items` off the GTK thread, then adds one sampler channel per
+/// file (`make` builds each setup) in one undo group by the agent.
+#[allow(clippy::too_many_arguments)]
+fn import_and_add(
+    app: &Rc<App>,
+    ticket: Ticket,
+    author: &Author,
+    items: Vec<crate::samples_ui::ImportItem>,
+    make: impl Fn(usize, protocol::model::SampleRef) -> crate::channels::SamplerSetup + 'static,
+    track: crate::channels::KitTrack,
+    done: String,
+    working: &'static str,
+) -> Option<Outcome> {
+    let server = app.bridge.borrow().as_ref()?.server.clone();
     let (a, author) = (app.clone(), author.clone());
     crate::samples_ui::import(app, items, move |results| {
         let mut setups = Vec::new();
-        for (p, r) in kit.pieces.iter().zip(results) {
+        for (i, r) in results.into_iter().enumerate() {
             match r {
-                Ok(s) => setups.push(crate::samples_ui::piece_setup(p, s)),
+                Ok(s) => setups.push(make(i, s)),
                 Err(reason) => {
                     server.reply(ticket, err(ControlError::Internal { reason }));
                     return;
                 }
             }
         }
-        let target = match track {
-            Some(t) => crate::channels::KitTrack::Existing(t),
-            None => crate::channels::KitTrack::New(format!("{} Kit", kit.title)),
-        };
-        let o = match crate::channels::add_kit_as(&a, author.clone(), target, setups) {
+        let o = match crate::channels::add_kit_as(&a, author.clone(), track, setups) {
             Some(ids) => {
-                push_activity(
-                    &a,
-                    &author,
-                    agent_string(&format!("Added the {} kit", kit.title)),
-                    Vec::new(),
-                );
+                push_activity(&a, &author, agent_string(&done), Vec::new());
                 let created: Vec<u32> = ids.iter().map(|c| c.0).collect();
-                presence::on_applied(&a, &author, &created, "Adding a drum kit");
+                presence::on_applied(&a, &author, &created, working);
                 ok(ReplyBody::Applied(protocol::edit::Applied {
                     revision: revision(&a),
-                    created: ids.iter().map(|c| c.0).collect(),
+                    created,
                 }))
             }
             None => err(ControlError::Busy),
@@ -743,6 +888,136 @@ fn kit_add(
         changed(&a);
     });
     None
+}
+
+/// `KitAdd` by catalogue id: the same action as "+" in the Sounds pane.
+fn sound_add(
+    app: &Rc<App>,
+    ticket: Ticket,
+    author: &Author,
+    id: &str,
+    track: Option<protocol::ids::TrackId>,
+) -> Option<Outcome> {
+    use crate::channels::KitTrack;
+    use crate::sound_catalog::{self as cat, Target};
+    use crate::{fl_library as fl, samples_ui::ImportItem};
+    if let Some(t) = track
+        && app.session.borrow().document().project.track(t).is_none()
+    {
+        return Some(err(ControlError::NotFound {
+            what: "track".into(),
+        }));
+    }
+    let kits = library(app);
+    let state = fl_state(app);
+    let loaded = loaded_of(&state);
+    let Some(target) = cat::resolve(id, &kits, loaded.as_deref()) else {
+        let why = if id.starts_with("fl:") {
+            cat::fl_note(&state.status, state.remembered)
+        } else {
+            None
+        };
+        return Some(err(ControlError::NotFound {
+            what: why
+                .map(str::to_string)
+                .unwrap_or_else(|| "sound (use an id from sound_search)".into()),
+        }));
+    };
+    let target_track = |name: String| match track {
+        Some(t) => KitTrack::Existing(t),
+        None => KitTrack::New(name),
+    };
+    let fl_item = |e: &library::index::SoundEntry| ImportItem {
+        path: e.path.clone(),
+        local_only: true,
+        expect_sha256: None,
+    };
+    match target {
+        Target::OtoKit(k) => kit_add(
+            app,
+            ticket,
+            author,
+            &crate::sound_search::pack_of(k),
+            &k.id,
+            track,
+        ),
+        Target::Piece(k, p) => {
+            let p = p.clone();
+            let p2 = p.clone();
+            import_and_add(
+                app,
+                ticket,
+                author,
+                vec![ImportItem::piece(&p, k.source)],
+                move |_, s| crate::samples_ui::piece_setup(&p2, s),
+                target_track(p.name.clone()),
+                format!("Added {}", p.name),
+                "Adding a sound",
+            )
+        }
+        Target::FlSound(e) => {
+            let e = e.clone();
+            let e2 = e.clone();
+            import_and_add(
+                app,
+                ticket,
+                author,
+                vec![fl_item(&e)],
+                move |_, s| fl::sound_setup(&e2, s),
+                target_track(e.name.clone()),
+                format!("Added {}", e.name),
+                "Adding a sound",
+            )
+        }
+        Target::FlKit(k) => {
+            let l = loaded.as_deref()?;
+            let sounds: Vec<(&'static str, library::index::SoundEntry)> =
+                fl::kit_sounds(k, &l.index)
+                    .into_iter()
+                    .map(|(slot, e)| (slot, e.clone()))
+                    .collect();
+            if sounds.is_empty() {
+                return Some(err(ControlError::NotFound {
+                    what: "sounds in that kit".into(),
+                }));
+            }
+            let items = sounds.iter().map(|(_, e)| fl_item(e)).collect();
+            let name = k.name.clone();
+            import_and_add(
+                app,
+                ticket,
+                author,
+                items,
+                move |i, s| fl::kit_piece_setup(sounds[i].0, &sounds[i].1, s),
+                target_track(format!("{name} Kit")),
+                format!("Added the {name} kit"),
+                "Adding a drum kit",
+            )
+        }
+        Target::FlInstrument(inst) => {
+            let l = loaded.as_deref()?;
+            let Some((root, e)) = fl::instrument_root(inst, &l.index) else {
+                return Some(err(ControlError::NotFound {
+                    what: "sounds in that instrument".into(),
+                }));
+            };
+            let (item, name) = (fl_item(e), inst.name.clone());
+            let n2 = name.clone();
+            import_and_add(
+                app,
+                ticket,
+                author,
+                vec![item],
+                move |_, s| fl::instrument_setup(root, &n2, s),
+                target_track(name.clone()),
+                format!("Added {name}"),
+                "Adding an instrument",
+            )
+        }
+        Target::Surge(_) => Some(bad(
+            "add Surge XT sounds with instruments_add (kind plugin, plugin_id and preset)",
+        )),
+    }
 }
 
 /// Runs one request. Returns the outcome now, or `None` when the answer
@@ -995,19 +1270,20 @@ fn execute(app: &Rc<App>, ticket: Ticket, author: &Author, req: Request) -> Opti
             genre,
             tags,
             limit,
-        } => ok(ReplyBody::Sounds {
-            sounds: crate::sound_search::search(
-                &library(app),
-                role.as_deref(),
-                genre.as_deref(),
-                &tags,
-                limit.min(crate::sound_search::MAX_RESULTS),
-            ),
-        }),
+        } => ok(sound_search(
+            app,
+            role.as_deref(),
+            genre.as_deref(),
+            &tags,
+            limit,
+        )),
         RequestBody::KitAdd { pack, kit, track } => {
             let current = revision(app);
             if is_stale(base_revision, current) {
                 return Some(err(ControlError::Stale { current }));
+            }
+            if pack == SOUND_BY_ID {
+                return sound_add(app, ticket, author, &kit, track);
             }
             return kit_add(app, ticket, author, &pack, &kit, track);
         }
