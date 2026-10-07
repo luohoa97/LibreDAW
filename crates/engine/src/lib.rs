@@ -8,6 +8,7 @@ pub mod compiled;
 pub mod fx;
 pub mod groove;
 pub mod live;
+pub mod loadproject;
 pub mod metronome;
 pub mod mixer;
 pub mod plugins;
