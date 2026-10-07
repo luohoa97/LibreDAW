@@ -5,6 +5,11 @@
 
 cd (path resolve (status dirname)/..); or exit 2
 
+# cpal's pipewire feature builds pipewire-sys with bindgen, which needs libclang
+if not set -q LIBCLANG_PATH; and command -sq llvm-config
+    set -gx LIBCLANG_PATH (llvm-config --libdir)
+end
+
 function step
     echo "==> $argv"
     $argv

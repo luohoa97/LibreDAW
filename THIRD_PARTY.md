@@ -8,26 +8,77 @@ CI fails if this file is out of date.
 
 | Crate | Version | License | Why |
 |---|---|---|---|
-| cpal | 0.18.2 | Apache-2.0 | audio I/O (fixed stack); its `jack` feature pulls in the `jack` crate for the JACK/PipeWire-JACK backend |
+| cpal | 0.18.2 | Apache-2.0 | audio I/O (fixed stack); its `pipewire` feature adds the native PipeWire host (pipewire, libspa, and bindgen at build time) and its `jack` feature the JACK backend |
 
 ## All crates in the dependency graph (x86_64-unknown-linux-gnu)
 
 | Crate | Version | License |
 |---|---|---|
+| aho-corasick | 1.1.5 | Unlicense OR MIT |
 | alsa | 0.11.0 | Apache-2.0/MIT |
 | alsa-sys | 0.4.0 | MIT |
+| annotate-snippets | 0.11.5 | MIT OR Apache-2.0 |
+| anstyle | 1.0.14 | MIT OR Apache-2.0 |
+| bindgen | 0.72.1 | BSD-3-Clause |
 | bitflags | 1.3.2 | MIT/Apache-2.0 |
 | bitflags | 2.13.2 | MIT OR Apache-2.0 |
+| cc | 1.6.0 | MIT OR Apache-2.0 |
+| cexpr | 0.6.0 | Apache-2.0/MIT |
+| cfg-expr | 0.20.10 | MIT OR Apache-2.0 |
 | cfg-if | 1.0.5 | MIT OR Apache-2.0 |
+| clang-sys | 1.9.1 | Apache-2.0 |
+| cookie-factory | 0.3.3 | MIT |
 | cpal | 0.18.2 | Apache-2.0 |
 | dasp_sample | 0.11.0 | MIT OR Apache-2.0 |
+| either | 1.19.0 | MIT OR Apache-2.0 |
+| equivalent | 1.0.2 | Apache-2.0 OR MIT |
+| errno | 0.3.14 | MIT OR Apache-2.0 |
+| find-msvc-tools | 0.1.14 | MIT OR Apache-2.0 |
+| glob | 0.3.4 | MIT OR Apache-2.0 |
+| hashbrown | 0.17.1 | MIT OR Apache-2.0 |
+| heck | 0.5.0 | MIT OR Apache-2.0 |
+| indexmap | 2.14.2 | Apache-2.0 OR MIT |
+| itertools | 0.13.0 | MIT OR Apache-2.0 |
 | jack | 0.13.5 | MIT |
 | jack-sys | 0.5.1 | MIT OR Apache-2.0 |
 | lazy_static | 1.5.1 | MIT OR Apache-2.0 |
 | libc | 0.2.190 | MIT OR Apache-2.0 |
 | libloading | 0.7.4 | ISC |
+| libloading | 0.8.9 | ISC |
+| libspa | 0.10.1 | MIT |
+| libspa-sys | 0.10.1 | MIT |
+| linux-raw-sys | 0.12.1 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT |
 | log | 0.4.34 | MIT OR Apache-2.0 |
+| memchr | 2.8.3 | Unlicense OR MIT |
+| minimal-lexical | 0.2.1 | MIT/Apache-2.0 |
+| nom | 7.1.3 | MIT |
+| nom | 8.0.0 | MIT |
+| pipewire | 0.10.1 | MIT |
+| pipewire-sys | 0.10.1 | MIT |
 | pkg-config | 0.3.34 | MIT OR Apache-2.0 |
+| proc-macro2 | 1.0.107 | MIT OR Apache-2.0 |
+| quote | 1.0.47 | MIT OR Apache-2.0 |
+| regex | 1.13.1 | MIT OR Apache-2.0 |
+| regex-automata | 0.4.18 | MIT OR Apache-2.0 |
+| regex-syntax | 0.8.11 | MIT OR Apache-2.0 |
+| rustc-hash | 2.1.3 | Apache-2.0 OR MIT |
+| rustix | 1.1.5 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT |
+| serde_core | 1.0.229 | MIT OR Apache-2.0 |
+| serde_spanned | 1.1.1 | MIT OR Apache-2.0 |
+| shlex | 1.3.0 | MIT OR Apache-2.0 |
+| shlex | 2.0.1 | MIT OR Apache-2.0 |
+| smallvec | 1.16.2 | MIT OR Apache-2.0 |
+| syn | 2.0.119 | MIT OR Apache-2.0 |
+| system-deps | 7.0.8 | MIT OR Apache-2.0 |
+| target-lexicon | 0.13.5 | Apache-2.0 WITH LLVM-exception |
+| toml | 1.1.6+spec-1.1.0 | MIT OR Apache-2.0 |
+| toml_datetime | 1.1.1+spec-1.1.0 | MIT OR Apache-2.0 |
+| toml_parser | 1.1.3+spec-1.1.0 | MIT OR Apache-2.0 |
+| toml_writer | 1.1.2+spec-1.1.0 | MIT OR Apache-2.0 |
+| unicode-ident | 1.0.26 | (MIT OR Apache-2.0) AND Unicode-3.0 |
+| unicode-width | 0.2.2 | MIT OR Apache-2.0 |
+| version-compare | 0.2.1 | MIT |
+| winnow | 1.0.4 | MIT |
 
 ## System libraries (hand-maintained)
 
@@ -36,7 +87,9 @@ Linked dynamically, never bundled. LGPL libraries are only ever linked dynamical
 | Library | License | Used by | Why |
 |---|---|---|---|
 | libasound (ALSA) | LGPL-2.1-or-later | engine, through cpal | ALSA audio backend |
+| libpipewire-0.3 (PipeWire) | MIT | engine, through cpal's `pipewire` feature (pipewire-sys links it) | native PipeWire audio backend |
 | libjack (JACK or PipeWire-JACK) | LGPL-2.1-or-later | engine, through the `jack` crate, loaded with dlopen at run time | JACK audio backend |
+| libclang (build time only) | Apache-2.0 WITH LLVM-exception | bindgen, while building pipewire-sys | generates the libpipewire bindings; not linked into our binaries |
 | GTK4 | LGPL-2.1-or-later | ui (planned) | UI toolkit |
 | libadwaita | LGPL-2.1-or-later | ui (planned) | app shell widgets |
 | GLib | LGPL-2.1-or-later | ui (planned) | main loop, timers, fd sources |

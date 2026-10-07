@@ -10,4 +10,4 @@ publish.workspace = true
 name = "engine"
 
 [dependencies]
-cpal = { version = "0.18", default-features = false, features = ["jack"] }
+cpal = { version = "0.18", default-features = false, features = ["jack", "pipewire"] }

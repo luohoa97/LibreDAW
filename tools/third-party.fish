@@ -18,7 +18,7 @@ set -l target x86_64-unknown-linux-gnu
 function justification
     switch $argv[1]
         case cpal
-            echo "audio I/O (fixed stack); its `jack` feature pulls in the `jack` crate for the JACK/PipeWire-JACK backend"
+            echo "audio I/O (fixed stack); its `pipewire` feature adds the native PipeWire host (pipewire, libspa, and bindgen at build time) and its `jack` feature the JACK backend"
         case '*'
             return 1
     end
@@ -77,7 +77,9 @@ begin
     echo '| Library | License | Used by | Why |'
     echo '|---|---|---|---|'
     echo '| libasound (ALSA) | LGPL-2.1-or-later | engine, through cpal | ALSA audio backend |'
+    echo '| libpipewire-0.3 (PipeWire) | MIT | engine, through cpal'\''s `pipewire` feature (pipewire-sys links it) | native PipeWire audio backend |'
     echo '| libjack (JACK or PipeWire-JACK) | LGPL-2.1-or-later | engine, through the `jack` crate, loaded with dlopen at run time | JACK audio backend |'
+    echo '| libclang (build time only) | Apache-2.0 WITH LLVM-exception | bindgen, while building pipewire-sys | generates the libpipewire bindings; not linked into our binaries |'
     echo '| GTK4 | LGPL-2.1-or-later | ui (planned) | UI toolkit |'
     echo '| libadwaita | LGPL-2.1-or-later | ui (planned) | app shell widgets |'
     echo '| GLib | LGPL-2.1-or-later | ui (planned) | main loop, timers, fd sources |'
