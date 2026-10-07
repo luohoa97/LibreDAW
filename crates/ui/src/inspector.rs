@@ -80,22 +80,17 @@ pub fn build(app: &Rc<App>) -> Inspector {
         "Agent",
         "network-workgroup-symbolic",
     );
-    stack.add_titled_with_icon(
-        &status(
-            "document-open-recent-symbolic",
-            "No Saved Versions",
-            "Save a version before you try something big. You can always go back.",
-        ),
-        Some("history"),
-        "History",
-        "document-open-recent-symbolic",
-    );
-    let bar = adw::ViewSwitcherBar::new();
-    bar.set_stack(Some(&stack));
-    bar.set_reveal(true);
+    // The pane's own header, level with the content header: its pages
+    // are switched there.
+    let switcher = adw::ViewSwitcher::builder()
+        .policy(adw::ViewSwitcherPolicy::Narrow)
+        .stack(&stack)
+        .build();
+    let header = adw::HeaderBar::new();
+    header.set_title_widget(Some(&switcher));
     let view = adw::ToolbarView::new();
+    view.add_top_bar(&header);
     view.set_content(Some(&stack));
-    view.add_bottom_bar(&bar);
     Inspector {
         widget: view.upcast(),
         stack,
@@ -451,21 +446,22 @@ impl SoundPage {
             self.stack.set_visible_child_name("none");
             return;
         };
-        let (name, id, instr, channel) = {
+        let (name, slot, instr, channel) = {
             let s = self.app.session.borrow();
             let Some(c) = s.document().project.channel(ch) else {
                 drop(s);
                 self.stack.set_visible_child_name("none");
                 return;
             };
-            (c.name.clone(), c.id, c.instrument.clone(), c.clone())
+            let slot = crate::palette::channel_slot(&s.document().project, c.id);
+            (c.name.clone(), slot, c.instrument.clone(), c.clone())
         };
         self.updating.set(true);
         match instr {
             Instrument::Synth(p) => {
                 self.stack.set_visible_child_name("synth");
                 self.name.set_text(&name);
-                self.bar.set_id(id.0);
+                self.bar.set_id(slot);
                 self.engine.set_text("Built-in synth");
                 let preset = presets::index_of(&p).map(|i| presets::presets()[i].name);
                 self.preset_label.set_text(preset.unwrap_or("Custom"));
@@ -493,11 +489,11 @@ impl SoundPage {
             }
             Instrument::Bass808(_) => {
                 self.stack.set_visible_child_name("bass808");
-                self.bass.sync(&channel);
+                self.bass.sync(&channel, slot);
             }
             Instrument::Sampler(_) => {
                 self.stack.set_visible_child_name("sampler");
-                self.samp.sync(&channel);
+                self.samp.sync(&channel, slot);
             }
             Instrument::Clap(r) => {
                 self.stack.set_visible_child_name("clap");

@@ -606,7 +606,7 @@ impl StepGrid {
                 let band_w = layout.content_size(proj.channels.len(), steps).0.min(w);
                 draw::fill(s, &c, 0.0, y, band_w, layout.row_h);
             }
-            let body = colors.channel_color(ch.id.0);
+            let body = colors.channel_color(row as u32);
             if row > 0 {
                 draw::hline(s, &pal.line_sub, y, 0.0, w);
             }

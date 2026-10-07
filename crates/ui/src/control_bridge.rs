@@ -122,6 +122,15 @@ fn bad(reason: &str) -> Outcome {
     })
 }
 
+/// What a script hears in the Flatpak build.
+pub const SCRIPTS_OFF_IN_FLATPAK: &str =
+    "Scripting is not available in the Flatpak version of LibreDAW. Agents still work.";
+
+/// Whether LibreDAW runs inside a Flatpak sandbox.
+pub fn in_flatpak() -> bool {
+    std::path::Path::new("/.flatpak-info").exists()
+}
+
 /// The author a client's commits carry.
 pub fn author_of(c: &ClientInfo) -> Author {
     match c.transport {
@@ -356,6 +365,12 @@ fn reply(app: &App, ticket: Ticket, outcome: Outcome) {
 
 /// First look at a request: PRIVILEGED ones wait for the human.
 fn handle(app: &Rc<App>, inc: Incoming) {
+    // Scripts do not run in the Flatpak build (SPEC 19.3); they get a
+    // clear answer instead of a silent failure.
+    if inc.client.transport == Transport::Script && in_flatpak() {
+        reply(app, inc.ticket, bad(SCRIPTS_OFF_IN_FLATPAK));
+        return;
+    }
     let dirty = app.is_dirty();
     let summary = if inc.request.body.privileged(dirty) {
         Some(

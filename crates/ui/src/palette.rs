@@ -92,6 +92,16 @@ impl Colors {
         self.channel[id as usize % CHANNEL_COLORS]
     }
 
+    /// The identity color of channel `id` of `p`: by its place in the
+    /// channel list, so neighbours never share a color.
+    pub fn channel_color_in(
+        &self,
+        p: &protocol::model::Project,
+        id: protocol::ids::ChannelId,
+    ) -> gdk::RGBA {
+        self.channel_color(channel_slot(p, id))
+    }
+
     /// Colors when no probe is installed (unit tests, headless): the
     /// libadwaita light palette as numbers. Never used when a window exists.
     pub fn fallback() -> Colors {
@@ -132,6 +142,16 @@ thread_local! {
 }
 
 /// Changes whenever colors may have changed.
+/// The color slot of a channel: its place in the channel list (the order
+/// the user sees), so consecutive channels get different colors.
+pub fn channel_slot(p: &protocol::model::Project, id: protocol::ids::ChannelId) -> u32 {
+    p.channels
+        .iter()
+        .position(|c| c.id == id)
+        .map(|i| i as u32)
+        .unwrap_or(id.0)
+}
+
 pub fn generation() -> u64 {
     GENERATION.with(Cell::get)
 }

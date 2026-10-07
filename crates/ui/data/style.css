@@ -22,23 +22,24 @@
 .ldaw-probe-error { color: @error_color; }
 .ldaw-probe-error-bg { color: @error_bg_color; }
 
-/* Channel identity colors: tone 5 on light, tone 3 on dark. */
+/* Channel identity colors: tone 5 on light, tone 3 on dark, ordered so
+   neighbouring channels never look alike. */
 .ldaw-probe-ch0 { color: @blue_5; }
-.ldaw-probe-ch1 { color: @green_5; }
-.ldaw-probe-ch2 { color: @yellow_5; }
-.ldaw-probe-ch3 { color: @orange_5; }
-.ldaw-probe-ch4 { color: @red_5; }
-.ldaw-probe-ch5 { color: @purple_5; }
+.ldaw-probe-ch1 { color: @orange_5; }
+.ldaw-probe-ch2 { color: @green_5; }
+.ldaw-probe-ch3 { color: @purple_5; }
+.ldaw-probe-ch4 { color: @yellow_5; }
+.ldaw-probe-ch5 { color: @red_5; }
 .ldaw-probe-ch6 { color: @brown_5; }
 .ldaw-probe-ch7 { color: @blue_3; }
 .ldaw-probe-ch8 { color: @purple_3; }
 .ldaw-probe-ch9 { color: @red_3; }
 .ldaw-probes.dark .ldaw-probe-ch0 { color: @blue_3; }
-.ldaw-probes.dark .ldaw-probe-ch1 { color: @green_3; }
-.ldaw-probes.dark .ldaw-probe-ch2 { color: @yellow_3; }
-.ldaw-probes.dark .ldaw-probe-ch3 { color: @orange_3; }
-.ldaw-probes.dark .ldaw-probe-ch4 { color: @red_3; }
-.ldaw-probes.dark .ldaw-probe-ch5 { color: @purple_3; }
+.ldaw-probes.dark .ldaw-probe-ch1 { color: @orange_3; }
+.ldaw-probes.dark .ldaw-probe-ch2 { color: @green_3; }
+.ldaw-probes.dark .ldaw-probe-ch3 { color: @purple_3; }
+.ldaw-probes.dark .ldaw-probe-ch4 { color: @yellow_3; }
+.ldaw-probes.dark .ldaw-probe-ch5 { color: @red_3; }
 .ldaw-probes.dark .ldaw-probe-ch6 { color: @brown_3; }
 .ldaw-probes.dark .ldaw-probe-ch7 { color: @blue_1; }
 .ldaw-probes.dark .ldaw-probe-ch8 { color: @purple_1; }

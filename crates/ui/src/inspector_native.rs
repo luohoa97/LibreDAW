@@ -145,13 +145,13 @@ impl Bass808Page {
         page
     }
 
-    pub fn sync(&self, c: &Channel) {
+    pub fn sync(&self, c: &Channel, slot: u32) {
         let Instrument::Bass808(b) = &c.instrument else {
             return;
         };
         self.updating.set(true);
         self.head.name.set_text(&c.name);
-        self.head.bar.set_id(c.id.0);
+        self.head.bar.set_id(slot);
         if self.mono.is_active() != b.mono {
             self.mono.set_active(b.mono);
         }
@@ -309,13 +309,13 @@ impl SamplerPage {
         page
     }
 
-    pub fn sync(&self, c: &Channel) {
+    pub fn sync(&self, c: &Channel, slot: u32) {
         let Instrument::Sampler(sm) = &c.instrument else {
             return;
         };
         self.updating.set(true);
         self.head.name.set_text(&c.name);
-        self.head.bar.set_id(c.id.0);
+        self.head.bar.set_id(slot);
         self.head.kind.set_text("Sampler");
         let (title, missing, loading) = {
             let s = self.app.session.borrow();

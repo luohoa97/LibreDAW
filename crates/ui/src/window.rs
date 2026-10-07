@@ -134,6 +134,11 @@ pub fn build(gapp: &adw::Application, app: Rc<App>) -> adw::ApplicationWindow {
     title_box.append(&switcher);
     title_box.append(&narrow_title);
 
+    // ---- the content: header, transport, banners, pages ----
+    // Each pane has its own toolbar view and header bar, as in GNOME's own
+    // split-view apps; the panes' headers line up with the content header
+    // by construction, and libadwaita shows the window buttons only on the
+    // outermost headers.
     let header = adw::HeaderBar::new();
     header.set_title_widget(Some(&title_box));
     header.pack_start(&sounds_toggle);
@@ -148,20 +153,14 @@ pub fn build(gapp: &adw::Application, app: Rc<App>) -> adw::ApplicationWindow {
     header.pack_end(&inspector_toggle);
     header.pack_end(&agent_btn);
 
-    // ---- pages ----
     let pattern = pattern_page::build(&window, &app);
     let mixer = Mixer::new(app.clone());
-    let song = adw::StatusPage::new();
-    song.set_icon_name(Some("view-continuous-symbolic"));
-    song.set_title("Song Arrangement");
-    song.set_description(Some("Arranging patterns into a song is coming next."));
     stack.add_titled_with_icon(
         &pattern.widget,
         Some("pattern"),
         "Pattern",
         "view-list-symbolic",
     );
-    stack.add_titled_with_icon(&song, Some("song"), "Song", "view-continuous-symbolic");
     stack.add_titled_with_icon(
         &mixer.widget(),
         Some("mixer"),
@@ -169,63 +168,91 @@ pub fn build(gapp: &adw::Application, app: Rc<App>) -> adw::ApplicationWindow {
         "audio-volume-high-symbolic",
     );
 
+    let transport = Transport::new(&app);
+    let banner = adw::Banner::new("");
+    banner.set_button_label(Some("Review"));
+    banner.set_revealed(false);
+    // Audio that could not start stays visible until it works.
+    let audio_banner = adw::Banner::new("");
+    audio_banner.set_button_label(Some("Retry"));
+    audio_banner.set_revealed(false);
+    // Toasts sit over the pages, above the bottom view switcher.
+    let toasts = adw::ToastOverlay::new();
+    toasts.set_child(Some(&stack));
     let switcher_bar = adw::ViewSwitcherBar::new();
     switcher_bar.set_stack(Some(&stack));
     let center = adw::ToolbarView::new();
-    center.set_content(Some(&stack));
+    center.add_top_bar(&header);
+    center.add_top_bar(&transport.bar);
+    center.add_top_bar(&audio_banner);
+    center.add_top_bar(&banner);
+    center.set_content(Some(&toasts));
     center.add_bottom_bar(&switcher_bar);
 
     // ---- side panes ----
+    // Pinned beside the content while there is room, over it when the
+    // window is narrow; `pin-sidebar` keeps the user's open or closed
+    // choice when that changes.
     let inspector = inspector::build(&app);
     let inspector_split = adw::OverlaySplitView::builder()
         .sidebar_position(gtk::PackType::End)
-        .min_sidebar_width(300.0)
-        .max_sidebar_width(420.0)
-        .sidebar_width_fraction(0.28)
+        .min_sidebar_width(280.0)
+        .max_sidebar_width(360.0)
+        .sidebar_width_unit(adw::LengthUnit::Sp)
+        .sidebar_width_fraction(0.25)
+        .pin_sidebar(true)
         .show_sidebar(false)
         .build();
     inspector_split.set_sidebar(Some(&inspector.widget));
     inspector_split.set_content(Some(&center));
+    let sounds = adw::ToolbarView::new();
+    let sounds_header = adw::HeaderBar::new();
+    sounds_header.set_title_widget(Some(&adw::WindowTitle::new("Sounds", "")));
+    sounds.add_top_bar(&sounds_header);
+    sounds.set_content(Some(&browser::build(&app)));
     let browser_split = adw::OverlaySplitView::builder()
         .sidebar_position(gtk::PackType::Start)
         .min_sidebar_width(260.0)
-        .max_sidebar_width(360.0)
-        .sidebar_width_fraction(0.2)
+        .max_sidebar_width(340.0)
+        .sidebar_width_unit(adw::LengthUnit::Sp)
+        .sidebar_width_fraction(0.22)
+        .pin_sidebar(true)
         .show_sidebar(false)
         .build();
-    browser_split.set_sidebar(Some(&browser::build(&app)));
+    browser_split.set_sidebar(Some(&sounds));
     browser_split.set_content(Some(&inspector_split));
 
-    // ---- transport and the toolbar view ----
-    let transport = Transport::new(&app);
-    let view = adw::ToolbarView::new();
-    let banner = adw::Banner::new("");
-    banner.set_button_label(Some("Review"));
-    banner.set_revealed(false);
-    view.add_top_bar(&header);
-    view.add_top_bar(&transport.bar);
-    view.add_top_bar(&banner);
-    view.set_content(Some(&browser_split));
-
     let overlay = gtk::Overlay::new();
-    overlay.set_child(Some(&view));
+    overlay.set_child(Some(&browser_split));
     overlay.add_overlay(&palette::install());
-    let toasts = adw::ToastOverlay::new();
-    toasts.set_child(Some(&overlay));
-    window.set_content(Some(&toasts));
+    window.set_content(Some(&overlay));
     {
-        let t = toasts.clone();
-        app.set_toaster(move |m| {
-            t.add_toast(adw::Toast::new(m));
+        // One toast per message: a repeat of a toast that is showing is
+        // dropped instead of queued behind it; different ones queue.
+        let shown: Rc<RefCell<Vec<String>>> = Rc::default();
+        let (t, s) = (toasts.clone(), shown.clone());
+        let add = Rc::new(move |toast: adw::Toast| {
+            // Messages are plain text (names can hold "&" or "<").
+            toast.set_use_markup(false);
+            let title = toast.title().map(|t| t.to_string()).unwrap_or_default();
+            if s.borrow().contains(&title) {
+                return;
+            }
+            s.borrow_mut().push(title.clone());
+            let s2 = s.clone();
+            toast.connect_dismissed(move |_| s2.borrow_mut().retain(|x| x != &title));
+            t.add_toast(toast);
         });
-        let t = toasts.clone();
+        let a2 = add.clone();
+        app.set_toaster(move |m| a2(adw::Toast::new(m)));
         app.set_action_toaster(move |m, label, cb| {
             let toast = adw::Toast::new(m);
             toast.set_button_label(Some(label));
             toast.connect_button_clicked(move |_| cb());
-            t.add_toast(toast);
+            add(toast);
         });
     }
+    install_audio_banner(&audio_banner, &app);
 
     let ui = Rc::new(Ui {
         window: window.clone(),
@@ -293,6 +320,18 @@ pub fn build(gapp: &adw::Application, app: Rc<App>) -> adw::ApplicationWindow {
         app.on_change(move || sync_header(&u, &a));
     }
     sync_header(&ui, &app);
+    // The keyboard starts in the content (the step grid), not nowhere.
+    {
+        let u = ui.clone();
+        window.connect_map(move |_| {
+            let u = u.clone();
+            glib::idle_add_local_once(move || {
+                if gtk::prelude::GtkWindowExt::focus(&u.window).is_none() {
+                    u.pattern.grid.grab_focus();
+                }
+            });
+        });
+    }
     install_debug_shot(gapp, &ui, &app);
     crate::debug_shot::install(ui.window.upcast_ref());
     window
@@ -456,14 +495,26 @@ fn install_breakpoints(
 
     let regular = adw::Breakpoint::new(max_w(size_class::REGULAR_MAX_SP));
     let compact = adw::Breakpoint::new(max_w(size_class::COMPACT_MAX_SP));
+    // Both panes overlay below 1100 sp: the content would get less than
+    // about 600 sp beside the sounds pane. Only setters, no size class.
+    let medium = adw::Breakpoint::new(max_w(1100));
+    medium.add_setter(&ui.browser_split, "collapsed", Some(&true.to_value()));
+    medium.add_setter(&ui.inspector_split, "collapsed", Some(&true.to_value()));
     let narrow = adw::Breakpoint::new(max_w(size_class::NARROW_MAX_SP));
     let landscape = adw::Breakpoint::new(Cond::new_and(
         max_w(size_class::NARROW_MAX_SP),
         max_h(size_class::LANDSCAPE_MAX_PX),
     ));
+    // The panes sit beside the content while it keeps about 600 sp; below
+    // that they overlay it. Only whether they overlap changes, never
+    // whether they are open.
+    // Below 1400 sp the inspector overlays (both panes would leave the
+    // content less than about 600 sp); below 900 sp the sounds pane too.
     for bp in [&regular, &compact, &narrow, &landscape] {
-        bp.add_setter(&ui.browser_split, "collapsed", Some(&on));
         bp.add_setter(&ui.inspector_split, "collapsed", Some(&on));
+    }
+    for bp in [&compact, &narrow, &landscape] {
+        bp.add_setter(&ui.browser_split, "collapsed", Some(&on));
     }
     for bp in [&compact, &narrow, &landscape] {
         transport.add_compact_setters(bp);
@@ -526,6 +577,10 @@ fn install_breakpoints(
             p();
         });
         ui.window.add_breakpoint(bp.clone());
+        if i == 0 {
+            // Between regular and compact (the last matching breakpoint wins).
+            ui.window.add_breakpoint(medium.clone());
+        }
     }
 
     // The short class follows the window height.
@@ -543,6 +598,47 @@ fn install_breakpoints(
         });
     }
     publish();
+}
+
+/// "Audio is off: <reason>" with Retry, shown while there is no audio
+/// stream (a toast would be gone before the user read it).
+fn install_audio_banner(banner: &adw::Banner, app: &Rc<App>) {
+    banner.set_use_markup(false);
+    let sync = {
+        let (b, a) = (banner.clone(), app.clone());
+        move || {
+            let err = a.ui.borrow().audio_error.clone();
+            match err {
+                Some(e) => {
+                    let title = format!("Audio is off: {e}");
+                    if b.title() != title {
+                        b.set_title(&title);
+                    }
+                    b.set_revealed(true);
+                }
+                None => b.set_revealed(false),
+            }
+        }
+    };
+    sync();
+    app.on_change(sync.clone());
+    let a = app.clone();
+    banner.connect_button_clicked(move |_| {
+        let configs = crate::run::audio_configs(&a.settings.borrow());
+        let r = a.session.borrow_mut().start_audio(&configs);
+        match r {
+            Ok(()) => {
+                a.ui.borrow_mut().audio_error = None;
+                a.toast("Audio is on");
+            }
+            Err(e) => {
+                a.ui.borrow_mut().audio_error = Some(e);
+                a.toast("Audio is still off");
+            }
+        }
+        a.notify();
+        sync();
+    });
 }
 
 /// The approval banner and the agent indicator follow the control state.
@@ -682,11 +778,7 @@ fn install_actions(gapp: &adw::Application, ui: &Rc<Ui>, app: &Rc<App>) {
             }
         }),
     );
-    for (name, page) in [
-        ("view-pattern", "pattern"),
-        ("view-song", "song"),
-        ("view-mixer", "mixer"),
-    ] {
+    for (name, page) in [("view-pattern", "pattern"), ("view-mixer", "mixer")] {
         let u = ui.clone();
         add(name, Box::new(move || go_to_page(&u, page)));
     }

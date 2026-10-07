@@ -1212,7 +1212,11 @@ impl PianoRoll {
 
         // Notes in the channel's color; louder is more opaque, and the
         // border keeps every note visible on any color.
-        let body = colors.channel_color(v.channel.0);
+        let body = {
+            let app = self.app();
+            let s = app.session.borrow();
+            colors.channel_color_in(&s.document().project, v.channel)
+        };
         let edge = if hc {
             colors.get(Role::WindowFg)
         } else {

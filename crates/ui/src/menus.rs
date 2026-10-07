@@ -28,6 +28,8 @@ pub const ROW_ACTIONS: &[&str] = &["sound", "notes", "rename", "remove", "choke"
 pub const ROLL_ACTIONS: &[&str] = &["delete", "duplicate"];
 /// Actions of a mixer track (`strip.*`).
 pub const STRIP_ACTIONS: &[&str] = &["rename", "reset", "remove"];
+/// Actions of a built-in sound in the sound browser (`sound.*`).
+pub const SOUND_ACTIONS: &[&str] = &["add", "replace"];
 /// Window actions (`win.*`) that menus name.
 pub const WIN_ACTIONS: &[&str] = &[
     "new",
@@ -139,6 +141,17 @@ pub fn roll_menu() -> gio::Menu {
     menu
 }
 
+/// The menu of a built-in sound in the sound browser.
+pub fn sound_menu() -> gio::Menu {
+    let menu = gio::Menu::new();
+    menu.append(Some("_Add to Project"), Some("sound.add"));
+    menu.append(
+        Some("_Replace the Selected Channel's Sound"),
+        Some("sound.replace"),
+    );
+    menu
+}
+
 /// The menu of a mixer track.
 pub fn strip_menu() -> gio::Menu {
     let menu = gio::Menu::new();
@@ -223,6 +236,7 @@ mod tests {
         walk(&channel_menu(), "row", ROW_ACTIONS);
         walk(&roll_menu(), "roll", ROLL_ACTIONS);
         walk(&strip_menu(), "strip", STRIP_ACTIONS);
+        walk(&sound_menu(), "sound", SOUND_ACTIONS);
         // The primary and Add Channel menus mix window and app actions.
         for menu in [main_menu(), add_channel_menu()] {
             for (action, _) in items_of(menu.upcast_ref()) {
@@ -251,6 +265,7 @@ mod tests {
         assert!(channel_list.contains("ROW_ACTIONS"));
         let strips = include_str!("mixer.rs");
         assert!(strips.contains("STRIP_ACTIONS"));
+        assert!(include_str!("browser.rs").contains("SOUND_ACTIONS"));
         let roll = include_str!("widgets/piano_roll.rs");
         assert!(roll.contains("ROLL_ACTIONS"));
     }

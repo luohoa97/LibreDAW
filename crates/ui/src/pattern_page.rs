@@ -33,6 +33,8 @@ pub struct PatternPage {
     pub snap: gtk::DropDown,
     pub channels: Rc<ChannelList>,
     pub nav: adw::NavigationView,
+    /// Where the keyboard starts: the step grid.
+    pub grid: StepGrid,
 }
 
 impl PatternPage {
@@ -80,7 +82,7 @@ fn flat_button(icon: &str, tip: &str) -> gtk::Button {
 pub fn build(window: &adw::ApplicationWindow, app: &Rc<App>) -> PatternPage {
     let _ = window;
     let channels = ChannelList::new(app);
-    let steps_content = build_steps(app, &channels);
+    let (steps_content, grid) = build_steps(app, &channels);
     let (roll, notes_page, snap) = build_notes(app);
 
     // Root page: the pattern strip over the steps.
@@ -155,6 +157,7 @@ pub fn build(window: &adw::ApplicationWindow, app: &Rc<App>) -> PatternPage {
         snap,
         channels,
         nav,
+        grid,
     }
 }
 
@@ -415,7 +418,7 @@ fn no_pattern_page(app: &Rc<App>) -> adw::StatusPage {
     page
 }
 
-fn build_steps(app: &Rc<App>, channels: &Rc<ChannelList>) -> gtk::Widget {
+fn build_steps(app: &Rc<App>, channels: &Rc<ChannelList>) -> (gtk::Widget, StepGrid) {
     let stack = gtk::Stack::new();
     stack.set_vexpand(true);
     stack.set_hexpand(true);
@@ -503,7 +506,7 @@ fn build_steps(app: &Rc<App>, channels: &Rc<ChannelList>) -> gtk::Widget {
     };
     sync();
     app.on_change(sync);
-    stack.upcast()
+    (stack.upcast(), grid)
 }
 
 /// Whether a press on `picked` (inside `area`) landed on empty space: no

@@ -562,7 +562,11 @@ impl LaneEditor {
         let steps = d.cells.len() as u32;
         let hc = colors.high_contrast;
         draw::fill(s, &pal.bg, 0.0, 0.0, w, self.height() as f64);
-        let body = colors.channel_color(d.channel.0);
+        let body = {
+            let app = self.app();
+            let s = app.session.borrow();
+            colors.channel_color_in(&s.document().project, d.channel)
+        };
 
         // Beat groups, shaded like the grid above.
         for g in (0..steps.div_ceil(l.group)).filter(|g| g % 2 == 1) {

@@ -87,8 +87,7 @@ pub const SHORTCUTS: &[Shortcut] = &[
         "View",
     ),
     s("win.view-pattern", &["<Control>1"], "Go to Pattern", "View"),
-    s("win.view-song", &["<Control>2"], "Go to Song", "View"),
-    s("win.view-mixer", &["<Control>3"], "Go to Mixer", "View"),
+    s("win.view-mixer", &["<Control>2"], "Go to Mixer", "View"),
     s(
         "win.zoom-in",
         &["<Control>plus", "<Control>equal", "<Control>KP_Add"],

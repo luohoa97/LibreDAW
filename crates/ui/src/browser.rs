@@ -122,24 +122,23 @@ pub fn build(app: &Rc<App>) -> gtk::Widget {
     search_box.add_css_class("toolbar");
     search_box.append(&search);
 
-    // Role filters act as radio buttons, "All" first.
-    let filters = gtk::Box::new(gtk::Orientation::Horizontal, 4);
-    filters.add_css_class("toolbar");
-    let all_btn = gtk::ToggleButton::with_label("All");
-    all_btn.set_active(true);
-    all_btn.add_css_class("flat");
-    filters.append(&all_btn);
-    let mut buttons = vec![(None, all_btn.clone())];
-    for r in roles(&all) {
-        let b = gtk::ToggleButton::with_label(role_label(r));
-        b.add_css_class("flat");
-        b.set_group(Some(&all_btn));
-        filters.append(&b);
-        buttons.push((Some(r), b));
-    }
-    let filter_scroller = gtk::ScrolledWindow::new();
-    filter_scroller.set_policy(gtk::PolicyType::Automatic, gtk::PolicyType::Never);
-    filter_scroller.set_child(Some(&filters));
+    // The role filter is one dropdown beside the search (chips would clip
+    // at any width; libadwaita 1.5 has no wrap box).
+    let role_list: Vec<Option<&'static str>> = std::iter::once(None)
+        .chain(roles(&all).into_iter().map(Some))
+        .collect();
+    let labels: Vec<String> = role_list
+        .iter()
+        .map(|r| match r {
+            None => "All Sounds".to_string(),
+            Some(r) => role_label(r).to_string(),
+        })
+        .collect();
+    let label_refs: Vec<&str> = labels.iter().map(String::as_str).collect();
+    let role_drop = gtk::DropDown::from_strings(&label_refs);
+    role_drop.set_tooltip_text(Some("Show One Kind of Sound"));
+    role_drop.update_property(&[gtk::accessible::Property::Label("Kind of sound")]);
+    search_box.append(&role_drop);
 
     let list = gtk::ListBox::new();
     list.add_css_class("boxed-list");
@@ -244,24 +243,22 @@ pub fn build(app: &Rc<App>) -> gtk::Widget {
             st.borrow_mut().search = e.text().to_string();
             ap();
         });
-        for (role, b) in &buttons {
-            let (state, apply, role) = (state.clone(), apply.clone(), *role);
-            b.connect_toggled(move |b| {
-                if b.is_active() {
-                    state.borrow_mut().role = role;
-                    apply();
-                }
+        {
+            let (state, apply) = (state.clone(), apply.clone());
+            role_drop.connect_selected_notify(move |d| {
+                state.borrow_mut().role = role_list.get(d.selected() as usize).copied().flatten();
+                apply();
             });
         }
-        let (search, all_btn, apply, state) = (
+        let (search, role_drop, apply, state) = (
             search.clone(),
-            all_btn.clone(),
+            role_drop.clone(),
             apply.clone(),
             state.clone(),
         );
         clear.connect_clicked(move |_| {
             search.set_text("");
-            all_btn.set_active(true);
+            role_drop.set_selected(0);
             let mut s = state.borrow_mut();
             s.search.clear();
             s.role = None;
@@ -290,7 +287,6 @@ pub fn build(app: &Rc<App>) -> gtk::Widget {
 
     let view = adw::ToolbarView::new();
     view.add_top_bar(&search_box);
-    view.add_top_bar(&filter_scroller);
     view.set_content(Some(&stack));
     view.add_bottom_bar(&bottom);
     view.upcast()
@@ -301,44 +297,66 @@ fn preset_row(app: &Rc<App>, p: &Preset) -> adw::ActionRow {
     row.set_title(p.name);
     row.set_subtitle(&format!("{} - Built-in", role_label(p.role)));
     row.set_activatable(true);
-    row.set_tooltip_text(Some("Add as a New Channel"));
-    let use_btn = gtk::Button::from_icon_name("emblem-synchronizing-symbolic");
-    use_btn.add_css_class("flat");
-    use_btn.set_valign(gtk::Align::Center);
-    use_btn.set_tooltip_text(Some("Use on the Selected Channel"));
-    use_btn.update_property(&[gtk::accessible::Property::Label(&format!(
-        "Use {} on the selected channel",
+    row.set_tooltip_text(Some("Add to Project"));
+    let add_btn = gtk::Button::from_icon_name("list-add-symbolic");
+    add_btn.add_css_class("flat");
+    add_btn.set_valign(gtk::Align::Center);
+    add_btn.set_tooltip_text(Some("Add to Project"));
+    add_btn.update_property(&[gtk::accessible::Property::Label(&format!(
+        "Add {} to the project",
         p.name
     ))]);
-    row.add_suffix(&use_btn);
-    let (a, name) = (app.clone(), p.name.to_string());
-    row.connect_activated(move |_| {
-        if channels::add(&a, NewChannel::Preset(name.clone())).is_some() {
-            let a2 = a.clone();
-            a.toast_action(&format!("Added {name}"), "Undo", move || a2.undo());
-        }
-    });
-    let (a, params) = (app.clone(), p.params);
-    use_btn.connect_clicked(move |_| {
-        let ch = a.current_channel();
-        let is_synth = ch
-            .and_then(|c| {
-                a.session
-                    .borrow()
-                    .document()
-                    .project
-                    .channel(c)
-                    .map(|c| matches!(c.instrument, Instrument::Synth(_)))
-            })
-            .unwrap_or(false);
-        match ch {
-            Some(c) if is_synth => {
-                a.edit(presets::apply_edits(c, &params));
-            }
-            _ => a.toast("Select a channel with a built-in sound first"),
-        }
-    });
+    row.add_suffix(&add_btn);
+    // The row's menu (menus::sound_menu): add, or replace the sound of the
+    // selected channel.
+    let group = gtk::gio::SimpleActionGroup::new();
+    for n in crate::menus::SOUND_ACTIONS {
+        let act = gtk::gio::SimpleAction::new(n, None);
+        let (a, name, params, n) = (app.clone(), p.name.to_string(), p.params, *n);
+        act.connect_activate(move |_, _| match n {
+            "add" => add_preset(&a, &name),
+            "replace" => replace_preset(&a, &params),
+            _ => {}
+        });
+        group.add_action(&act);
+    }
+    row.insert_action_group("sound", Some(&group));
+    add_btn.set_action_name(Some("sound.add"));
+    let a = app.clone();
+    let name = p.name.to_string();
+    row.connect_activated(move |_| add_preset(&a, &name));
+    crate::context_menu::attach(&row, &crate::menus::sound_menu(), |_| true);
     row
+}
+
+/// A built-in sound as a new channel, with Undo in the toast.
+fn add_preset(a: &Rc<App>, name: &str) {
+    if channels::add(a, NewChannel::Preset(name.to_string())).is_some() {
+        let a2 = a.clone();
+        a.toast_action(&format!("Added {name}"), "Undo", move || a2.undo());
+    }
+}
+
+/// Gives the selected channel this built-in sound (built-in synth
+/// channels only).
+fn replace_preset(a: &Rc<App>, params: &protocol::model::SynthParams) {
+    let ch = a.current_channel();
+    let is_synth = ch
+        .and_then(|c| {
+            a.session
+                .borrow()
+                .document()
+                .project
+                .channel(c)
+                .map(|c| matches!(c.instrument, Instrument::Synth(_)))
+        })
+        .unwrap_or(false);
+    match ch {
+        Some(c) if is_synth => {
+            a.edit(presets::apply_edits(c, params));
+        }
+        _ => a.toast("Select a channel with a built-in sound first"),
+    }
 }
 
 /// The expander row of a kit and its piece rows.

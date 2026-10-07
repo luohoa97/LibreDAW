@@ -262,7 +262,14 @@ impl Mixer {
             "Mixer strip: {name}"
         ))]);
 
-        let bar = ColorBar::new(id.0);
+        // The color of the first channel playing through this track.
+        let slot = proj
+            .channels
+            .iter()
+            .position(|c| c.track == id)
+            .map(|i| i as u32)
+            .unwrap_or(id.0);
+        let bar = ColorBar::new(slot);
         bar.set_horizontal(true);
         bar.set_height_request(4);
         bar.set_margin_start(6);

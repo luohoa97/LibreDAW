@@ -341,6 +341,44 @@ impl Session {
         }
     }
 
+    /// Turns audio on after it failed at start-up: opens the first host in
+    /// `configs` that works with the current document installed. Only
+    /// while no plugin is loaded (a plugin would have to be moved to the
+    /// new engine); then the caller says to restart LibreDAW.
+    pub fn start_audio(
+        &mut self,
+        configs: &[crate::engine_adapter::EngineConfig],
+    ) -> Result<(), String> {
+        if self.link.is_live() {
+            return Ok(());
+        }
+        if !self.registry.is_empty() {
+            return Err("plugins are loaded; restart LibreDAW to turn audio on".into());
+        }
+        let mut last = String::from("no audio host available");
+        for cfg in configs {
+            let d = self.editor.document();
+            let first = crate::engine_adapter::compile(&CompileJob {
+                revision: d.revision,
+                project: d.project.clone(),
+                slots: self.slots.clone(),
+                sample_rate: self.link.sample_rate(),
+                store: Some(self.store.clone()),
+            });
+            match EngineLink::start(cfg, first) {
+                Ok(link) => {
+                    self.link = link;
+                    write_controls(&self.editor.document().project, &self.slots, &self.link);
+                    // Compile again at the stream's real rate.
+                    self.request_compile();
+                    return Ok(());
+                }
+                Err(e) => last = e.to_string(),
+            }
+        }
+        Err(last)
+    }
+
     // ---- the pipeline after a replacement ----
 
     fn request_compile(&mut self) {

@@ -181,10 +181,13 @@ fn after_saved(app: &Rc<App>, path: &Path, was_untitled: bool) {
 /// Ctrl+S: save in place, or ask where for a new project.
 pub fn save(parent: &impl IsA<gtk::Widget>, app: &Rc<App>) {
     if app.ui.borrow().path.is_some() {
-        save_current(app, |r| {
-            let _ = r;
+        // "Saved" only once it is on disk (a failure has its own toast).
+        let a = app.clone();
+        save_current(app, move |r| {
+            if r.is_ok() {
+                a.toast("Saved");
+            }
         });
-        app.toast("Saved");
     } else {
         save_as(parent, app);
     }
@@ -306,7 +309,7 @@ pub fn open_path(app: &Rc<App>, path: PathBuf) {
                 if let Some(rec) = o.recovered {
                     a.session.borrow_mut().apply_recovered(&rec.loaded.doc);
                     a.notify();
-                    a.toast(&persist::recovered_message(&time_text(rec.modified)));
+                    recovered_toast(&a, rec.modified);
                 }
                 // A project always has a pattern: an old one without any
                 // gets "Pattern 1" as one undoable edit.
@@ -355,13 +358,24 @@ pub fn open_recovery_bundle(app: &Rc<App>, bundle_dir: PathBuf, modified: System
                 a.reset_selection();
                 a.notify();
                 a.ensure_pattern();
-                a.toast(&persist::recovered_message(&time_text(modified)));
+                recovered_toast(&a, modified);
                 // The old recovery bundle goes away once this session has
                 // written its own.
                 *a.stale_recovery.borrow_mut() = Some(bundle_dir);
             }
             Err(e) => a.toast(&format!("Could not recover the autosaved project: {e}")),
         },
+    );
+}
+
+/// "Restored your unsaved changes from 15:54" with Undo (the recovery is
+/// one undoable step back to the last save).
+fn recovered_toast(app: &Rc<App>, modified: SystemTime) {
+    let a = app.clone();
+    app.toast_action(
+        &format!("Restored your unsaved changes from {}", time_text(modified)),
+        "Undo",
+        move || a.undo(),
     );
 }
 
