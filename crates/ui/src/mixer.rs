@@ -10,7 +10,6 @@
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
-use std::time::Duration;
 
 use adw::prelude::*;
 use gtk::gdk;
@@ -92,7 +91,6 @@ pub struct Mixer {
     sig: RefCell<String>,
     updating: Cell<bool>,
     editing: Cell<u32>,
-    gesture_timer: RefCell<Option<glib::SourceId>>,
 }
 
 impl Mixer {
@@ -140,7 +138,6 @@ impl Mixer {
             sig: RefCell::new(String::new()),
             updating: Cell::new(false),
             editing: Cell::new(0),
-            gesture_timer: RefCell::new(None),
         });
         let mm = m.clone();
         app.on_change(move || mm.sync());
@@ -669,22 +666,8 @@ impl Mixer {
 
     /// Fader and pan moves: one gesture until the control rests.
     fn fader_changed(self: &Rc<Mixer>, track: TrackId, v: MixValue) {
-        let e = Edit::SetTrackMix { track, value: v };
-        if !self.app.session.borrow().editor.gesture_open() {
-            self.app.gesture_begin("Mixer");
-        }
-        self.app.gesture_edit(vec![e]);
-        if let Some(id) = self.gesture_timer.borrow_mut().take() {
-            id.remove();
-        }
-        let m = self.clone();
-        let id = glib::timeout_add_local_once(Duration::from_millis(500), move || {
-            m.gesture_timer.borrow_mut().take();
-            if m.app.session.borrow().editor.gesture_open() {
-                m.app.gesture_end();
-            }
-        });
-        *self.gesture_timer.borrow_mut() = Some(id);
+        self.app
+            .edit_resting("Mixer", vec![Edit::SetTrackMix { track, value: v }]);
     }
 
     /// Writes document values into the widgets without sending edits.

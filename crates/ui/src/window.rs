@@ -296,6 +296,14 @@ fn install_debug_shot(gapp: &adw::Application, ui: &Rc<Ui>) {
         let u = ui.clone();
         glib::timeout_add_local_once(Duration::from_millis(900), move || go_to_page(&u, &p));
     }
+    if let Ok(p) = std::env::var("LIBREDAW_PANES") {
+        // "sounds", "inspector", or both separated by a comma.
+        let u = ui.clone();
+        glib::timeout_add_local_once(Duration::from_millis(900), move || {
+            u.browser_split.set_show_sidebar(p.contains("sounds"));
+            u.inspector_split.set_show_sidebar(p.contains("inspector"));
+        });
+    }
     match std::env::var("LIBREDAW_THEME").as_deref() {
         Ok("dark") => adw::StyleManager::default().set_color_scheme(adw::ColorScheme::ForceDark),
         Ok("light") => adw::StyleManager::default().set_color_scheme(adw::ColorScheme::ForceLight),

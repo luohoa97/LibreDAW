@@ -67,6 +67,7 @@ pub struct App {
     notifying: Cell<bool>,
     pub settings: RefCell<Settings>,
     preview_timer: RefCell<Option<gtk::glib::SourceId>>,
+    rest_timer: RefCell<Option<gtk::glib::SourceId>>,
     /// Window size class and what the Pattern page shows (what the user
     /// chose; `effective_focus` applies the size class).
     size: Cell<SizeClass>,
@@ -107,6 +108,7 @@ impl App {
             tasks: crate::tasks::Tasks::new(),
             settings: RefCell::new(settings),
             preview_timer: RefCell::new(None),
+            rest_timer: RefCell::new(None),
             size: Cell::new(SizeClass::from_size(1360.0, 800.0)),
             focus: Cell::new(PatternFocus::Both),
             view_listeners: RefCell::new(Vec::new()),
@@ -379,6 +381,30 @@ impl App {
                 None
             }
         }
+    }
+
+    /// Edits from a control that has no clear end (a fader, a knob turned
+    /// with the wheel or keys): one undo gesture that closes when the
+    /// control has been still for half a second.
+    pub fn edit_resting(self: &Rc<App>, description: &str, edits: Vec<Edit>) {
+        if !self.session.borrow().editor.gesture_open() {
+            self.gesture_begin(description);
+        }
+        self.gesture_edit(edits);
+        if let Some(id) = self.rest_timer.borrow_mut().take() {
+            id.remove();
+        }
+        let me = Rc::downgrade(self);
+        let id =
+            gtk::glib::timeout_add_local_once(std::time::Duration::from_millis(500), move || {
+                if let Some(a) = me.upgrade() {
+                    a.rest_timer.borrow_mut().take();
+                    if a.session.borrow().editor.gesture_open() {
+                        a.gesture_end();
+                    }
+                }
+            });
+        *self.rest_timer.borrow_mut() = Some(id);
     }
 
     pub fn gesture_end(&self) {

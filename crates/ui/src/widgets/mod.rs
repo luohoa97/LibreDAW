@@ -2,6 +2,7 @@
 //! Custom widgets drawn with `snapshot()` (SPEC 11).
 
 pub mod color_bar;
+pub mod knob;
 pub mod meter;
 pub mod piano_roll;
 pub mod step_grid;

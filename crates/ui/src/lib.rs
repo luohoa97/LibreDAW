@@ -17,6 +17,7 @@ pub mod files;
 pub mod help;
 pub mod history;
 pub mod inspector;
+pub mod knob_logic;
 pub mod mixer;
 pub mod palette;
 pub mod pattern_page;
