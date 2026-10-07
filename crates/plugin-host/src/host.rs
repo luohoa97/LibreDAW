@@ -254,6 +254,81 @@ pub fn clap_paths() -> Vec<PathBuf> {
     }
     v.push("/usr/lib/clap".into());
     v.push("/usr/lib64/clap".into());
+    v.extend(flatpak_extension_dirs());
+    v
+}
+
+/// Prefix of the Flatpak LinuxAudio plugin extensions (SPEC 19.3).
+const EXT_PREFIX: &str = "org.freedesktop.LinuxAudio.Plugins.";
+
+/// CLAP directories of the installed `org.freedesktop.LinuxAudio.Plugins.*`
+/// extensions: inside the Flatpak, the mounts under `/app/extensions/Plugins`;
+/// outside it, the user and system Flatpak runtime installs.
+pub fn flatpak_extension_dirs() -> Vec<PathBuf> {
+    if Path::new("/.flatpak-info").exists() {
+        return mounted_extension_dirs(Path::new("/app/extensions/Plugins"));
+    }
+    let mut roots = Vec::new();
+    if let Some(d) = std::env::var_os("XDG_DATA_HOME").filter(|d| !d.is_empty()) {
+        roots.push(Path::new(&d).join("flatpak"));
+    } else if let Some(h) = std::env::var_os("HOME") {
+        roots.push(Path::new(&h).join(".local/share/flatpak"));
+    }
+    roots.push("/var/lib/flatpak".into());
+    installed_extension_dirs(&roots)
+}
+
+/// Mounted extensions: `<root>/<Name>/clap` and `<root>/<Name>/lib/clap`
+/// (what Surge XT, Odin2 and Dexed ship), plus the merged `<root>/lib/clap`.
+pub fn mounted_extension_dirs(root: &Path) -> Vec<PathBuf> {
+    let mut out = vec![root.join("lib/clap"), root.join("clap")];
+    for d in sorted_dirs(root) {
+        if d.ends_with("lib") || d.ends_with("clap") {
+            continue;
+        }
+        out.push(d.join("clap"));
+        out.push(d.join("lib/clap"));
+    }
+    out.retain(|p| p.is_dir());
+    out
+}
+
+/// Flatpak installations (`<root>/runtime/<ext id>/<arch>/<branch>/active/
+/// files/clap`). When several branches of one extension are installed, only
+/// the highest branch is used, so a plugin does not appear twice.
+pub fn installed_extension_dirs(roots: &[PathBuf]) -> Vec<PathBuf> {
+    let arch = std::env::consts::ARCH;
+    let mut out = Vec::new();
+    for root in roots {
+        for ext in sorted_dirs(&root.join("runtime")) {
+            let named = ext
+                .file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.starts_with(EXT_PREFIX));
+            if !named {
+                continue;
+            }
+            let mut branches = sorted_dirs(&ext.join(arch));
+            branches.reverse();
+            let found = branches
+                .into_iter()
+                .map(|b| b.join("active/files/clap"))
+                .find(|p| p.is_dir());
+            out.extend(found);
+        }
+    }
+    out
+}
+
+fn sorted_dirs(dir: &Path) -> Vec<PathBuf> {
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut v: Vec<PathBuf> = rd
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| p.is_dir())
+        .collect();
+    v.sort();
     v
 }
 
