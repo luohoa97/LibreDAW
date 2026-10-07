@@ -8,3 +8,6 @@ publish.workspace = true
 
 [lib]
 name = "ui"
+
+[dependencies]
+libredaw-protocol = { path = "../protocol" }
